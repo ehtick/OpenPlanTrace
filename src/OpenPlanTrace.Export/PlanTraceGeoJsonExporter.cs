@@ -414,12 +414,26 @@ public static class PlanTraceGeoJsonExporter
                 .AddValue("connectedRoomLinkCount", opening.ConnectedRoomLinks.Count)
                 .AddValue("connectedRoomLinkDistances", opening.ConnectedRoomLinks.Select(link => link.DistanceToOpening).ToArray())
                 .AddValue("connectedRoomLinkConfidences", opening.ConnectedRoomLinks.Select(link => link.Confidence.Value).ToArray())
+                .AddValue("connectedRoomLinkSides", opening.ConnectedRoomLinks.Select(link => link.Side.ToString()).ToArray())
+                .AddValue("connectedRoomLinkSignedDistances", opening.ConnectedRoomLinks.Select(link => link.SignedDistanceFromOpening).ToArray())
+                .AddValue("connectedRoomLinkRoomSidePoints", opening.ConnectedRoomLinks
+                    .Select(link => link.RoomSidePoint is null ? null : Coordinate(link.RoomSidePoint.Value))
+                    .ToArray())
+                .AddValue("connectedRoomLinkNearestBoundaryPoints", opening.ConnectedRoomLinks
+                    .Select(link => link.NearestBoundaryPoint is null ? null : Coordinate(link.NearestBoundaryPoint.Value))
+                    .ToArray())
                 .AddValue("roomAdjacencyIds", opening.RoomAdjacencyIds)
                 .AddValue("drawingWidth", opening.DrawingWidth)
                 .AddValue("widthMillimeters", opening.WidthMillimeters)
                 .AddValue("measurementScaleGroupId", opening.MeasurementScaleGroupId)
                 .AddValue("placementHostWallId", opening.Placement?.HostWallId)
                 .AddValue("placementAnchorWallIds", opening.Placement?.AnchorWallIds)
+                .AddValue("placementStartPoint", opening.Placement is null ? null : Coordinate(opening.Placement.StartPoint))
+                .AddValue("placementEndPoint", opening.Placement is null ? null : Coordinate(opening.Placement.EndPoint))
+                .AddValue("placementReferenceLine", opening.Placement is null
+                    ? null
+                    : new[] { Coordinate(opening.Placement.ReferenceLine.Start), Coordinate(opening.Placement.ReferenceLine.End) })
+                .AddValue("placementFootprintCorners", opening.Placement?.FootprintCorners.Select(Coordinate).ToArray())
                 .AddValue("placementStartOffsetDrawingUnits", opening.Placement?.StartOffsetDrawingUnits)
                 .AddValue("placementEndOffsetDrawingUnits", opening.Placement?.EndOffsetDrawingUnits)
                 .AddValue("placementCenterOffsetDrawingUnits", opening.Placement?.CenterOffsetDrawingUnits)
@@ -557,7 +571,26 @@ public static class PlanTraceGeoJsonExporter
                 .AddValue("hostWallIds", passage.HostWallIds)
                 .AddValue("connectedRoomIds", passage.ConnectedRoomIds)
                 .AddValue("connectedRoomLabels", passage.ConnectedRoomLabels)
+                .AddValue("connectedRoomLinkCount", passage.ConnectedRoomLinks.Count)
+                .AddValue("connectedRoomLinkDistances", passage.ConnectedRoomLinks.Select(link => link.DistanceToOpening).ToArray())
+                .AddValue("connectedRoomLinkConfidences", passage.ConnectedRoomLinks.Select(link => link.Confidence.Value).ToArray())
+                .AddValue("connectedRoomLinkSides", passage.ConnectedRoomLinks.Select(link => link.Side.ToString()).ToArray())
+                .AddValue("connectedRoomLinkSignedDistances", passage.ConnectedRoomLinks.Select(link => link.SignedDistanceFromOpening).ToArray())
+                .AddValue("connectedRoomLinkRoomSidePoints", passage.ConnectedRoomLinks
+                    .Select(link => link.RoomSidePoint is null ? null : Coordinate(link.RoomSidePoint.Value))
+                    .ToArray())
+                .AddValue("connectedRoomLinkNearestBoundaryPoints", passage.ConnectedRoomLinks
+                    .Select(link => link.NearestBoundaryPoint is null ? null : Coordinate(link.NearestBoundaryPoint.Value))
+                    .ToArray())
+                .AddValue("roomAdjacencyIds", passage.RoomAdjacencyIds)
                 .AddValue("placementHostWallId", passage.Placement?.HostWallId)
+                .AddValue("placementAnchorWallIds", passage.Placement?.AnchorWallIds)
+                .AddValue("placementStartPoint", passage.Placement is null ? null : Coordinate(passage.Placement.StartPoint))
+                .AddValue("placementEndPoint", passage.Placement is null ? null : Coordinate(passage.Placement.EndPoint))
+                .AddValue("placementReferenceLine", passage.Placement is null
+                    ? null
+                    : new[] { Coordinate(passage.Placement.ReferenceLine.Start), Coordinate(passage.Placement.ReferenceLine.End) })
+                .AddValue("placementFootprintCorners", passage.Placement?.FootprintCorners.Select(Coordinate).ToArray())
                 .AddValue("placementStartOffsetDrawingUnits", passage.Placement?.StartOffsetDrawingUnits)
                 .AddValue("placementEndOffsetDrawingUnits", passage.Placement?.EndOffsetDrawingUnits)
                 .AddValue("placementCenterOffsetDrawingUnits", passage.Placement?.CenterOffsetDrawingUnits)
@@ -566,6 +599,10 @@ public static class PlanTraceGeoJsonExporter
                 .AddValue("placementEndOffsetMillimeters", passage.Placement?.EndOffsetMillimeters)
                 .AddValue("placementCenterOffsetMillimeters", passage.Placement?.CenterOffsetMillimeters)
                 .AddValue("placementLengthMillimeters", passage.Placement?.LengthMillimeters)
+                .AddValue("placementStatus", passage.Placement is null ? "Unanchored" : "Anchored")
+                .AddValue("readyForCoordinatePlacement", passage.ReadyForCoordinatePlacement)
+                .AddValue("requiresReview", passage.RequiresReview)
+                .AddValue("reviewReasons", passage.ReviewReasons)
                 .AddValue("evidence", passage.Evidence)
                 .AddSource(passage.SourcePrimitiveIds, sourceLookup));
 

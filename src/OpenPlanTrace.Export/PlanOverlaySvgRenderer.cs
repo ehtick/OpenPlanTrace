@@ -21,7 +21,7 @@ public static class PlanOverlaySvgRenderer
         var height = page.Size.Height;
         var builder = new StringBuilder();
 
-        builder.AppendLine($"""<svg xmlns="http://www.w3.org/2000/svg" width="{N(width)}" height="{N(height)}" viewBox="0 0 {N(width)} {N(height)}" role="img" aria-label="OpenPlanTrace overlay for page {page.Number}">""");
+        builder.AppendLine($"""<svg xmlns="http://www.w3.org/2000/svg" width="{N(width)}" height="{N(height)}" viewBox="0 0 {N(width)} {N(height)}" role="img" aria-label="OpenPlanTrace overlay for page {page.Number}" data-profile="{Esc(SvgOverlayRenderOptions.ProfileName(options.Profile))}">""");
         builder.AppendLine("<defs>");
         builder.AppendLine("<style>");
         builder.AppendLine("""
@@ -40,11 +40,12 @@ public static class PlanOverlaySvgRenderer
             .wall-component { fill: rgba(25, 105, 166, 0.025); stroke: #1969a6; stroke-width: 0.95; stroke-dasharray: 8 6; vector-effect: non-scaling-stroke; }
             .wall-component-object { fill: rgba(201, 124, 24, 0.04); stroke: #c97c18; stroke-dasharray: 5 4; }
             .wall-component-fragment { fill: rgba(196, 61, 61, 0.035); stroke: #7854a8; stroke-dasharray: 3 4; }
-            .wall { stroke: #c43d3d; stroke-width: 1.15; stroke-linecap: round; fill: none; vector-effect: non-scaling-stroke; }
+            .wall { stroke: #c43d3d; stroke-width: 0.72; stroke-linecap: butt; fill: none; vector-effect: non-scaling-stroke; }
             .wall-main, .wall-secondary { stroke: #b82f42; }
-            .wall-object-like { stroke: #c97c18; stroke-width: 0.95; stroke-dasharray: 5 4; }
-            .wall-fragment { stroke: #7854a8; stroke-width: 0.8; stroke-dasharray: 3 5; }
-            .node { fill: rgba(255,255,255,0.65); stroke: #b82f42; stroke-width: 0.75; vector-effect: non-scaling-stroke; }
+            .wall-object-like { stroke: #c97c18; stroke-width: 0.58; stroke-dasharray: 5 4; }
+            .wall-fragment { stroke: #7854a8; stroke-width: 0.48; stroke-dasharray: 3 5; }
+            .wall-excluded { stroke-width: 0.42; stroke-dasharray: 2 6; }
+            .node { fill: rgba(255,255,255,0.65); stroke: #b82f42; stroke-width: 0.42; vector-effect: non-scaling-stroke; }
             .room { fill: rgba(63, 143, 87, 0.075); stroke: #3f8f57; stroke-width: 0.95; vector-effect: non-scaling-stroke; }
             .room-cluster { fill: rgba(47, 125, 104, 0.035); stroke: #2f7d68; stroke-width: 1; stroke-dasharray: 9 6; vector-effect: non-scaling-stroke; }
             .room-adjacency { stroke: #2f7d68; stroke-width: 0.85; stroke-dasharray: 5 5; stroke-linecap: round; fill: none; vector-effect: non-scaling-stroke; }
@@ -329,13 +330,32 @@ public static class PlanOverlaySvgRenderer
         {
             builder.AppendLine("""<g id="walls">""");
             var componentByWallId = BuildWallComponentLookup(result.WallGraph.Components);
-            foreach (var wall in result.Walls.Where(wall => wall.PageNumber == page.Number))
+            var topologySpans = WallGraphTopologySpanBuilder.Build(result.WallGraph, result.Walls)
+                .Where(span => span.PageNumber == page.Number)
+                .OrderBy(span => span.WallId, StringComparer.Ordinal)
+                .ThenBy(span => span.Id, StringComparer.Ordinal)
+                .ToArray();
+            if (topologySpans.Length > 0)
             {
-                componentByWallId.TryGetValue(wall.Id, out var component);
-                var title = component is null
-                    ? wall.Id
-                    : $"{wall.Id} ({component.Kind}; component {component.Id}; topology excluded {component.ExcludedFromStructuralTopology})";
-                builder.AppendLine($"""<line class="{WallCssClass(component)}" x1="{N(wall.CenterLine.Start.X)}" y1="{N(wall.CenterLine.Start.Y)}" x2="{N(wall.CenterLine.End.X)}" y2="{N(wall.CenterLine.End.Y)}" opacity="{N(Opacity(wall.Confidence))}"><title>{Esc(title)}</title></line>""");
+                foreach (var span in topologySpans)
+                {
+                    componentByWallId.TryGetValue(span.WallId, out var component);
+                    var title = component is null
+                        ? $"{span.WallId} span {span.Id}"
+                        : $"{span.WallId} span {span.Id} ({component.Kind}; component {component.Id}; topology excluded {component.ExcludedFromStructuralTopology})";
+                    builder.AppendLine($"""<line class="{WallCssClass(component)}" x1="{N(span.CenterLine.Start.X)}" y1="{N(span.CenterLine.Start.Y)}" x2="{N(span.CenterLine.End.X)}" y2="{N(span.CenterLine.End.Y)}" opacity="{N(WallOpacity(span.Confidence, component))}"><title>{Esc(title)}</title></line>""");
+                }
+            }
+            else
+            {
+                foreach (var wall in result.Walls.Where(wall => wall.PageNumber == page.Number))
+                {
+                    componentByWallId.TryGetValue(wall.Id, out var component);
+                    var title = component is null
+                        ? wall.Id
+                        : $"{wall.Id} ({component.Kind}; component {component.Id}; topology excluded {component.ExcludedFromStructuralTopology})";
+                    builder.AppendLine($"""<line class="{WallCssClass(component)}" x1="{N(wall.CenterLine.Start.X)}" y1="{N(wall.CenterLine.Start.Y)}" x2="{N(wall.CenterLine.End.X)}" y2="{N(wall.CenterLine.End.Y)}" opacity="{N(WallOpacity(wall.Confidence, component))}"><title>{Esc(title)}</title></line>""");
+                }
             }
             builder.AppendLine("</g>");
         }
@@ -345,14 +365,14 @@ public static class PlanOverlaySvgRenderer
             builder.AppendLine("""<g id="wall-nodes">""");
             foreach (var node in result.WallGraph.Nodes.Where(node => node.PageNumber == page.Number))
             {
-                builder.AppendLine($"""<circle class="node" cx="{N(node.Position.X)}" cy="{N(node.Position.Y)}" r="2" opacity="{N(NodeOpacity(node.Confidence))}"><title>{Esc($"{node.Kind} {node.Id}")}</title></circle>""");
+                builder.AppendLine($"""<circle class="node" cx="{N(node.Position.X)}" cy="{N(node.Position.Y)}" r="0.95" opacity="{N(NodeOpacity(node.Confidence))}"><title>{Esc($"{node.Kind} {node.Id}")}</title></circle>""");
             }
             builder.AppendLine("</g>");
         }
 
         if (options.IncludeLegend)
         {
-            AppendLegend(builder, result, page);
+            AppendLegend(builder, result, page, options);
         }
 
         if (options.IncludeDiagnostics)
@@ -395,10 +415,14 @@ public static class PlanOverlaySvgRenderer
         builder.AppendLine($"""<polygon class="{Esc(cssClass)}" points="{Esc(encodedPoints)}" opacity="{N(Opacity(confidence))}"><title>{Esc(title)} - confidence {N(confidence.Value)}</title></polygon>""");
     }
 
-    private static void AppendLegend(StringBuilder builder, PlanScanResult result, PlanPage page)
+    private static void AppendLegend(
+        StringBuilder builder,
+        PlanScanResult result,
+        PlanPage page,
+        SvgOverlayRenderOptions options)
     {
         var lineHeight = 18.0;
-        var rows = LegendRows(result, page);
+        var rows = LegendRows(result, page, options);
 
         var legendWidth = 220.0;
         var legendHeight = 18 + (rows.Length * lineHeight);
@@ -416,10 +440,21 @@ public static class PlanOverlaySvgRenderer
         builder.AppendLine("</g>");
     }
 
-    private static string[] LegendRows(PlanScanResult result, PlanPage page) =>
-        new[]
+    private static string[] LegendRows(PlanScanResult result, PlanPage page, SvgOverlayRenderOptions options)
+    {
+        var rows = new List<string>
         {
             $"Page {page.Number}",
+            $"Profile {SvgOverlayRenderOptions.ProfileName(options.Profile)}",
+        };
+
+        if (options.Profile == SvgOverlayRenderProfile.StructuralReview)
+        {
+            rows.Add("Hidden objects/routing/nodes");
+        }
+
+        rows.AddRange(new[]
+        {
             $"{result.SheetRegions.Count(region => region.PageNumber == page.Number)} regions",
             $"{result.Dimensions.Count(dimension => dimension.PageNumber == page.Number)} dimensions",
             $"{result.Annotations.Count(annotation => annotation.PageNumber == page.Number)} annotations",
@@ -438,7 +473,10 @@ public static class PlanOverlaySvgRenderer
             $"{result.SurfacePatterns.Count(pattern => pattern.PageNumber == page.Number)} surface patterns",
             $"{RoutingItemCount(result.RoutingLayer, page.Number)} routing items",
             CalibrationLabel(result.Calibration)
-        };
+        });
+
+        return rows.ToArray();
+    }
 
     private static PlanPoint BestPanelPosition(
         PlanScanResult result,
@@ -467,7 +505,7 @@ public static class PlanOverlaySvgRenderer
     {
         const double lineHeight = 18.0;
         const double legendWidth = 220.0;
-        var legendHeight = 18 + (LegendRows(result, page).Length * lineHeight);
+        var legendHeight = 18 + (LegendRows(result, page, SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.Full)).Length * lineHeight);
         var legendPosition = BestPanelPosition(result, page, legendWidth, legendHeight);
         return new PlanRect(legendPosition.X, legendPosition.Y, legendWidth, legendHeight);
     }
@@ -590,8 +628,16 @@ public static class PlanOverlaySvgRenderer
     private static double Opacity(Confidence confidence) =>
         Math.Clamp(0.32 + (confidence.Value * 0.68), 0.32, 1.0);
 
+    private static double WallOpacity(Confidence confidence, WallGraphComponent? component)
+    {
+        var opacity = Opacity(confidence);
+        return component?.ExcludedFromStructuralTopology == true
+            ? Math.Max(0.12, opacity * 0.32)
+            : opacity;
+    }
+
     private static double NodeOpacity(Confidence confidence) =>
-        Math.Clamp(0.25 + (confidence.Value * 0.45), 0.25, 0.7);
+        Math.Clamp(0.18 + (confidence.Value * 0.34), 0.18, 0.52);
 
     private static string ComponentCssClass(WallGraphComponentKind kind) =>
         kind switch
@@ -604,12 +650,17 @@ public static class PlanOverlaySvgRenderer
     private static string WallCssClass(WallGraphComponent? component) =>
         component?.Kind switch
         {
-            WallGraphComponentKind.MainStructural => "wall wall-main",
-            WallGraphComponentKind.SecondaryStructural => "wall wall-secondary",
-            WallGraphComponentKind.ObjectLikeIsland => "wall wall-object-like",
-            WallGraphComponentKind.IsolatedFragment => "wall wall-fragment",
-            _ => "wall"
+            WallGraphComponentKind.MainStructural => WallCssClass("wall wall-main", component),
+            WallGraphComponentKind.SecondaryStructural => WallCssClass("wall wall-secondary", component),
+            WallGraphComponentKind.ObjectLikeIsland => WallCssClass("wall wall-object-like", component),
+            WallGraphComponentKind.IsolatedFragment => WallCssClass("wall wall-fragment", component),
+            _ => WallCssClass("wall", component)
         };
+
+    private static string WallCssClass(string cssClass, WallGraphComponent? component) =>
+        component?.ExcludedFromStructuralTopology == true
+            ? $"{cssClass} wall-excluded"
+            : cssClass;
 
     private static string RoutingObstacleCssClass(RoutingObstacleKind kind) =>
         kind switch

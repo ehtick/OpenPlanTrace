@@ -7,13 +7,38 @@ namespace OpenPlanTrace.Tests;
 public sealed class SchemaContractTests
 {
     [Fact]
+    public void DocumentedSchemas_HaveMatchingSchemaVersionMetadata()
+    {
+        var schemaDirectory = Path.Combine(FindRepositoryRoot(), "docs", "schemas");
+        var schemaPaths = Directory.EnumerateFiles(schemaDirectory, "*.schema.json").ToArray();
+
+        Assert.NotEmpty(schemaPaths);
+        foreach (var schemaPath in schemaPaths)
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(schemaPath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("x-openplantrace-schemaVersion", out var metadataVersion)
+                || !root.TryGetProperty("properties", out var properties)
+                || !properties.TryGetProperty("schemaVersion", out var schemaVersion)
+                || !schemaVersion.TryGetProperty("const", out var constVersion))
+            {
+                continue;
+            }
+
+            Assert.Equal(
+                metadataVersion.GetString(),
+                constVersion.GetString());
+        }
+    }
+
+    [Fact]
     public async Task EmbeddedScanSchema_MatchesDocumentedSchemaArtifact()
     {
         var schema = PlanTraceJsonSchema.ReadCurrent();
         using var document = JsonDocument.Parse(schema);
 
         Assert.Equal("https://json-schema.org/draft/2020-12/schema", document.RootElement.GetProperty("$schema").GetString());
-        Assert.Equal("urn:openplantrace:schema:scan:v44", document.RootElement.GetProperty("$id").GetString());
+        Assert.Equal("urn:openplantrace:schema:scan:v60", document.RootElement.GetProperty("$id").GetString());
         Assert.Equal(
             PlanTraceExport.CurrentSchemaVersion,
             document.RootElement.GetProperty("x-openplantrace-schemaVersion").GetString());
@@ -72,13 +97,226 @@ public sealed class SchemaContractTests
     }
 
     [Fact]
+    public async Task ScanExport_IncludesPipelineManifestMetadata()
+    {
+        var result = await CreateScanResultAsync();
+        using var exportedDocument = JsonDocument.Parse(
+            PlanTraceJsonExporter.Serialize(
+                result,
+                new PlanTraceJsonExportOptions { WriteIndented = false }));
+
+        var diagnostics = exportedDocument.RootElement.GetProperty("diagnostics");
+        Assert.Equal("fixed-stage-chain", diagnostics.GetProperty("executionModel").GetString());
+        Assert.Equal(
+            PipelineStageMetadataCatalog.All.Count,
+            diagnostics.GetProperty("stageCount").GetInt32());
+        Assert.True(diagnostics.GetProperty("executionWaveCount").GetInt32() > 0);
+        Assert.True(diagnostics.GetProperty("parallelCandidateStageCount").GetInt32() >= 0);
+        Assert.True(diagnostics.GetProperty("isDependencyReady").GetBoolean());
+        Assert.Equal(0, diagnostics.GetProperty("planIssueCount").GetInt32());
+        Assert.Equal(0, diagnostics.GetProperty("planWarningCount").GetInt32());
+        Assert.Equal(0, diagnostics.GetProperty("planErrorCount").GetInt32());
+        Assert.Empty(diagnostics.GetProperty("planIssues").EnumerateArray());
+        Assert.Contains(
+            nameof(PlanArtifactKind.Primitives),
+            diagnostics.GetProperty("sourceArtifacts").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            diagnostics.GetProperty("artifactKinds").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.RoutingBarriers),
+            diagnostics.GetProperty("artifactKinds").EnumerateArray().Select(item => item.GetString()));
+        var artifactPlans = diagnostics.GetProperty("artifactPlans").EnumerateArray().ToArray();
+        Assert.Equal(artifactPlans.Length, diagnostics.GetProperty("artifactPlanCount").GetInt32());
+        Assert.Equal(
+            artifactPlans.Count(item => item.GetProperty("isSourceArtifact").GetBoolean()),
+            diagnostics.GetProperty("sourceArtifactPlanCount").GetInt32());
+        Assert.Equal(
+            artifactPlans.Count(item => item.GetProperty("isTerminalArtifact").GetBoolean()),
+            diagnostics.GetProperty("terminalArtifactPlanCount").GetInt32());
+        Assert.Equal(
+            artifactPlans.Count(item => item.GetProperty("hasMultipleProducers").GetBoolean()),
+            diagnostics.GetProperty("multiProducerArtifactPlanCount").GetInt32());
+        Assert.Contains(
+            artifactPlans,
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Primitives)
+                && item.GetProperty("isSourceArtifact").GetBoolean()
+                && item.GetProperty("isConsumedByStage").GetBoolean()
+                && item.GetProperty("dependencyRole").GetString() == "SourceInput"
+                && item.GetProperty("consumerStages").EnumerateArray().Any(stage => stage.GetString() == "layer-analysis"));
+        Assert.Contains(
+            artifactPlans,
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.WallGraph)
+                && item.GetProperty("isProducedByStage").GetBoolean()
+                && item.GetProperty("producerStages").EnumerateArray().Any(stage => stage.GetString() == "wall-graph")
+                && item.GetProperty("requiredConsumerStages").EnumerateArray().Any(stage => stage.GetString() == "openings")
+                && item.GetProperty("dependencyRole").GetString() == "ProducedAndConsumed"
+                && item.GetProperty("evidence").GetArrayLength() > 0);
+        var artifactInventory = diagnostics.GetProperty("artifactInventory").EnumerateArray().ToArray();
+        Assert.Equal(
+            artifactInventory.Count(item => item.GetProperty("isPresent").GetBoolean()),
+            diagnostics.GetProperty("availableArtifactCount").GetInt32());
+        Assert.Equal(
+            artifactInventory.Count(item => !item.GetProperty("isPresent").GetBoolean()),
+            diagnostics.GetProperty("emptyArtifactCount").GetInt32());
+        Assert.Equal(
+            artifactInventory.Count(item => item.GetProperty("isImportCritical").GetBoolean()),
+            diagnostics.GetProperty("importCriticalArtifactCount").GetInt32());
+        Assert.Contains(
+            artifactInventory,
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Primitives)
+                && item.GetProperty("count").GetInt32() > 0
+                && !string.IsNullOrWhiteSpace(item.GetProperty("stateKey").GetString())
+                && item.GetProperty("revision").GetInt32() > 0
+                && item.GetProperty("isSourceArtifact").GetBoolean()
+                && item.GetProperty("readinessImpact").GetString() == "SourceIngestion");
+        Assert.Contains(
+            artifactInventory,
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.WallGraph)
+                && item.GetProperty("count").GetInt32() > 0
+                && item.GetProperty("isImportCritical").GetBoolean()
+                && item.GetProperty("producerStages").EnumerateArray().Any(stage => stage.GetString() == "wall-graph"));
+        var executionWaves = diagnostics.GetProperty("executionWaves").EnumerateArray().ToArray();
+        Assert.Equal(diagnostics.GetProperty("executionWaveCount").GetInt32(), executionWaves.Length);
+        var rerunImpacts = diagnostics.GetProperty("rerunImpacts").EnumerateArray().ToArray();
+        Assert.Equal(diagnostics.GetProperty("rerunImpactCount").GetInt32(), rerunImpacts.Length);
+        var rerunPlans = diagnostics.GetProperty("rerunPlans").EnumerateArray().ToArray();
+        Assert.Equal(diagnostics.GetProperty("rerunPlanCount").GetInt32(), rerunPlans.Length);
+        Assert.Contains(
+            rerunImpacts,
+            impact => impact.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls)
+                && impact.GetProperty("hasImpact").GetBoolean()
+                && impact.GetProperty("directConsumerStages").EnumerateArray().Any(stage => stage.GetString() == "wall-graph")
+                && impact.GetProperty("affectedStages").EnumerateArray().Any(stage => stage.GetString() == "routing-layer")
+                && impact.GetProperty("affectedArtifacts").EnumerateArray().Any(artifact => artifact.GetString() == nameof(PlanArtifactKind.WallGraph)));
+        Assert.Contains(
+            rerunPlans,
+            plan => plan.GetProperty("planId").GetString() == "wall-geometry"
+                && plan.GetProperty("hasWork").GetBoolean()
+                && plan.GetProperty("changedArtifacts").EnumerateArray().Any(artifact => artifact.GetString() == nameof(PlanArtifactKind.Walls))
+                && plan.GetProperty("rerunStages").EnumerateArray().Any(stage => stage.GetString() == "routing-layer")
+                && plan.GetProperty("affectedArtifacts").EnumerateArray().Any(artifact => artifact.GetString() == nameof(PlanArtifactKind.WallGraph)));
+        Assert.Contains(
+            executionWaves,
+            wave => wave.GetProperty("isParallelCandidate").GetBoolean()
+                && wave.GetProperty("stageCount").GetInt32() > 1
+                && wave.GetProperty("parallelReadiness").GetString() == "Ready"
+                && wave.GetProperty("recommendedExecutionMode").GetString() == "Parallel"
+                && wave.GetProperty("schedulingReasons").GetArrayLength() > 0);
+        Assert.Contains(
+            executionWaves,
+            wave => wave.GetProperty("directDownstreamStageCount").GetInt32() > 0
+                && wave.GetProperty("directDownstreamStages").GetArrayLength() == wave.GetProperty("directDownstreamStageCount").GetInt32()
+                && wave.GetProperty("downstreamReadArtifacts").GetArrayLength() > 0);
+
+        var stages = diagnostics.GetProperty("stages").EnumerateArray().ToArray();
+        Assert.Equal(PipelineStageMetadataCatalog.All.Count, stages.Length);
+
+        var wallGraph = Assert.Single(stages, stage => stage.GetProperty("stage").GetString() == "wall-graph");
+        Assert.Equal("Wall graph topology", wallGraph.GetProperty("displayName").GetString());
+        Assert.Equal(nameof(PipelineStageKind.Topology), wallGraph.GetProperty("kind").GetString());
+        Assert.Equal(wallGraph.GetProperty("dependencyLevel").GetInt32(), wallGraph.GetProperty("executionWave").GetInt32());
+        Assert.True(wallGraph.GetProperty("isParallelCandidate").ValueKind is JsonValueKind.True or JsonValueKind.False);
+        Assert.True(wallGraph.GetProperty("isDependencyReady").GetBoolean());
+        Assert.True(wallGraph.GetProperty("dependencyLevel").GetInt32() > 0);
+        Assert.True(wallGraph.GetProperty("preferredDependencyLevel").GetInt32() >= wallGraph.GetProperty("dependencyLevel").GetInt32());
+        Assert.Empty(wallGraph.GetProperty("missingRequiredReads").EnumerateArray());
+        Assert.Empty(wallGraph.GetProperty("missingOptionalReads").EnumerateArray());
+        var wallGraphRuntimeReadiness = wallGraph.GetProperty("runtimeReadiness");
+        Assert.True(wallGraphRuntimeReadiness.GetProperty("requiredReadsHaveData").GetBoolean());
+        Assert.False(wallGraphRuntimeReadiness.GetProperty("hasEmptyRequiredReads").GetBoolean());
+        Assert.Contains(
+            nameof(PlanArtifactKind.Walls),
+            wallGraphRuntimeReadiness.GetProperty("nonEmptyRequiredReads").EnumerateArray().Select(item => item.GetString()));
+        Assert.Empty(wallGraphRuntimeReadiness.GetProperty("emptyRequiredReads").EnumerateArray());
+        var wallGraphOutputReadiness = wallGraph.GetProperty("outputReadiness");
+        Assert.True(wallGraphOutputReadiness.GetProperty("declaredOutputsHaveData").GetBoolean());
+        Assert.False(wallGraphOutputReadiness.GetProperty("hasEmptyDeclaredOutputs").GetBoolean());
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            wallGraphOutputReadiness.GetProperty("nonEmptyDeclaredOutputs").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.TopologySpans),
+            wallGraphOutputReadiness.GetProperty("changedDeclaredOutputs").EnumerateArray().Select(item => item.GetString()));
+        Assert.Empty(wallGraphOutputReadiness.GetProperty("undeclaredChangedArtifacts").EnumerateArray());
+        Assert.True(wallGraphOutputReadiness.GetProperty("evidence").GetArrayLength() > 0);
+        Assert.Contains(
+            nameof(PlanArtifactKind.Walls),
+            wallGraph.GetProperty("reads").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            wallGraph.GetProperty("writes").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.TopologySpans),
+            wallGraph.GetProperty("writes").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            "wall-node-snapping",
+            wallGraph.GetProperty("capabilities").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            wallGraph.GetProperty("inputArtifacts").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls)
+                && item.GetProperty("count").GetInt32() > 0
+                && !string.IsNullOrWhiteSpace(item.GetProperty("stateKey").GetString())
+                && item.GetProperty("revision").GetInt32() > 0
+                && item.GetProperty("evidence").GetArrayLength() > 0);
+        Assert.Contains(
+            wallGraph.GetProperty("outputArtifacts").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.WallGraph)
+                && item.GetProperty("count").GetInt32() > 0
+                && !string.IsNullOrWhiteSpace(item.GetProperty("stateKey").GetString())
+                && item.GetProperty("revision").GetInt32() > 0
+                && item.GetProperty("evidence").GetArrayLength() > 0);
+        Assert.Contains(
+            wallGraph.GetProperty("changedArtifacts").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.WallGraph)
+                && item.GetProperty("beforeCount").GetInt32() == 0
+                && item.GetProperty("afterCount").GetInt32() > 0
+                && item.GetProperty("delta").GetInt32() > 0
+                && item.GetProperty("changeKind").GetString() == nameof(PipelineArtifactDeltaKind.Created));
+        Assert.Contains(
+            wallGraph.GetProperty("artifactDeltas").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.TopologySpans)
+                && item.GetProperty("changeKind").GetString() == nameof(PipelineArtifactDeltaKind.Created)
+                && item.GetProperty("isDeclaredWrite").GetBoolean()
+                && item.GetProperty("isPresent").GetBoolean());
+        var wallGraphContract = wallGraph.GetProperty("contract");
+        Assert.True(wallGraphContract.GetProperty("writesOnlyDeclaredArtifacts").GetBoolean());
+        Assert.Empty(wallGraphContract.GetProperty("undeclaredChangedArtifacts").EnumerateArray());
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            wallGraphContract.GetProperty("declaredWrites").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            wallGraphContract.GetProperty("changedArtifacts").EnumerateArray().Select(item => item.GetString()));
+
+        var routingLayer = Assert.Single(stages, stage => stage.GetProperty("stage").GetString() == "routing-layer");
+        Assert.Equal("Routing layer", routingLayer.GetProperty("displayName").GetString());
+        Assert.Equal(nameof(PipelineStageKind.Topology), routingLayer.GetProperty("kind").GetString());
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            routingLayer.GetProperty("reads").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.ObjectAggregates),
+            routingLayer.GetProperty("reads").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.RoutingBarriers),
+            routingLayer.GetProperty("writes").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.RoutingPassages),
+            routingLayer.GetProperty("writes").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            routingLayer.GetProperty("outputArtifacts").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.RoutingBarriers));
+    }
+
+    [Fact]
     public async Task EmbeddedVisualSnapshotSchema_MatchesDocumentedSchemaArtifact()
     {
         var schema = PlanOverlaySnapshotJsonSchema.ReadCurrent();
         using var document = JsonDocument.Parse(schema);
 
         Assert.Equal("https://json-schema.org/draft/2020-12/schema", document.RootElement.GetProperty("$schema").GetString());
-        Assert.Equal("urn:openplantrace:schema:visual-snapshot:v2", document.RootElement.GetProperty("$id").GetString());
+        Assert.Equal("urn:openplantrace:schema:visual-snapshot:v3", document.RootElement.GetProperty("$id").GetString());
         Assert.Equal(
             PlanOverlaySnapshot.CurrentSchemaVersion,
             document.RootElement.GetProperty("x-openplantrace-schemaVersion").GetString());
@@ -139,6 +377,10 @@ public sealed class SchemaContractTests
         var page = exportedDocument.RootElement.GetProperty("pages")[0];
         Assert.Equal(1, page.GetProperty("pageNumber").GetInt32());
         Assert.Equal("overlays/page-1.svg", page.GetProperty("svgPath").GetString());
+        Assert.Equal("full", page.GetProperty("svgProfile").GetString());
+        Assert.True(page.GetProperty("visibleLayerNames").GetArrayLength() > 0);
+        Assert.True(page.GetProperty("visibleDrawableItemCount").GetInt32() > 0);
+        Assert.True(page.GetProperty("hiddenDrawableItemCount").GetInt32() >= 0);
         Assert.True(page.GetProperty("layers").GetArrayLength() > 0);
     }
 
@@ -149,7 +391,7 @@ public sealed class SchemaContractTests
         using var document = JsonDocument.Parse(schema);
 
         Assert.Equal("https://json-schema.org/draft/2020-12/schema", document.RootElement.GetProperty("$schema").GetString());
-        Assert.Equal("urn:openplantrace:schema:placement:v1", document.RootElement.GetProperty("$id").GetString());
+        Assert.Equal("urn:openplantrace:schema:placement:v4", document.RootElement.GetProperty("$id").GetString());
         Assert.Equal(
             PlanPlacementExport.CurrentSchemaVersion,
             document.RootElement.GetProperty("x-openplantrace-schemaVersion").GetString());
@@ -218,10 +460,29 @@ public sealed class SchemaContractTests
         using var schemaDocument = JsonDocument.Parse(PlanOverlaySnapshotJsonSchema.ReadCurrent());
 
         AssertDefinitionRequires(schemaDocument, "pageSnapshot", "pageNumber", "width", "height", "pageBounds", "detectionBounds", "detectionCoverage", "drawableItemCount", "primitiveCount", "svgPath", "layers", "reviewQueueCount", "reviewQueueKindBreakdown", "reviewQueueSeverityBreakdown", "reviewQueue", "issues");
-        AssertDefinitionRequires(schemaDocument, "layerSnapshot", "name", "count", "bounds", "averageConfidence", "minimumConfidence", "maximumConfidence", "breakdown");
+        AssertDefinitionRequires(schemaDocument, "layerSnapshot", "name", "count", "bounds", "normalizedBounds", "normalizedDensity", "averageConfidence", "minimumConfidence", "maximumConfidence", "breakdown");
         AssertDefinitionRequires(schemaDocument, "reviewQueueItem", "id", "kind", "detector", "itemId", "priority", "severity", "pageNumber", "bounds", "confidence", "recommendedAction", "sourcePrimitiveCount", "sourceLayerCount", "evidence");
         AssertDefinitionRequires(schemaDocument, "snapshotIssue", "code", "severity", "message", "pageNumber");
         AssertDefinitionRequires(schemaDocument, "rect", "x", "y", "width", "height", "left", "top", "right", "bottom", "centerX", "centerY", "area");
+
+        var pageProperties = schemaDocument.RootElement
+            .GetProperty("$defs")
+            .GetProperty("pageSnapshot")
+            .GetProperty("properties");
+
+        foreach (var optionalProfileProperty in new[]
+                 {
+                     "svgProfile",
+                     "visibleDrawableItemCount",
+                     "hiddenDrawableItemCount",
+                     "visibleLayerNames",
+                     "hiddenLayerNames"
+                 })
+        {
+            Assert.True(
+                pageProperties.TryGetProperty(optionalProfileProperty, out _),
+                $"Visual snapshot page schema is missing optional property '{optionalProfileProperty}'.");
+        }
     }
 
     [Fact]
@@ -240,16 +501,22 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "surfacePattern", "id", "pageNumber", "kind", "orientation", "bounds", "boundsMillimeters", "center", "centerMillimeters", "millimetersPerDrawingUnit", "sourceRegionId", "lineCount", "horizontalLineCount", "verticalLineCount", "intersectionCount", "horizontalMedianSpacing", "verticalMedianSpacing", "medianSpacing", "excludedFromWallDetection", "excludedFromStructuralTopology", "confidence", "requiresReview", "recommendedAction", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "wall", "id", "pageNumber", "centerLine", "bounds", "drawingLength", "thicknessDrawingUnits", "confidence", "reliability", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "room", "id", "pageNumber", "bounds", "center", "boundary", "wallIds", "drawingArea", "confidence", "reliability", "evidence");
-        AssertDefinitionRequires(schemaDocument, "opening", "id", "pageNumber", "type", "operation", "orientation", "centerLine", "bounds", "drawingWidth", "placementStatus", "placement", "hostWallIds", "connectedRoomIds", "confidence", "reliability", "sourcePrimitiveIds", "sourceLayers", "evidence");
-        AssertDefinitionRequires(schemaDocument, "openingPlacement", "hostWallId", "anchorWallIds", "referenceLine", "startPoint", "endPoint", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "lengthDrawingUnits", "startOffsetMillimeters", "endOffsetMillimeters", "centerOffsetMillimeters", "lengthMillimeters", "hostWallStartParameter", "hostWallEndParameter", "hostWallCenterParameter", "alongVector", "normalVector", "crossWallOffsetDrawingUnits", "confidence", "evidence");
+        AssertDefinitionRequires(schemaDocument, "opening", "id", "pageNumber", "type", "operation", "orientation", "centerLine", "bounds", "drawingWidth", "placementStatus", "placement", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "connectedRoomLinks", "roomAdjacencyIds", "confidence", "reliability", "sourcePrimitiveIds", "sourceLayers", "evidence");
+        AssertDefinitionRequires(schemaDocument, "openingRoomConnection", "roomId", "roomLabel", "roomUseKind", "roomAdjacencyIds", "side", "roomSidePoint", "nearestBoundaryPoint", "signedDistanceFromOpening", "distanceToOpening", "sharesHostWall", "confidence", "evidence");
+        AssertDefinitionRequires(schemaDocument, "openingPlacement", "hostWallId", "anchorWallIds", "referenceLine", "referenceLineMillimeters", "startPoint", "startPointMillimeters", "endPoint", "endPointMillimeters", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "lengthDrawingUnits", "footprintBounds", "footprintBoundsMillimeters", "footprintCorners", "footprintCornersMillimeters", "startJambLine", "startJambLineMillimeters", "endJambLine", "endJambLineMillimeters", "depthDrawingUnits", "depthMillimeters", "startOffsetMillimeters", "endOffsetMillimeters", "centerOffsetMillimeters", "lengthMillimeters", "hostWallStartParameter", "hostWallEndParameter", "hostWallCenterParameter", "alongVector", "normalVector", "crossWallOffsetDrawingUnits", "crossWallOffsetMillimeters", "confidence", "evidence");
         AssertDefinitionRequires(schemaDocument, "objectAggregate", "id", "pageNumber", "bounds", "boundsMillimeters", "center", "centerMillimeters", "millimetersPerDrawingUnit", "category", "kind", "routingInfluence", "structuralInfluence", "suppressChildObjectsForRouting", "childObjectCount", "childObjectIds", "composition", "requiresReview", "confidence", "reliability", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "objectAggregateComposition", "categoryCounts", "kindCounts", "sourceKindCounts", "sourceWallComponentKindCounts", "sourceWallComponentIds", "children");
         AssertDefinitionRequires(schemaDocument, "objectAggregateCompositionCount", "value", "count");
         AssertDefinitionRequires(schemaDocument, "objectAggregateChildObject", "objectId", "bounds", "boundsMillimeters", "center", "centerMillimeters", "category", "kind", "sourceKind", "sourceWallComponentId", "sourceWallComponentKind", "label", "symbolName", "detectedTag", "confidence", "sourcePrimitiveIds");
-        AssertDefinitionRequires(schemaDocument, "wallGraphRepairCandidate", "id", "pageNumber", "kind", "suggestedAction", "sourceNodeId", "sourcePoint", "sourcePointMillimeters", "targetPoint", "targetPointMillimeters", "targetNodeId", "hostWallId", "gapDistanceDrawingUnits", "gapDistanceMillimeters", "repairLine", "repairLineMillimeters", "bounds", "boundsMillimeters", "wallIds", "sourcePrimitiveIds", "sourceLayers", "confidence", "requiresReview", "recommendedAction", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallGraph", "summary", "nodes", "edges", "components", "repairCandidateIds", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallGraphSummary", "nodeCount", "edgeCount", "componentCount", "mainStructuralComponentCount", "secondaryStructuralComponentCount", "objectLikeComponentCount", "isolatedFragmentComponentCount", "structuralEdgeCount", "excludedEdgeCount", "repairCandidateCount", "highSeverityRepairCandidateCount", "reviewRepairCandidateCount", "blockingRepairCandidateCount");
+        AssertDefinitionRequires(schemaDocument, "wallGraphNode", "id", "pageNumber", "position", "positionMillimeters", "kind", "degree", "directions", "confidence", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallGraphEdge", "id", "pageNumber", "fromNodeId", "toNodeId", "wallId", "wallComponentId", "wallComponentKind", "excludedFromStructuralTopology", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "drawingLength", "lengthMeters", "thicknessDrawingUnits", "thicknessMillimeters", "millimetersPerDrawingUnit", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallGraphComponent", "id", "pageNumber", "kind", "bounds", "boundsMillimeters", "wallIds", "nodeIds", "edgeIds", "sourcePrimitiveIds", "sourceLayers", "wallCount", "nodeCount", "edgeCount", "drawingLength", "lengthMeters", "confidence", "excludedFromStructuralTopology", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallGraphRepairCandidate", "id", "pageNumber", "kind", "suggestedAction", "severity", "importImpact", "applicability", "sourceNodeId", "sourcePoint", "sourcePointMillimeters", "targetPoint", "targetPointMillimeters", "targetNodeId", "hostWallId", "gapDistanceDrawingUnits", "gapDistanceMillimeters", "safeSnapDistanceDrawingUnits", "safeSnapDistanceMillimeters", "reviewDistanceLimitDrawingUnits", "reviewDistanceLimitMillimeters", "excessDistanceBeyondSafeSnapDrawingUnits", "excessDistanceBeyondSafeSnapMillimeters", "repairLine", "repairLineMillimeters", "bounds", "boundsMillimeters", "wallIds", "sourcePrimitiveIds", "sourceLayers", "confidence", "requiresReview", "recommendedAction", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingLayer", "barriers", "passages", "obstacles", "roomUseHints", "suppressedObjects", "ignoredObjects", "suppressedObjectCandidateIds", "ignoredObjectCandidateIds", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingBarrier", "id", "pageNumber", "sourceId", "sourceKind", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "thickness", "drawingLength", "lengthMeters", "thicknessMillimeters", "measurementScaleGroupId", "millimetersPerDrawingUnit", "wallComponentId", "wallComponentKind", "excludedFromStructuralTopology", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
-        AssertDefinitionRequires(schemaDocument, "routingPassage", "id", "pageNumber", "sourceId", "sourceKind", "type", "operation", "orientation", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "drawingWidth", "widthMillimeters", "measurementScaleGroupId", "millimetersPerDrawingUnit", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "placement", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
+        AssertDefinitionRequires(schemaDocument, "routingPassage", "id", "pageNumber", "sourceId", "sourceKind", "type", "operation", "orientation", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "drawingWidth", "widthMillimeters", "measurementScaleGroupId", "millimetersPerDrawingUnit", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "connectedRoomLinks", "roomAdjacencyIds", "placement", "placementStatus", "readyForCoordinatePlacement", "requiresReview", "reviewReasons", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingObstacle", "id", "pageNumber", "sourceId", "sourceKind", "obstacleKind", "routingInfluence", "structuralInfluence", "category", "objectKind", "bounds", "boundsMillimeters", "center", "centerMillimeters", "millimetersPerDrawingUnit", "label", "roomId", "roomLabel", "suppressesChildObjects", "childObjectIds", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingRoomUseHint", "id", "pageNumber", "sourceId", "sourceKind", "roomUseKind", "bounds", "boundsMillimeters", "center", "centerMillimeters", "millimetersPerDrawingUnit", "roomId", "roomLabel", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingSuppressedObject", "id", "pageNumber", "objectCandidateId", "suppressedByAggregateId", "reason", "action", "replacementRoutingObstacleId", "roomUseHintId", "aggregateRoutingInfluence", "aggregateStructuralInfluence", "candidateCategory", "candidateKind", "candidateBounds", "candidateBoundsMillimeters", "candidateCenter", "candidateCenterMillimeters", "millimetersPerDrawingUnit", "candidateLabel", "roomId", "roomLabel", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
@@ -306,6 +573,8 @@ public sealed class SchemaContractTests
         using var schemaDocument = JsonDocument.Parse(PlanTraceJsonSchema.ReadCurrent());
 
         AssertDefinitionRequires(schemaDocument, "coordinateSystem", "coordinateSpace", "unit", "origin", "xAxisDirection", "yAxisDirection", "geometryBasis", "coordinateOrder", "boundsKind", "precision", "realWorldUnit", "millimetersPerDrawingUnit", "note", "pageFrames");
+        AssertDefinitionRequires(schemaDocument, "document", "id", "sourceName", "sourcePath", "sourceFormat", "loader", "sourceKind", "effectiveSourceKind", "clipboardContentKind", "fileExtension", "contentType", "isDwgDerived", "isRasterDerived", "ingestionPath", "sourceReadiness", "properties");
+        AssertDefinitionRequires(schemaDocument, "sourceReadiness", "status", "geometryBasis", "canUseVectorGeometry", "requiresExternalAdapter", "requiresOcr", "isLegalAdapterBacked", "messages", "evidence");
         AssertDefinitionRequires(schemaDocument, "pageCoordinateFrame", "pageNumber", "width", "height", "bounds", "pageToNormalizedTransform", "normalizedToPageTransform");
         AssertDefinitionRequires(schemaDocument, "visualAiClassification", "label", "category", "confidence", "modelName", "modelVersion", "inferenceEngine", "pageNumber", "cropBounds", "cropSourceId", "alternatives", "evidence");
         AssertDefinitionRequires(schemaDocument, "visualAiAlternative", "label", "category", "confidence", "evidence");
@@ -313,10 +582,10 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "surfacePattern", "id", "pageNumber", "kind", "orientation", "bounds", "sourceRegionId", "lineCount", "horizontalLineCount", "verticalLineCount", "intersectionCount", "horizontalMedianSpacing", "verticalMedianSpacing", "medianSpacing", "excludedFromWallDetection", "excludedFromStructuralTopology", "confidence", "requiresReview", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallPairEvidence", "firstFaceLine", "secondFaceLine", "faceSeparation", "overlapRatio", "score", "firstFaceFragmentCount", "secondFaceFragmentCount", "firstFaceSourcePrimitiveIds", "secondFaceSourcePrimitiveIds");
         AssertDefinitionRequires(schemaDocument, "wallGraphComponent", "id", "pageNumber", "kind", "bounds", "wallIds", "nodeIds", "edgeIds", "sourcePrimitiveIds", "sourceLayers", "wallCount", "nodeCount", "edgeCount", "drawingLength", "confidence", "excludedFromStructuralTopology", "evidence");
-        AssertDefinitionRequires(schemaDocument, "wallGraphRepairCandidate", "id", "pageNumber", "kind", "suggestedAction", "sourceNodeId", "sourcePoint", "targetPoint", "targetNodeId", "hostWallId", "gapDistance", "repairLine", "bounds", "wallIds", "sourcePrimitiveIds", "sourceLayers", "confidence", "requiresReview", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallGraphRepairCandidate", "id", "pageNumber", "kind", "suggestedAction", "severity", "importImpact", "applicability", "sourceNodeId", "sourcePoint", "targetPoint", "targetNodeId", "hostWallId", "gapDistance", "safeSnapDistance", "reviewDistanceLimit", "excessDistanceBeyondSafeSnap", "repairLine", "bounds", "wallIds", "sourcePrimitiveIds", "sourceLayers", "confidence", "requiresReview", "evidence");
         AssertDefinitionRequires(schemaDocument, "opening", "id", "type", "operation", "centerLine", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "connectedRoomLinks", "roomAdjacencyIds", "drawingWidth", "widthMillimeters", "measurementScaleGroupId", "placement", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
-        AssertDefinitionRequires(schemaDocument, "openingPlacement", "hostWallId", "anchorWallIds", "referenceLine", "startPoint", "endPoint", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "lengthDrawingUnits", "startOffsetMillimeters", "endOffsetMillimeters", "centerOffsetMillimeters", "lengthMillimeters", "hostWallStartParameter", "hostWallEndParameter", "hostWallCenterParameter", "alongVector", "normalVector", "crossWallOffsetDrawingUnits", "confidence", "evidence");
-        AssertDefinitionRequires(schemaDocument, "openingRoomConnection", "roomId", "roomLabel", "roomUseKind", "roomAdjacencyIds", "distanceToOpening", "sharesHostWall", "confidence", "evidence");
+        AssertDefinitionRequires(schemaDocument, "openingPlacement", "hostWallId", "anchorWallIds", "referenceLine", "referenceLineMillimeters", "startPoint", "startPointMillimeters", "endPoint", "endPointMillimeters", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "lengthDrawingUnits", "footprintBounds", "footprintBoundsMillimeters", "footprintCorners", "footprintCornersMillimeters", "startJambLine", "startJambLineMillimeters", "endJambLine", "endJambLineMillimeters", "depthDrawingUnits", "depthMillimeters", "startOffsetMillimeters", "endOffsetMillimeters", "centerOffsetMillimeters", "lengthMillimeters", "hostWallStartParameter", "hostWallEndParameter", "hostWallCenterParameter", "alongVector", "normalVector", "crossWallOffsetDrawingUnits", "crossWallOffsetMillimeters", "confidence", "evidence");
+        AssertDefinitionRequires(schemaDocument, "openingRoomConnection", "roomId", "roomLabel", "roomUseKind", "roomAdjacencyIds", "side", "roomSidePoint", "nearestBoundaryPoint", "signedDistanceFromOpening", "distanceToOpening", "sharesHostWall", "confidence", "evidence");
         AssertDefinitionRequires(schemaDocument, "roomAdjacencyEdge", "id", "kind", "directionFromFirstToSecond", "directionFromSecondToFirst", "sharedBoundaryLength", "sharedWallIds", "openingIds", "evidence");
         AssertDefinitionRequires(schemaDocument, "room", "id", "bounds", "boundary", "wallIds", "drawingArea", "areaSquareMeters", "measurementScaleGroupId", "useKind", "labelSourcePrimitiveIds", "evidence");
         AssertDefinitionRequires(schemaDocument, "objectCandidate", "id", "kind", "category", "sourceKind", "sourceWallComponentId", "sourceWallComponentKind", "bounds", "detectedTag", "detectedTagSourcePrimitiveId", "roomId", "sourcePrimitiveIds", "sourceLayers", "nearbyText", "visualAi", "evidence");
@@ -327,7 +596,7 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "objectAggregateChildObject", "objectId", "bounds", "category", "kind", "sourceKind", "sourceWallComponentId", "sourceWallComponentKind", "label", "symbolName", "detectedTag", "confidence", "sourcePrimitiveIds");
         AssertDefinitionRequires(schemaDocument, "routingLayer", "barriers", "passages", "obstacles", "roomUseHints", "suppressedObjects", "ignoredObjects", "suppressedObjectCandidateIds", "ignoredObjectCandidateIds", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingBarrier", "id", "pageNumber", "sourceId", "sourceKind", "centerLine", "bounds", "thickness", "drawingLength", "wallComponentId", "wallComponentKind", "excludedFromStructuralTopology", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
-        AssertDefinitionRequires(schemaDocument, "routingPassage", "id", "pageNumber", "sourceId", "sourceKind", "type", "operation", "centerLine", "bounds", "drawingWidth", "widthMillimeters", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "placement", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
+        AssertDefinitionRequires(schemaDocument, "routingPassage", "id", "pageNumber", "sourceId", "sourceKind", "type", "operation", "centerLine", "bounds", "drawingWidth", "widthMillimeters", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "connectedRoomLinks", "roomAdjacencyIds", "placement", "placementStatus", "readyForCoordinatePlacement", "requiresReview", "reviewReasons", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingObstacle", "id", "pageNumber", "sourceId", "sourceKind", "obstacleKind", "routingInfluence", "structuralInfluence", "category", "objectKind", "bounds", "suppressesChildObjects", "childObjectIds", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingRoomUseHint", "id", "pageNumber", "sourceId", "sourceKind", "roomUseKind", "bounds", "roomId", "roomLabel", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingSuppressedObject", "id", "pageNumber", "objectCandidateId", "suppressedByAggregateId", "reason", "action", "replacementRoutingObstacleId", "roomUseHintId", "aggregateRoutingInfluence", "aggregateStructuralInfluence", "candidateCategory", "candidateKind", "candidateBounds", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
@@ -345,6 +614,21 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "reviewQueueItem", "id", "kind", "detector", "itemId", "priority", "severity", "pageNumber", "pageNumbers", "bounds", "confidence", "recommendedAction", "sourcePrimitiveIds", "sourceLayers", "evidence", "properties");
         AssertDefinitionRequires(schemaDocument, "detectorQuality", "name", "itemCount", "averageConfidence", "reviewRequiredCount", "evidenceBearingCount", "confidence", "evidence");
         AssertDefinitionRequires(schemaDocument, "qualityIssue", "code", "severity", "message", "confidence", "properties");
+        AssertDefinitionRequires(schemaDocument, "diagnostics", "durationMilliseconds", "executionModel", "stageCount", "executionWaveCount", "parallelCandidateStageCount", "artifactKinds", "sourceArtifacts", "artifactPlanCount", "artifactPlans", "sourceArtifactPlanCount", "terminalArtifactPlanCount", "multiProducerArtifactPlanCount", "artifactInventory", "availableArtifactCount", "emptyArtifactCount", "importCriticalArtifactCount", "missingImportCriticalArtifactCount", "executionWaves", "rerunImpactCount", "rerunImpacts", "rerunPlanCount", "rerunPlans", "isDependencyReady", "planIssueCount", "planWarningCount", "planErrorCount", "planIssues", "hasErrors", "infoCount", "warningCount", "errorCount", "stages", "messages");
+        AssertDefinitionRequires(schemaDocument, "executionWave", "level", "stageCount", "stages", "reads", "writes", "writeConflictArtifacts", "intraWaveDependencies", "directDownstreamStages", "directDownstreamStageCount", "downstreamReadArtifacts", "hasWriteConflicts", "hasIntraWaveDependencies", "isParallelCandidate", "parallelReadiness", "schedulingReasons", "recommendedExecutionMode");
+        AssertDefinitionRequires(schemaDocument, "executionWaveDependency", "stage", "dependsOnStage", "artifacts");
+        AssertDefinitionRequires(schemaDocument, "rerunImpact", "artifact", "isSourceArtifact", "impactScope", "producerStages", "directConsumerStages", "affectedStages", "affectedArtifacts", "firstAffectedWave", "affectedStageCount", "hasImpact", "evidence");
+        AssertDefinitionRequires(schemaDocument, "rerunPlan", "planId", "displayName", "changedArtifacts", "changedSourceArtifacts", "directConsumerStages", "rerunStages", "rerunWaves", "affectedArtifacts", "firstRerunWave", "lastRerunWave", "rerunStageCount", "affectedArtifactCount", "hasWork", "recommendedExecutionMode", "evidence");
+        AssertDefinitionRequires(schemaDocument, "stage", "stage", "displayName", "kind", "executionWave", "isParallelCandidate", "reads", "optionalReads", "writes", "capabilities", "isDependencyReady", "dependencyLevel", "preferredDependencyLevel", "availableBefore", "missingRequiredReads", "missingOptionalReads", "runtimeReadiness", "outputReadiness", "inputArtifacts", "outputArtifacts", "changedArtifacts", "artifactDeltas", "contract", "durationMilliseconds", "inputCount", "outputCount", "diagnosticCount", "infoCount", "warningCount", "errorCount");
+        AssertDefinitionRequires(schemaDocument, "stageRuntimeReadiness", "requiredReadsHaveData", "hasEmptyRequiredReads", "nonEmptyRequiredReads", "emptyRequiredReads", "optionalReadsHaveData", "hasEmptyOptionalReads", "nonEmptyOptionalReads", "emptyOptionalReads", "evidence");
+        AssertDefinitionRequires(schemaDocument, "stageOutputReadiness", "declaredOutputsHaveData", "hasEmptyDeclaredOutputs", "nonEmptyDeclaredOutputs", "emptyDeclaredOutputs", "changedDeclaredOutputs", "unchangedDeclaredOutputs", "hasUndeclaredChanges", "undeclaredChangedArtifacts", "evidence");
+        AssertDefinitionRequires(schemaDocument, "stageContract", "writesOnlyDeclaredArtifacts", "declaredWrites", "changedArtifacts", "undeclaredChangedArtifacts", "declaredUnchangedArtifacts");
+        AssertDefinitionRequires(schemaDocument, "artifactSnapshot", "artifact", "count", "stateKey", "revision", "evidence");
+        AssertDefinitionRequires(schemaDocument, "artifactPlan", "artifact", "isSourceArtifact", "isProducedByStage", "isConsumedByStage", "isTerminalArtifact", "producerStages", "requiredConsumerStages", "optionalConsumerStages", "consumerStages", "producerCount", "consumerCount", "firstProducerOrder", "lastProducerOrder", "firstConsumerOrder", "lastConsumerOrder", "firstProducerWave", "lastProducerWave", "firstConsumerWave", "lastConsumerWave", "hasMultipleProducers", "hasRequiredConsumers", "dependencyRole", "evidence");
+        AssertDefinitionRequires(schemaDocument, "artifactInventoryItem", "artifact", "count", "stateKey", "revision", "isPresent", "isSourceArtifact", "isImportCritical", "importance", "readinessImpact", "producerStages", "consumerStages", "evidence");
+        AssertDefinitionRequires(schemaDocument, "artifactChange", "artifact", "beforeCount", "afterCount", "delta", "changeKind");
+        AssertDefinitionRequires(schemaDocument, "artifactDelta", "artifact", "beforeCount", "afterCount", "delta", "changeKind", "changed", "wasPresent", "isPresent", "isDeclaredWrite", "isEmptyDeclaredOutput", "evidence");
+        AssertDefinitionRequires(schemaDocument, "pipelinePlanIssue", "code", "severity", "stage", "message", "artifacts");
         AssertDefinitionRequires(schemaDocument, "diagnostic", "code", "severity", "stage", "scope", "message", "pageNumber", "region", "confidence", "sourcePrimitiveIds", "properties");
         AssertDefinitionRequires(schemaDocument, "annotationItem", "id", "pageNumber", "kind", "text", "marker", "bounds", "confidence", "sourcePrimitiveIds", "sourceLayers", "references", "evidence");
         AssertDefinitionRequires(schemaDocument, "annotationReference", "id", "marker", "text", "bounds", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
@@ -850,6 +1134,7 @@ public sealed class SchemaContractTests
 
         AssertDefinitionRequires(schemaDocument, "fixture", "id", "sourcePath", "expectations");
         AssertDefinitionRequires(schemaDocument, "stageExpectation", "stage");
+        AssertDefinitionRequires(schemaDocument, "stageArtifactExpectation", "artifact");
 
         var defs = schemaDocument.RootElement.GetProperty("$defs");
         var fixtureProperties = defs
@@ -879,6 +1164,21 @@ public sealed class SchemaContractTests
                      "requireMetricImportReady",
                      "requireRoutingImportReady",
                      "allowImportReview",
+                     "requiredSourceFormat",
+                     "requiredSourceLoader",
+                     "requiredSourceKind",
+                     "requiredEffectiveSourceKind",
+                     "requiredSourceIngestionPath",
+                     "requiredSourceReadinessStatus",
+                     "requiredSourceGeometryBasis",
+                     "requireSourceVectorGeometryReady",
+                     "requireSourceExternalAdapter",
+                     "requireSourceOcr",
+                     "requireSourceLegalAdapterBacked",
+                     "requireDwgDerivedSource",
+                     "requireRasterDerivedSource",
+                     "requiredSourceEvidenceContains",
+                     "forbiddenSourceEvidenceContains",
                      "minObjectAggregates",
                      "maxObjectAggregates",
                      "minRoutingItems",
@@ -899,6 +1199,25 @@ public sealed class SchemaContractTests
                  })
         {
             Assert.True(expectationsProperties.TryGetProperty(qualityProperty, out _), $"Missing benchmark quality property '{qualityProperty}'.");
+        }
+
+        foreach (var pipelineProperty in new[]
+                 {
+                     "requirePipelineDependencyReady",
+                     "maxPipelinePlanIssues",
+                     "maxPipelinePlanWarnings",
+                     "maxPipelinePlanErrors",
+                     "requireAllStagesDependencyReady",
+                     "requireAllStagesRuntimeRequiredReadsHaveData",
+                     "requireAllStagesRuntimeOptionalReadsHaveData",
+                     "maxTotalEmptyRequiredRuntimeReads",
+                     "maxTotalEmptyOptionalRuntimeReads",
+                     "requireAllStagesWriteOnlyDeclaredArtifacts",
+                     "maxTotalUndeclaredChangedArtifacts",
+                     "maxTotalEmptyDeclaredOutputs"
+                 })
+        {
+            Assert.True(expectationsProperties.TryGetProperty(pipelineProperty, out _), $"Missing benchmark pipeline property '{pipelineProperty}'.");
         }
 
         foreach (var roomGraphProperty in new[] { "minRoomAdjacencies", "maxRoomAdjacencies", "minRoomClusters", "maxRoomClusters" })
@@ -943,6 +1262,30 @@ public sealed class SchemaContractTests
                  })
         {
             Assert.True(expectationsProperties.TryGetProperty(metricName, out _), $"Missing benchmark metric block '{metricName}'.");
+        }
+
+        Assert.True(expectationsProperties.TryGetProperty("artifactExpectations", out _), "Benchmark expectations should document final artifactExpectations.");
+        AssertDefinitionRequires(schemaDocument, "artifactExpectation", "artifact");
+
+        var stageExpectationProperties = defs
+            .GetProperty("stageExpectation")
+            .GetProperty("properties");
+        Assert.True(stageExpectationProperties.TryGetProperty("artifactExpectations", out _), "Benchmark stage expectation should document artifactExpectations.");
+        foreach (var stageHealthProperty in new[]
+                 {
+                     "requireDependencyReady",
+                     "maxMissingRequiredReads",
+                     "maxMissingOptionalReads",
+                     "requireRuntimeRequiredReadsHaveData",
+                     "requireRuntimeOptionalReadsHaveData",
+                     "maxEmptyRequiredRuntimeReads",
+                     "maxEmptyOptionalRuntimeReads",
+                     "requireWritesOnlyDeclaredArtifacts",
+                     "maxUndeclaredChangedArtifacts",
+                     "maxEmptyDeclaredOutputs"
+                 })
+        {
+            Assert.True(stageExpectationProperties.TryGetProperty(stageHealthProperty, out _), $"Missing benchmark stage health property '{stageHealthProperty}'.");
         }
 
         var metricProperties = defs
@@ -1115,6 +1458,45 @@ public sealed class SchemaContractTests
                 exportedDocument.RootElement.TryGetProperty(requiredProperty, out _),
                 $"Benchmark result JSON is missing schema-required top-level property '{requiredProperty}'.");
         }
+
+        var exportedStage = exportedDocument.RootElement
+            .GetProperty("cases")[0]
+            .GetProperty("stages")[0];
+        var exportedRuntimeReadiness = exportedStage.GetProperty("runtimeReadiness");
+        Assert.True(exportedRuntimeReadiness.GetProperty("requiredReadsHaveData").GetBoolean());
+        Assert.False(exportedRuntimeReadiness.GetProperty("hasEmptyRequiredReads").GetBoolean());
+        Assert.Contains(
+            nameof(PlanArtifactKind.Primitives),
+            exportedRuntimeReadiness
+                .GetProperty("nonEmptyRequiredReads")
+                .EnumerateArray()
+                .Select(item => item.GetString()));
+        var exportedContract = exportedStage.GetProperty("contract");
+        Assert.True(exportedContract.GetProperty("writesOnlyDeclaredArtifacts").GetBoolean());
+        Assert.Contains(
+            nameof(PlanArtifactKind.Walls),
+            exportedContract
+                .GetProperty("declaredWrites")
+                .EnumerateArray()
+                .Select(item => item.GetString()));
+        Assert.Empty(exportedContract.GetProperty("undeclaredChangedArtifacts").EnumerateArray());
+        var exportedPipelineHealth = exportedDocument.RootElement
+            .GetProperty("cases")[0]
+            .GetProperty("pipelineHealth");
+        Assert.True(exportedPipelineHealth.GetProperty("dependencyReady").GetBoolean());
+        Assert.Equal(0, exportedPipelineHealth.GetProperty("planErrorCount").GetInt32());
+        Assert.True(exportedPipelineHealth.GetProperty("writesOnlyDeclaredArtifacts").GetBoolean());
+        var exportedArtifactPlans = exportedDocument.RootElement
+            .GetProperty("cases")[0]
+            .GetProperty("artifactPlans")
+            .EnumerateArray()
+            .ToArray();
+        Assert.Contains(
+            exportedArtifactPlans,
+            plan => plan.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls)
+                && plan.GetProperty("isProducedByStage").GetBoolean()
+                && plan.GetProperty("producerStages").EnumerateArray().Any(stage => stage.GetString() == "walls")
+                && plan.GetProperty("dependencyRole").GetString() == "ProducedAndConsumed");
     }
 
     [Fact]
@@ -1122,13 +1504,22 @@ public sealed class SchemaContractTests
     {
         using var schemaDocument = JsonDocument.Parse(BenchmarkRunResultJsonSchema.ReadCurrent());
 
-        AssertDefinitionRequires(schemaDocument, "scoreboard", "schemaVersion", "generatedAt", "grade", "overallScore", "consumerReadinessScore", "readyForDownstreamUse", "caseCount", "scoredCaseCount", "skippedCaseCount", "failedScanCount", "failedAssertionCount", "expectedTargetCount", "matchedTargetCount", "missedTargetCount", "extraDetectionCount", "cases", "detectors", "failureBuckets", "recommendedNextActions");
-        AssertDefinitionRequires(schemaDocument, "caseResult", "fixtureId", "sourcePath", "passed", "scanSucceeded", "durationMilliseconds", "counts", "assertions", "metrics", "qualityIssues", "diagnosticIssues", "stages", "importReadiness", "passedAssertionCount", "failedAssertionCount");
-        AssertDefinitionRequires(schemaDocument, "caseScore", "fixtureId", "grade", "overallScore", "targetF1", "targetRecall", "targetPrecision", "assertionReliability", "scanQualityScore", "measurementScore", "importReadinessScore", "readyForGeometryImport", "readyForMetricImport", "readyForRoutingImport", "expectedTargetCount", "matchedTargetCount", "missedTargetCount", "extraDetectionCount", "failedAssertionCount", "qualityGrade", "qualityConfidence", "requiresReview", "skipped", "blockingReasons");
+        AssertDefinitionRequires(schemaDocument, "scoreboard", "schemaVersion", "generatedAt", "grade", "overallScore", "consumerReadinessScore", "pipelineHealthScore", "readyForDownstreamUse", "caseCount", "scoredCaseCount", "skippedCaseCount", "failedScanCount", "failedAssertionCount", "expectedTargetCount", "matchedTargetCount", "missedTargetCount", "extraDetectionCount", "cases", "detectors", "failureBuckets", "recommendedNextActions");
+        AssertDefinitionRequires(schemaDocument, "caseResult", "fixtureId", "sourcePath", "passed", "scanSucceeded", "durationMilliseconds", "counts", "assertions", "metrics", "qualityIssues", "diagnosticIssues", "planIssues", "stages", "artifactInventory", "artifactPlans", "executionWaves", "rerunImpacts", "rerunPlans", "pipelineHealth", "importReadiness", "passedAssertionCount", "failedAssertionCount");
+        AssertDefinitionRequires(schemaDocument, "caseScore", "fixtureId", "grade", "overallScore", "targetF1", "targetRecall", "targetPrecision", "assertionReliability", "scanQualityScore", "measurementScore", "importReadinessScore", "pipelineHealthScore", "readyForGeometryImport", "readyForMetricImport", "readyForRoutingImport", "pipelineHealthReady", "pipelineHealthIssueCount", "expectedTargetCount", "matchedTargetCount", "missedTargetCount", "extraDetectionCount", "failedAssertionCount", "qualityGrade", "qualityConfidence", "requiresReview", "skipped", "blockingReasons");
+        AssertDefinitionRequires(schemaDocument, "artifactPlanSummary", "artifact", "isSourceArtifact", "isProducedByStage", "isConsumedByStage", "isTerminalArtifact", "producerStages", "requiredConsumerStages", "optionalConsumerStages", "consumerStages", "producerCount", "consumerCount", "firstProducerWave", "lastProducerWave", "firstConsumerWave", "lastConsumerWave", "hasMultipleProducers", "hasRequiredConsumers", "dependencyRole", "evidence");
+        AssertDefinitionRequires(schemaDocument, "executionWaveSummary", "level", "stageCount", "stages", "reads", "writes", "directDownstreamStages", "directDownstreamStageCount", "downstreamReadArtifacts", "writeConflictArtifacts", "intraWaveDependencyCount", "hasWriteConflicts", "hasIntraWaveDependencies", "isParallelCandidate", "parallelReadiness", "schedulingReasons", "recommendedExecutionMode");
+        AssertDefinitionRequires(schemaDocument, "rerunImpactSummary", "artifact", "isSourceArtifact", "impactScope", "producerStages", "directConsumerStages", "affectedStages", "affectedArtifacts", "firstAffectedWave", "affectedStageCount", "hasImpact", "evidence");
+        AssertDefinitionRequires(schemaDocument, "rerunPlanSummary", "planId", "displayName", "changedArtifacts", "changedSourceArtifacts", "directConsumerStages", "rerunStages", "rerunWaves", "affectedArtifacts", "firstRerunWave", "lastRerunWave", "rerunStageCount", "affectedArtifactCount", "hasWork", "recommendedExecutionMode", "evidence");
+        AssertDefinitionRequires(schemaDocument, "pipelineHealthSummary", "dependencyReady", "planIssueCount", "planWarningCount", "planErrorCount", "stageCount", "dependencyReadyStageCount", "notDependencyReadyStageCount", "missingRequiredReadCount", "missingOptionalReadCount", "runtimeRequiredReadsHaveData", "runtimeOptionalReadsHaveData", "emptyRequiredRuntimeReadCount", "emptyOptionalRuntimeReadCount", "writesOnlyDeclaredArtifacts", "contractViolationStageCount", "undeclaredChangedArtifactCount", "emptyDeclaredOutputCount", "reviewStageNames", "evidence");
+        AssertDefinitionRequires(schemaDocument, "pipelinePlanIssueSummary", "code", "severity", "stage", "artifacts", "message");
         AssertDefinitionRequires(schemaDocument, "importReadiness", "grade", "score", "readyForGeometryImport", "readyForMetricImport", "readyForRoutingImport", "requiresReview", "blockingIssueCodes", "reviewIssueCodes", "recommendedActions", "evidence");
         AssertDefinitionRequires(schemaDocument, "scanReviewQueueSummary", "count", "kindCounts", "severityCounts");
         AssertDefinitionRequires(schemaDocument, "caseIssueSummary", "code", "severity", "stage", "scope", "count", "message", "pageNumbers", "maxConfidence", "sourcePrimitiveCount", "sourcePrimitiveIds", "properties");
-        AssertDefinitionRequires(schemaDocument, "stageSummary", "stage", "durationMilliseconds", "inputCount", "outputCount", "diagnosticCount", "infoCount", "warningCount", "errorCount");
+        AssertDefinitionRequires(schemaDocument, "stageSummary", "stage", "durationMilliseconds", "inputCount", "outputCount", "diagnosticCount", "infoCount", "warningCount", "errorCount", "inputArtifacts", "outputArtifacts", "changedArtifacts", "artifactDeltas", "outputReadiness");
+        AssertDefinitionRequires(schemaDocument, "stageRuntimeReadiness", "requiredReadsHaveData", "hasEmptyRequiredReads", "nonEmptyRequiredReads", "emptyRequiredReads", "optionalReadsHaveData", "hasEmptyOptionalReads", "nonEmptyOptionalReads", "emptyOptionalReads", "evidence");
+        AssertDefinitionRequires(schemaDocument, "stageOutputReadiness", "declaredOutputsHaveData", "hasEmptyDeclaredOutputs", "nonEmptyDeclaredOutputs", "emptyDeclaredOutputs", "changedDeclaredOutputs", "unchangedDeclaredOutputs", "hasUndeclaredChanges", "undeclaredChangedArtifacts", "evidence");
+        AssertDefinitionRequires(schemaDocument, "stageContract", "writesOnlyDeclaredArtifacts", "declaredWrites", "changedArtifacts", "undeclaredChangedArtifacts", "declaredUnchangedArtifacts");
         AssertDefinitionRequires(schemaDocument, "detectorMetric", "detector", "expectedCount", "detectedCount", "matchedCount", "missedCount", "extraCount", "recall", "precision", "f1", "matches", "precisionScoringEnabled", "extraDetections", "reviewOnlyDetections");
         AssertDefinitionRequires(schemaDocument, "reviewQueueItem", "fixtureId", "sourcePath", "detector", "kind", "precisionScoringEnabled", "detection", "recommendedAction");
         AssertDefinitionRequires(schemaDocument, "detectionSummary", "detectionId", "detectedTags", "evidence");
@@ -1139,9 +1530,37 @@ public sealed class SchemaContractTests
             .GetProperty("caseResult")
             .GetProperty("properties");
         Assert.True(caseResultProperties.TryGetProperty("scanReviewQueue", out _), "Missing benchmark case scan review queue summary property.");
+        Assert.True(caseResultProperties.TryGetProperty("artifactInventory", out _), "Missing benchmark case final artifact inventory property.");
+        Assert.True(caseResultProperties.TryGetProperty("artifactPlans", out _), "Missing benchmark case artifact plan graph property.");
+        Assert.True(caseResultProperties.TryGetProperty("planIssues", out _), "Missing benchmark case pipeline plan issue details property.");
+        Assert.True(caseResultProperties.TryGetProperty("executionWaves", out _), "Missing benchmark case execution wave summary property.");
+        Assert.True(caseResultProperties.TryGetProperty("rerunImpacts", out _), "Missing benchmark case rerun impact summary property.");
+        Assert.True(caseResultProperties.TryGetProperty("rerunPlans", out _), "Missing benchmark case rerun plan summary property.");
+        Assert.True(caseResultProperties.TryGetProperty("pipelineHealth", out _), "Missing benchmark case pipeline health summary property.");
         Assert.True(
             defs.GetProperty("counts").GetProperty("properties").TryGetProperty("surfacePatterns", out _),
             "Benchmark result counts schema should document optional surfacePatterns.");
+        var stageSummaryProperties = defs
+            .GetProperty("stageSummary")
+            .GetProperty("properties");
+        Assert.True(stageSummaryProperties.TryGetProperty("displayName", out _), "Benchmark result stage summary should document displayName.");
+        Assert.True(stageSummaryProperties.TryGetProperty("kind", out _), "Benchmark result stage summary should document stage kind.");
+        Assert.True(stageSummaryProperties.TryGetProperty("dependencyLevel", out _), "Benchmark result stage summary should document dependencyLevel.");
+        Assert.True(stageSummaryProperties.TryGetProperty("preferredDependencyLevel", out _), "Benchmark result stage summary should document preferredDependencyLevel.");
+        Assert.True(stageSummaryProperties.TryGetProperty("reads", out _), "Benchmark result stage summary should document reads.");
+        Assert.True(stageSummaryProperties.TryGetProperty("writes", out _), "Benchmark result stage summary should document writes.");
+        Assert.True(stageSummaryProperties.TryGetProperty("capabilities", out _), "Benchmark result stage summary should document capabilities.");
+        Assert.True(stageSummaryProperties.TryGetProperty("isDependencyReady", out _), "Benchmark result stage summary should document dependency readiness.");
+        Assert.True(stageSummaryProperties.TryGetProperty("inputArtifacts", out _), "Benchmark result stage summary should document input artifact snapshots.");
+        Assert.True(stageSummaryProperties.TryGetProperty("outputArtifacts", out _), "Benchmark result stage summary should document output artifact snapshots.");
+        Assert.True(stageSummaryProperties.TryGetProperty("changedArtifacts", out _), "Benchmark result stage summary should document changed artifacts.");
+        Assert.True(stageSummaryProperties.TryGetProperty("artifactDeltas", out _), "Benchmark result stage summary should document artifact lifecycle deltas.");
+        Assert.True(stageSummaryProperties.TryGetProperty("runtimeReadiness", out _), "Benchmark result stage summary should document runtime readiness.");
+        Assert.True(stageSummaryProperties.TryGetProperty("outputReadiness", out _), "Benchmark result stage summary should document output readiness.");
+        Assert.True(stageSummaryProperties.TryGetProperty("contract", out _), "Benchmark result stage summary should document stage contract.");
+        AssertDefinitionRequires(schemaDocument, "artifactSnapshot", "artifact", "count", "stateKey", "revision", "evidence");
+        AssertDefinitionRequires(schemaDocument, "artifactChange", "artifact", "beforeCount", "afterCount", "delta", "changeKind");
+        AssertDefinitionRequires(schemaDocument, "artifactDelta", "artifact", "beforeCount", "afterCount", "delta", "changeKind", "changed", "wasPresent", "isPresent", "isDeclaredWrite", "isEmptyDeclaredOutput", "evidence");
 
         var scoreGradeEnum = defs
             .GetProperty("scoreGrade")
@@ -2195,6 +2614,18 @@ public sealed class SchemaContractTests
                     {
                         MinPages = 1,
                         MaxDiagnosticErrors = 0,
+                        RequirePipelineDependencyReady = true,
+                        MaxPipelinePlanIssues = 0,
+                        MaxPipelinePlanWarnings = 0,
+                        MaxPipelinePlanErrors = 0,
+                        RequireAllStagesDependencyReady = true,
+                        RequireAllStagesRuntimeRequiredReadsHaveData = false,
+                        RequireAllStagesRuntimeOptionalReadsHaveData = false,
+                        MaxTotalEmptyRequiredRuntimeReads = 2,
+                        MaxTotalEmptyOptionalRuntimeReads = 4,
+                        RequireAllStagesWriteOnlyDeclaredArtifacts = true,
+                        MaxTotalUndeclaredChangedArtifacts = 0,
+                        MaxTotalEmptyDeclaredOutputs = 3,
                         MinQualityGrade = PlanScanQualityGrade.Usable,
                         MinQualityConfidence = 0.65,
                         MaxQualityIssues = 1,
@@ -2213,7 +2644,29 @@ public sealed class SchemaContractTests
                             {
                                 Stage = "openings",
                                 MaxDurationMilliseconds = 100,
-                                MaxErrors = 0
+                                MaxErrors = 0,
+                                RequireDependencyReady = true,
+                                MaxMissingRequiredReads = 0,
+                                MaxMissingOptionalReads = 0,
+                                RequireRuntimeRequiredReadsHaveData = true,
+                                RequireRuntimeOptionalReadsHaveData = true,
+                                MaxEmptyRequiredRuntimeReads = 0,
+                                MaxEmptyOptionalRuntimeReads = 0,
+                                RequireWritesOnlyDeclaredArtifacts = true,
+                                MaxUndeclaredChangedArtifacts = 0,
+                                MaxEmptyDeclaredOutputs = 0,
+                                ArtifactExpectations = new[]
+                                {
+                                    new BenchmarkStageArtifactExpectation
+                                    {
+                                        Artifact = PlanArtifactKind.Openings,
+                                        MinAfterCount = 1,
+                                        MaxAfterCount = 4,
+                                        MinDelta = 1,
+                                        MaxDelta = 4,
+                                        RequireChanged = true
+                                    }
+                                }
                             }
                         },
                         OpeningMetrics = new BenchmarkDetectorMetricExpectations
@@ -2312,7 +2765,72 @@ public sealed class SchemaContractTests
                         BlockingIssueCodes: Array.Empty<string>(),
                         ReviewIssueCodes: Array.Empty<string>(),
                         RecommendedActions: new[] { "Schema sample is import-ready." },
-                        Evidence: new[] { "schema sample import readiness" })
+                        Evidence: new[] { "schema sample import readiness" }),
+                    ArtifactPlans = new[]
+                    {
+                        new BenchmarkArtifactPlanSummary(
+                            Artifact: nameof(PlanArtifactKind.Walls),
+                            IsSourceArtifact: false,
+                            IsProducedByStage: true,
+                            IsConsumedByStage: true,
+                            IsTerminalArtifact: false,
+                            ProducerStages: new[] { "walls" },
+                            RequiredConsumerStages: new[] { "wall-graph" },
+                            OptionalConsumerStages: Array.Empty<string>(),
+                            ConsumerStages: new[] { "wall-graph" },
+                            ProducerCount: 1,
+                            ConsumerCount: 1,
+                            FirstProducerWave: 1,
+                            LastProducerWave: 1,
+                            FirstConsumerWave: 2,
+                            LastConsumerWave: 2,
+                            HasMultipleProducers: false,
+                            HasRequiredConsumers: true,
+                            DependencyRole: "ProducedAndConsumed",
+                            Evidence: new[] { "schema sample artifact plan" })
+                    },
+                    Stages = new[]
+                    {
+                        new BenchmarkStageSummary(
+                            "walls",
+                            DurationMilliseconds: 1,
+                            InputCount: 10,
+                            OutputCount: 4,
+                            DiagnosticCount: 0,
+                            InfoCount: 0,
+                            WarningCount: 0,
+                            ErrorCount: 0,
+                            DisplayName: "Wall detection",
+                            Kind: nameof(PipelineStageKind.Geometry),
+                            DependencyLevel: 1,
+                            PreferredDependencyLevel: 1,
+                            Reads: new[] { nameof(PlanArtifactKind.Primitives) },
+                            OptionalReads: Array.Empty<string>(),
+                            Writes: new[] { nameof(PlanArtifactKind.Walls) },
+                            Capabilities: new[] { "schema-stage-sample" },
+                            IsDependencyReady: true,
+                            MissingRequiredReads: Array.Empty<string>(),
+                            MissingOptionalReads: Array.Empty<string>(),
+                            InputArtifacts: new[] { new PipelineArtifactSnapshot(PlanArtifactKind.Primitives, 10) },
+                            OutputArtifacts: new[] { new PipelineArtifactSnapshot(PlanArtifactKind.Walls, 4) },
+                            ChangedArtifacts: new[] { new PipelineArtifactChange(PlanArtifactKind.Walls, 0, 4) },
+                            ArtifactDeltas: new[] { new PipelineArtifactDelta(PlanArtifactKind.Walls, 0, 4, true) })
+                        {
+                            RuntimeReadiness = new PipelineStageRuntimeReadiness(
+                                RequiredReadsHaveData: true,
+                                HasEmptyRequiredReads: false,
+                                NonEmptyRequiredReads: new[] { PlanArtifactKind.Primitives },
+                                EmptyRequiredReads: Array.Empty<PlanArtifactKind>(),
+                                OptionalReadsHaveData: true,
+                                HasEmptyOptionalReads: false,
+                                NonEmptyOptionalReads: Array.Empty<PlanArtifactKind>(),
+                                EmptyOptionalReads: Array.Empty<PlanArtifactKind>(),
+                                Evidence: new[] { "schema sample runtime reads are present" }),
+                            Contract = PipelineStageContract.From(
+                                new[] { PlanArtifactKind.Walls },
+                                new[] { PlanArtifactKind.Walls })
+                        }
+                    }
                 }
             });
 

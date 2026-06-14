@@ -38,7 +38,7 @@ public static class BenchmarkManifestDraftBuilder
             SourcePath = sourcePath,
             Optional = options.Optional,
             SkipReason = options.Optional ? Clean(options.SkipReason) : null,
-            Expectations = BuildExpectations(root, options),
+            Expectations = BuildExpectations(root, document, options),
             Properties = BuildProperties(root, document)
         };
 
@@ -51,12 +51,16 @@ public static class BenchmarkManifestDraftBuilder
 
     private static BenchmarkExpectations BuildExpectations(
         JsonElement root,
+        JsonElement? document,
         BenchmarkManifestDraftOptions options)
     {
         var diagnostics = TryGetObject(root, "diagnostics");
         var quality = TryGetObject(root, "quality");
         var importReadiness = TryGetObject(root, "importReadiness");
+        var sourceReadiness = TryGetObject(document, "sourceReadiness");
         var measurementConsistency = TryGetObject(root, "measurementConsistency");
+        var executionPlan = TryGetObject(diagnostics, "executionPlan");
+        var stages = EnumerateArray(diagnostics, "stages").ToArray();
         var qualityIssues = CountArray(quality, "issues");
         var measurementCheckedCount = GetInt(measurementConsistency, "checkedCount");
         var measurementConsistentCount = GetInt(measurementConsistency, "consistentCount");
@@ -86,6 +90,18 @@ public static class BenchmarkManifestDraftBuilder
             MinRoutingSuppressedObjects = Positive(CountRoutingSuppressedObjects(root)),
             MaxDiagnosticWarnings = GetInt(diagnostics, "warningCount") ?? GetInt(quality, "diagnosticWarningCount"),
             MaxDiagnosticErrors = GetInt(diagnostics, "errorCount") ?? GetInt(quality, "diagnosticErrorCount"),
+            RequirePipelineDependencyReady = GetBool(executionPlan, "isDependencyReady"),
+            MaxPipelinePlanIssues = CountArray(executionPlan, "issues"),
+            MaxPipelinePlanWarnings = CountPipelinePlanIssues(executionPlan, DiagnosticSeverity.Warning),
+            MaxPipelinePlanErrors = CountPipelinePlanIssues(executionPlan, DiagnosticSeverity.Error),
+            RequireAllStagesDependencyReady = AllStageBool(stages, "isDependencyReady"),
+            RequireAllStagesRuntimeRequiredReadsHaveData = AllNestedStageBool(stages, "runtimeReadiness", "requiredReadsHaveData"),
+            RequireAllStagesRuntimeOptionalReadsHaveData = AllNestedStageBool(stages, "runtimeReadiness", "optionalReadsHaveData"),
+            MaxTotalEmptyRequiredRuntimeReads = TotalNestedStageArrayCount(stages, "runtimeReadiness", "emptyRequiredReads"),
+            MaxTotalEmptyOptionalRuntimeReads = TotalNestedStageArrayCount(stages, "runtimeReadiness", "emptyOptionalReads"),
+            RequireAllStagesWriteOnlyDeclaredArtifacts = AllNestedStageBool(stages, "contract", "writesOnlyDeclaredArtifacts"),
+            MaxTotalUndeclaredChangedArtifacts = TotalNestedStageArrayCount(stages, "contract", "undeclaredChangedArtifacts"),
+            MaxTotalEmptyDeclaredOutputs = TotalEmptyDeclaredOutputs(stages),
             MinQualityGrade = RelaxQualityGrade(ReadEnum<PlanScanQualityGrade>(quality, "grade")),
             MinQualityConfidence = ConfidenceFloor(GetDouble(quality, "overallConfidence")),
             MaxQualityIssues = qualityIssues >= 0 ? qualityIssues : null,
@@ -98,6 +114,21 @@ public static class BenchmarkManifestDraftBuilder
             RequireMetricImportReady = GetBool(importReadiness, "readyForMetricImport") == true ? true : null,
             RequireRoutingImportReady = GetBool(importReadiness, "readyForRoutingImport") == true ? true : null,
             AllowImportReview = GetBool(importReadiness, "requiresReview"),
+            RequiredSourceFormat = Clean(GetString(document, "sourceFormat")),
+            RequiredSourceLoader = Clean(GetString(document, "loader")),
+            RequiredSourceKind = Clean(GetString(document, "sourceKind")),
+            RequiredEffectiveSourceKind = Clean(GetString(document, "effectiveSourceKind")),
+            RequiredSourceIngestionPath = Clean(GetString(document, "ingestionPath")),
+            RequiredSourceReadinessStatus = Clean(GetString(sourceReadiness, "status")),
+            RequiredSourceGeometryBasis = Clean(GetString(sourceReadiness, "geometryBasis")),
+            RequireSourceVectorGeometryReady = GetBool(sourceReadiness, "canUseVectorGeometry"),
+            RequireSourceExternalAdapter = GetBool(sourceReadiness, "requiresExternalAdapter"),
+            RequireSourceOcr = GetBool(sourceReadiness, "requiresOcr"),
+            RequireSourceLegalAdapterBacked = GetBool(sourceReadiness, "isLegalAdapterBacked"),
+            RequireDwgDerivedSource = GetBool(document, "isDwgDerived"),
+            RequireRasterDerivedSource = GetBool(document, "isRasterDerived"),
+            RequiredSourceEvidenceContains = CreateRequiredSourceEvidence(document, sourceReadiness),
+            ForbiddenSourceEvidenceContains = CreateForbiddenSourceEvidence(document),
             RequiresReliableCalibration =
                 GetBool(quality, "hasReliableCalibration") == true
                 || GetBool(measurementConsistency, "hasReliableCalibration") == true
@@ -110,6 +141,8 @@ public static class BenchmarkManifestDraftBuilder
             MaxMeasurementScaleSpreadRatio = GetDouble(measurementConsistency, "dimensionScaleSpreadRatio") is > 0
                 ? GetDouble(measurementConsistency, "dimensionScaleSpreadRatio")
                 : null,
+            ArtifactExpectations = CreateArtifactExpectations(root),
+            StageExpectations = CreateStageExpectations(root),
             RegionMetrics = CreateMetric(CreateRegionTargets(root, options), options),
             DimensionMetrics = CreateMetric(CreateDimensionTargets(root, options), options),
             AnnotationMetrics = CreateMetric(CreateAnnotationTargets(root, options), options),
@@ -127,6 +160,92 @@ public static class BenchmarkManifestDraftBuilder
             RoutingRoomUseHintMetrics = CreateMetric(CreateRoutingRoomUseHintTargets(root, options), options),
             RoutingSuppressedObjectMetrics = CreateMetric(CreateRoutingSuppressedObjectTargets(root, options), options),
             LayerMetrics = CreateMetric(CreateLayerTargets(root, options), options)
+        };
+    }
+
+    private static IReadOnlyList<BenchmarkArtifactExpectation> CreateArtifactExpectations(JsonElement root) =>
+        EnumerateArray(TryGetObject(root, "diagnostics"), "artifactInventory")
+            .Select(CreateArtifactExpectation)
+            .Where(expectation => expectation.Artifact is not PlanArtifactKind.Unknown and not PlanArtifactKind.Diagnostics and not PlanArtifactKind.Quality)
+            .Where(expectation => expectation.RequirePresent == true)
+            .OrderBy(expectation => expectation.Artifact.ToString(), StringComparer.Ordinal)
+            .ToArray();
+
+    private static BenchmarkArtifactExpectation CreateArtifactExpectation(JsonElement item)
+    {
+        var artifactName = Clean(GetString(item, "artifact"));
+        var artifact = artifactName is not null
+            && Enum.TryParse<PlanArtifactKind>(artifactName, ignoreCase: false, out var parsed)
+            && Enum.IsDefined(parsed)
+                ? parsed
+                : PlanArtifactKind.Unknown;
+        var count = GetInt(item, "count") ?? 0;
+
+        return new BenchmarkArtifactExpectation
+        {
+            Artifact = artifact,
+            MinCount = Positive(count),
+            MaxCount = ExpandedMaxCount(count),
+            RequirePresent = count > 0
+        };
+    }
+
+    private static IReadOnlyList<BenchmarkStageExpectation> CreateStageExpectations(JsonElement root) =>
+        EnumerateArray(TryGetObject(root, "diagnostics"), "stages")
+            .Select(CreateStageExpectation)
+            .Where(stage => stage.ArtifactExpectations.Count > 0)
+            .ToArray();
+
+    private static BenchmarkStageExpectation CreateStageExpectation(JsonElement stage)
+    {
+        var artifactExpectations = EnumerateArray(stage, "changedArtifacts")
+            .Select(CreateStageArtifactExpectation)
+            .Where(expectation => expectation.Artifact is not PlanArtifactKind.Unknown and not PlanArtifactKind.Diagnostics and not PlanArtifactKind.Quality)
+            .OrderBy(expectation => expectation.Artifact.ToString(), StringComparer.Ordinal)
+            .Take(8)
+            .ToArray();
+        var runtimeReadiness = TryGetObject(stage, "runtimeReadiness");
+        var contract = TryGetObject(stage, "contract");
+
+        return new BenchmarkStageExpectation
+        {
+            Stage = Clean(GetString(stage, "stage")) ?? "stage",
+            MaxDiagnostics = ExpandedMaxCount(GetInt(stage, "diagnosticCount")),
+            MaxWarnings = ExpandedMaxCount(GetInt(stage, "warningCount")),
+            MaxErrors = GetInt(stage, "errorCount") is { } errors ? errors : null,
+            RequireDependencyReady = GetBool(stage, "isDependencyReady"),
+            MaxMissingRequiredReads = CountArray(stage, "missingRequiredReads"),
+            MaxMissingOptionalReads = CountArray(stage, "missingOptionalReads"),
+            RequireRuntimeRequiredReadsHaveData = GetBool(runtimeReadiness, "requiredReadsHaveData"),
+            RequireRuntimeOptionalReadsHaveData = GetBool(runtimeReadiness, "optionalReadsHaveData"),
+            MaxEmptyRequiredRuntimeReads = CountArray(runtimeReadiness, "emptyRequiredReads"),
+            MaxEmptyOptionalRuntimeReads = CountArray(runtimeReadiness, "emptyOptionalReads"),
+            RequireWritesOnlyDeclaredArtifacts = GetBool(contract, "writesOnlyDeclaredArtifacts"),
+            MaxUndeclaredChangedArtifacts = CountArray(contract, "undeclaredChangedArtifacts"),
+            MaxEmptyDeclaredOutputs = StageEmptyDeclaredOutputCount(stage),
+            ArtifactExpectations = artifactExpectations
+        };
+    }
+
+    private static BenchmarkStageArtifactExpectation CreateStageArtifactExpectation(JsonElement change)
+    {
+        var artifactName = Clean(GetString(change, "artifact"));
+        var artifact = artifactName is not null
+            && Enum.TryParse<PlanArtifactKind>(artifactName, ignoreCase: false, out var parsed)
+            && Enum.IsDefined(parsed)
+                ? parsed
+                : PlanArtifactKind.Unknown;
+        var afterCount = GetInt(change, "afterCount");
+        var delta = GetInt(change, "delta");
+
+        return new BenchmarkStageArtifactExpectation
+        {
+            Artifact = artifact,
+            MinAfterCount = Positive(afterCount ?? 0),
+            MaxAfterCount = ExpandedMaxCount(afterCount),
+            MinDelta = ExpandedMinDelta(delta),
+            MaxDelta = ExpandedMaxDelta(delta),
+            RequireChanged = true
         };
     }
 
@@ -661,6 +780,122 @@ public static class BenchmarkManifestDraftBuilder
         EnumerateArray(quality, "issues")
             .Count(issue => GetString(issue, "code")?.StartsWith(codePrefix, StringComparison.OrdinalIgnoreCase) == true);
 
+    private static int CountPipelinePlanIssues(JsonElement? executionPlan, DiagnosticSeverity severity) =>
+        EnumerateArray(executionPlan, "issues")
+            .Count(issue => string.Equals(GetString(issue, "severity"), severity.ToString(), StringComparison.OrdinalIgnoreCase));
+
+    private static bool? AllStageBool(IReadOnlyList<JsonElement> stages, string propertyName)
+    {
+        if (stages.Count == 0)
+        {
+            return null;
+        }
+
+        var values = stages.Select(stage => GetBool(stage, propertyName)).ToArray();
+        return values.Any(value => value is not null)
+            ? values.All(value => value == true)
+            : null;
+    }
+
+    private static bool? AllNestedStageBool(
+        IReadOnlyList<JsonElement> stages,
+        string objectName,
+        string propertyName)
+    {
+        if (stages.Count == 0)
+        {
+            return null;
+        }
+
+        var values = stages
+            .Select(stage => GetBool(TryGetObject(stage, objectName), propertyName))
+            .ToArray();
+        return values.Any(value => value is not null)
+            ? values.All(value => value == true)
+            : null;
+    }
+
+    private static int? TotalNestedStageArrayCount(
+        IReadOnlyList<JsonElement> stages,
+        string objectName,
+        string propertyName) =>
+        stages.Count == 0
+            ? null
+            : stages.Sum(stage => CountArray(TryGetObject(stage, objectName), propertyName));
+
+    private static int? TotalEmptyDeclaredOutputs(IReadOnlyList<JsonElement> stages) =>
+        stages.Count == 0
+            ? null
+            : stages.Sum(StageEmptyDeclaredOutputCount);
+
+    private static int StageEmptyDeclaredOutputCount(JsonElement stage)
+    {
+        var outputReadiness = TryGetObject(stage, "outputReadiness");
+        var emptyFromReadiness = CountArray(outputReadiness, "emptyDeclaredOutputs");
+        if (outputReadiness is not null
+            && (emptyFromReadiness > 0 || GetBool(outputReadiness, "hasEmptyDeclaredOutputs") is not null))
+        {
+            return emptyFromReadiness;
+        }
+
+        return EnumerateArray(stage, "artifactDeltas")
+            .Count(delta => GetBool(delta, "isEmptyDeclaredOutput") == true);
+    }
+
+    private static IReadOnlyList<string> CreateRequiredSourceEvidence(JsonElement? document, JsonElement? sourceReadiness)
+    {
+        var evidence = new List<string>();
+        AddEvidenceToken(evidence, "format", GetString(document, "sourceFormat"));
+        AddEvidenceToken(evidence, "loader", GetString(document, "loader"));
+
+        foreach (var item in ReadStringArray(sourceReadiness, "evidence"))
+        {
+            if (IsStableSourceEvidenceToken(item))
+            {
+                AddString(evidence, item);
+            }
+        }
+
+        return evidence;
+    }
+
+    private static IReadOnlyList<string> CreateForbiddenSourceEvidence(JsonElement? document)
+    {
+        var forbidden = new List<string>();
+        if (GetBool(document, "isDwgDerived") == false)
+        {
+            forbidden.Add("dwg.converter");
+        }
+
+        if (GetBool(document, "isRasterDerived") == false)
+        {
+            forbidden.Add("raster.extractor");
+        }
+
+        return forbidden;
+    }
+
+    private static bool IsStableSourceEvidenceToken(string value) =>
+        value.StartsWith("format=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("loader=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("sourceKind=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("effectiveSourceKind=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("dwg.converter=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("dwg.conversion=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("raster.extractor=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("raster.extractorVersion=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("raster.modelName=", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("raster.modelVersion=", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddEvidenceToken(List<string> evidence, string key, string? value)
+    {
+        value = Clean(value);
+        if (value is not null)
+        {
+            AddString(evidence, $"{key}={value}");
+        }
+    }
+
     private static IReadOnlyDictionary<string, int> CountReviewQueueKinds(JsonElement root) =>
         EnumerateArray(root, "reviewQueue")
             .Select(item => GetString(item, "kind"))
@@ -686,7 +921,7 @@ public static class BenchmarkManifestDraftBuilder
         return array.Value.EnumerateArray().ToArray();
     }
 
-    private static IReadOnlyList<string> ReadStringArray(JsonElement element, params string[] propertyNames)
+    private static IReadOnlyList<string> ReadStringArray(JsonElement? element, params string[] propertyNames)
     {
         var values = new List<string>();
         foreach (var propertyName in propertyNames)
@@ -941,6 +1176,29 @@ public static class BenchmarkManifestDraftBuilder
     private static int? Positive(int count) => count > 0 ? count : null;
 
     private static int? PositiveOrZero(int count) => count >= 0 ? count : null;
+
+    private static int? ExpandedMaxCount(int? count) =>
+        count is null
+            ? null
+            : Math.Max(count.Value + 8, (int)Math.Ceiling(count.Value * 1.5));
+
+    private static int? ExpandedMinDelta(int? delta) =>
+        delta switch
+        {
+            null => null,
+            > 0 => 1,
+            < 0 => Math.Min(delta.Value - 8, (int)Math.Floor(delta.Value * 1.5)),
+            _ => 0
+        };
+
+    private static int? ExpandedMaxDelta(int? delta) =>
+        delta switch
+        {
+            null => null,
+            > 0 => Math.Max(delta.Value + 8, (int)Math.Ceiling(delta.Value * 1.5)),
+            < 0 => -1,
+            _ => 0
+        };
 
     private static double? MeasurementOutlierRatio(int? checkedCount, int? outlierCount) =>
         checkedCount is > 0 && outlierCount is >= 0

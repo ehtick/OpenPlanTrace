@@ -211,6 +211,70 @@ public sealed class SourceRoutingTests
         Assert.Contains("licensed", capability.LicenseNote, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void SourceReadiness_ReportsPdfVectorGeometryAndEvidence()
+    {
+        var readiness = PlanSourceReadiness.From(new Dictionary<string, string>
+        {
+            ["format"] = "pdf",
+            ["loader"] = "PDF/PdfPig",
+            ["sourceKind"] = "Pdf",
+            ["effectiveSourceKind"] = "Pdf",
+            ["pdf.imageOnlyPageCount"] = "0"
+        });
+
+        Assert.Equal("VectorGeometryReady", readiness.Status);
+        Assert.Equal("pdf-vector-geometry", readiness.GeometryBasis);
+        Assert.Equal("pdf-vector", readiness.IngestionPath);
+        Assert.True(readiness.CanUseVectorGeometry);
+        Assert.False(readiness.RequiresExternalAdapter);
+        Assert.False(readiness.RequiresOcr);
+        Assert.True(readiness.IsLegalAdapterBacked);
+        Assert.Contains("format=pdf", readiness.Evidence);
+        Assert.Contains("loader=PDF/PdfPig", readiness.Evidence);
+    }
+
+    [Fact]
+    public void SourceReadiness_DoesNotClaimDwgBackedWithoutConverterEvidence()
+    {
+        var readiness = PlanSourceReadiness.From(new Dictionary<string, string>
+        {
+            ["format"] = "dwg",
+            ["loader"] = "DWG/Unknown"
+        });
+
+        Assert.Equal("DwgAdapterEvidenceMissing", readiness.Status);
+        Assert.Equal("dwg-adapter", readiness.IngestionPath);
+        Assert.True(readiness.IsDwgDerived);
+        Assert.False(readiness.CanUseVectorGeometry);
+        Assert.True(readiness.RequiresExternalAdapter);
+        Assert.False(readiness.IsLegalAdapterBacked);
+        Assert.Contains(readiness.Messages, message => message.Contains("no converter evidence", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void SourceReadiness_ReportsDwgConverterBackedWhenEvidenceExists()
+    {
+        var readiness = PlanSourceReadiness.From(new Dictionary<string, string>
+        {
+            ["format"] = "dxf",
+            ["loader"] = "DWG-to-DXF/TestConverter",
+            ["sourceKind"] = "Dwg",
+            ["effectiveSourceKind"] = "Dwg",
+            ["dwg.conversion"] = "success",
+            ["dwg.converter"] = "TestConverter"
+        });
+
+        Assert.Equal("DwgAdapterBacked", readiness.Status);
+        Assert.Equal("converted-dxf-vector-geometry", readiness.GeometryBasis);
+        Assert.Equal("dwg-to-dxf", readiness.IngestionPath);
+        Assert.True(readiness.IsDwgDerived);
+        Assert.True(readiness.CanUseVectorGeometry);
+        Assert.True(readiness.RequiresExternalAdapter);
+        Assert.True(readiness.IsLegalAdapterBacked);
+        Assert.Contains("dwg.converter=TestConverter", readiness.Evidence);
+    }
+
     private sealed class RecordingLoader : PlanDocumentLoaderBase
     {
         public RecordingLoader(string formatName, params PlanSourceKind[] supportedSourceKinds)

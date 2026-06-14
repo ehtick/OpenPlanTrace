@@ -60,6 +60,7 @@ public sealed class GoldenFixtureTests
         Assert.Equal(BenchmarkScoreboard.CurrentSchemaVersion, scoreboard.GetProperty("schemaVersion").GetString());
         Assert.Equal("Strong", scoreboard.GetProperty("grade").GetString());
         Assert.True(scoreboard.GetProperty("readyForDownstreamUse").GetBoolean());
+        Assert.True(scoreboard.GetProperty("pipelineHealthScore").GetDouble() > 0.75);
         Assert.Equal(root.GetProperty("caseCount").GetInt32(), scoreboard.GetProperty("caseCount").GetInt32());
         Assert.Equal(root.GetProperty("failedAssertionCount").GetInt32(), scoreboard.GetProperty("failedAssertionCount").GetInt32());
         Assert.Equal(3, scoreboard.GetProperty("expectedTargetCount").GetInt32());
@@ -129,10 +130,81 @@ public sealed class GoldenFixtureTests
                      "routingItems",
                      "routingSuppressedObjects",
                      "measurementChecked",
-                     "measurementOutliers"
+                     "measurementOutliers",
+                     "artifact.Walls.revision",
+                     "rerunPlan.planCount",
+                     "rerunPlan.workPlanCount",
+                     "rerunPlan.totalRerunStages",
+                     "rerunPlan.totalAffectedArtifacts"
                  })
         {
             Assert.Contains(currentDelta, countDeltaNames);
+        }
+    }
+
+    [Fact]
+    public async Task ProvidedPdfBenchmarkManifest_GatesNoiseSensitivePipelineArtifacts()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var manifestPath = Path.Combine(repositoryRoot, "samples", "provided-pdfs", "benchmark.example.json");
+        await using var manifestStream = File.OpenRead(manifestPath);
+        var manifest = await JsonSerializer.DeserializeAsync<BenchmarkManifest>(
+            manifestStream,
+            CreateJsonOptions());
+
+        Assert.NotNull(manifest);
+        Assert.Equal(5, manifest!.Fixtures.Count);
+
+        foreach (var fixture in manifest.Fixtures)
+        {
+            AssertStageArtifacts(
+                fixture,
+                "walls",
+                PlanArtifactKind.Walls,
+                PlanArtifactKind.SurfacePatterns);
+            AssertStageArtifacts(
+                fixture,
+                "wall-graph",
+                PlanArtifactKind.WallGraph,
+                PlanArtifactKind.TopologySpans);
+            AssertStageArtifacts(fixture, "object-candidates", PlanArtifactKind.ObjectCandidates);
+            AssertStageArtifacts(fixture, "object-groups", PlanArtifactKind.ObjectGroups);
+            AssertStageArtifacts(fixture, "object-aggregates", PlanArtifactKind.ObjectAggregates);
+            AssertStageArtifacts(
+                fixture,
+                "routing-layer",
+                PlanArtifactKind.RoutingBarriers,
+                PlanArtifactKind.RoutingPassages,
+                PlanArtifactKind.RoutingObstacles,
+                PlanArtifactKind.RoutingRoomUseHints,
+                PlanArtifactKind.RoutingSuppressedObjects,
+                PlanArtifactKind.RoutingIgnoredObjects);
+        }
+
+        var industrialFixture = Assert.Single(
+            manifest.Fixtures,
+            fixture => string.Equals(fixture.Id, "industrial-plan-1-etasje", StringComparison.Ordinal));
+        AssertStageArtifacts(industrialFixture, "room-adjacency", PlanArtifactKind.RoomAdjacency);
+    }
+
+    private static void AssertStageArtifacts(
+        BenchmarkFixture fixture,
+        string stageName,
+        params PlanArtifactKind[] expectedArtifacts)
+    {
+        var stage = Assert.Single(
+            fixture.Expectations.StageExpectations,
+            item => string.Equals(item.Stage, stageName, StringComparison.Ordinal));
+
+        Assert.Equal(0, stage.MaxErrors);
+
+        foreach (var artifact in expectedArtifacts)
+        {
+            var artifactGate = Assert.Single(
+                stage.ArtifactExpectations,
+                item => item.Artifact == artifact);
+            Assert.True(artifactGate.MaxAfterCount is > 0, $"{fixture.Id}/{stageName}/{artifact} should cap after-count noise.");
+            Assert.True(artifactGate.MaxDelta is > 0, $"{fixture.Id}/{stageName}/{artifact} should cap delta noise.");
         }
     }
 

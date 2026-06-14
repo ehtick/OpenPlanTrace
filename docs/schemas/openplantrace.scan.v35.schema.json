@@ -34,7 +34,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "openplantrace.scan.v34"
+      "const": "openplantrace.scan.v35"
     },
     "generatedAt": {
       "type": "string",

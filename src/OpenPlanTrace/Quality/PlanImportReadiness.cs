@@ -26,6 +26,9 @@ public sealed record PlanImportReadiness(
     private const string PdfRasterOcrRequiredIssueCode = "quality.pdf_raster_ocr_required";
     private const string RasterNoExtractedPrimitivesIssueCode = "quality.raster_no_extracted_primitives";
     private const string RasterLowExtractionConfidenceIssueCode = "quality.raster_low_extraction_confidence";
+    private const string OpeningRoomSideLinksIncompleteIssueCode = "quality.scan_risk.opening_room_side_links_incomplete";
+    private const string RoutingPassageRoomSideLinksIncompleteIssueCode = "quality.scan_risk.routing_passage_room_side_links_incomplete";
+    private const string OpeningPlacementInconsistentIssueCode = "placement.opening.placement_inconsistent";
 
     public static PlanImportReadiness Empty { get; } =
         new(
@@ -79,11 +82,10 @@ public sealed record PlanImportReadiness(
 
         var roomReady = result.Rooms.Count(room => room.Confidence.Value >= 0.5 && room.Boundary.Count >= 3);
         var roomReview = result.Rooms.Count(room => room.Confidence.Value < 0.5 || room.Boundary.Count < 3);
-        var openingReady = result.Openings.Count(opening => opening.Confidence.Value >= 0.5 && opening.Placement is not null);
-        var openingReview = result.Openings.Count(opening =>
-            opening.Confidence.Value < 0.5
-            || opening.Placement is null
-            || opening.Operation == OpeningOperation.Unknown);
+        var openingReady = result.Openings.Count(opening =>
+            opening.Confidence.Value >= 0.5
+            && ScanReviewQueueSummary.OpeningPlacementIsCoordinateReady(opening));
+        var openingReview = result.Openings.Count(ScanReviewQueueSummary.NeedsOpeningReview);
         var aggregateReady = result.ObjectAggregates.Count(aggregate => aggregate.Confidence.Value >= 0.5);
         var coordinateReadyEntityCount = wallReady + roomReady + openingReady + aggregateReady;
         var reliabilityTrackedEntityCount =
@@ -278,6 +280,15 @@ public sealed record PlanImportReadiness(
                 "placement.opening.unanchored",
                 DiagnosticSeverity.Info);
         }
+
+        foreach (var opening in result.Openings.Where(opening =>
+                     opening.Placement is not null
+                     && !ScanReviewQueueSummary.OpeningPlacementIsCoordinateReady(opening)))
+        {
+            yield return new PlanImportReadinessIssue(
+                OpeningPlacementInconsistentIssueCode,
+                DiagnosticSeverity.Warning);
+        }
     }
 
     private static int CountRoutingItems(PlanRoutingLayer routingLayer) =>
@@ -371,6 +382,17 @@ public sealed record PlanImportReadiness(
             yield return "Review walls that overlap dense surface/detail patterns before using structural topology or room generation.";
         }
 
+        if (reviewIssueCodes.Contains(OpeningRoomSideLinksIncompleteIssueCode, StringComparer.Ordinal)
+            || reviewIssueCodes.Contains(RoutingPassageRoomSideLinksIncompleteIssueCode, StringComparer.Ordinal))
+        {
+            yield return "Review opening and routing-passage room-side links before using room adjacency, path routing, or exact door/window placement.";
+        }
+
+        if (reviewIssueCodes.Contains(OpeningPlacementInconsistentIssueCode, StringComparer.Ordinal))
+        {
+            yield return "Review anchored opening placement spans before using exact door/window coordinates, wall cuts, or routing passages.";
+        }
+
         if (blockingIssueCodes.Contains("placement.import.no_routing_items", StringComparer.Ordinal))
         {
             yield return "Review wall, opening, and object aggregation output before using routing-layer data.";
@@ -454,7 +476,10 @@ public sealed record PlanImportReadiness(
         && !string.Equals(code, "placement.wall_graph.surface_pattern_wall_overlaps.require_review", StringComparison.Ordinal)
         && !string.Equals(code, PdfRasterOcrRequiredIssueCode, StringComparison.Ordinal)
         && !string.Equals(code, RasterNoExtractedPrimitivesIssueCode, StringComparison.Ordinal)
-        && !string.Equals(code, RasterLowExtractionConfidenceIssueCode, StringComparison.Ordinal);
+        && !string.Equals(code, RasterLowExtractionConfidenceIssueCode, StringComparison.Ordinal)
+        && !string.Equals(code, OpeningRoomSideLinksIncompleteIssueCode, StringComparison.Ordinal)
+        && !string.Equals(code, RoutingPassageRoomSideLinksIncompleteIssueCode, StringComparison.Ordinal)
+        && !string.Equals(code, OpeningPlacementInconsistentIssueCode, StringComparison.Ordinal);
 }
 
 public sealed record PlanImportReadinessIssue(

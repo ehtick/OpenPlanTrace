@@ -882,6 +882,170 @@ public sealed class ObjectSemanticsTests
                 && item.GetProperty("candidateCenter").ValueKind == JsonValueKind.Object);
     }
 
+    [Fact]
+    public async Task ScanAsync_DoesNotReferenceMissingChildRoomUseHintsForAggregateObstacleSuppression()
+    {
+        var document = new PlanDocument(
+            "compound-equipment-object",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(760, 520),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-top", new PlanPoint(80, 80), new PlanPoint(680, 80)),
+                        Wall("wall-right", new PlanPoint(680, 80), new PlanPoint(680, 440)),
+                        Wall("wall-bottom", new PlanPoint(680, 440), new PlanPoint(80, 440)),
+                        Wall("wall-left", new PlanPoint(80, 440), new PlanPoint(80, 80)),
+                        RoomText("process-label", "PROCESS", new PlanRect(325, 130, 72, 16)),
+                        Symbol("pump-a", "PROCESS_PUMP", "I-EQUIP", new PlanRect(250, 245, 26, 26)),
+                        Symbol("pump-b", "PROCESS_PUMP", "I-EQUIP", new PlanRect(274, 245, 26, 26)),
+                        Symbol("pump-c", "PROCESS_PUMP", "I-EQUIP", new PlanRect(298, 245, 26, 26))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        var aggregate = Assert.Single(result.ObjectAggregates, aggregate => aggregate.Category == ObjectCategory.Equipment);
+        var equipmentChildren = result.ObjectCandidates
+            .Where(candidate => candidate.Category == ObjectCategory.Equipment)
+            .OrderBy(candidate => candidate.Id, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(ObjectRoutingInfluence.HardObstacle, aggregate.RoutingInfluence);
+        Assert.True(aggregate.SuppressChildObjectsForRouting);
+        Assert.All(equipmentChildren, child =>
+        {
+            var suppression = Assert.Single(result.RoutingLayer.SuppressedObjects, item => item.ObjectCandidateId == child.Id);
+            var ignored = Assert.Single(result.RoutingLayer.IgnoredObjects, item => item.ObjectCandidateId == child.Id);
+
+            Assert.Equal(RoutingSuppressedObjectAction.UseAggregateObstacle, suppression.Action);
+            Assert.NotNull(suppression.ReplacementRoutingObstacleId);
+            Assert.Null(suppression.RoomUseHintId);
+            Assert.Equal(RoutingIgnoredObjectReason.SuppressedByAggregate, ignored.Reason);
+            Assert.Equal(suppression.Id, ignored.SuppressedObjectId);
+            Assert.Null(ignored.RoomUseHintId);
+        });
+    }
+
+    [Fact]
+    public async Task ScanAsync_TreatsMovableFurnitureAggregateAsRoomUseEvidenceOnly()
+    {
+        var document = new PlanDocument(
+            "movable-furniture-room-use-aggregate",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(760, 520),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-top", new PlanPoint(80, 80), new PlanPoint(680, 80)),
+                        Wall("wall-right", new PlanPoint(680, 80), new PlanPoint(680, 440)),
+                        Wall("wall-bottom", new PlanPoint(680, 440), new PlanPoint(80, 440)),
+                        Wall("wall-left", new PlanPoint(80, 440), new PlanPoint(80, 80)),
+                        RoomText("living-label", "STUE", new PlanRect(330, 130, 54, 16)),
+                        Symbol("sofa-1", "SOFA_2P", "A-FURN-MOVEABLE", new PlanRect(250, 245, 52, 28)),
+                        Symbol("table-1", "COFFEE_TABLE", "A-FURN-MOVEABLE", new PlanRect(310, 248, 30, 24)),
+                        Symbol("chair-1", "LOUNGE_CHAIR", "A-FURN-MOVEABLE", new PlanRect(348, 246, 28, 28))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        var furnitureChildren = result.ObjectCandidates
+            .Where(candidate => candidate.Category == ObjectCategory.Furniture)
+            .OrderBy(candidate => candidate.Id, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(3, furnitureChildren.Length);
+
+        var aggregate = Assert.Single(result.ObjectAggregates, item => item.Category == ObjectCategory.Furniture);
+        Assert.Equal(ObjectCandidateKind.Furniture, aggregate.Kind);
+        Assert.Equal(ObjectRoutingInfluence.RoomUseEvidenceOnly, aggregate.RoutingInfluence);
+        Assert.Equal(ObjectStructuralInfluence.None, aggregate.StructuralInfluence);
+        Assert.Equal(RoomUseKind.Living, aggregate.RoomUseEvidence);
+        Assert.True(aggregate.SuppressChildObjectsForRouting);
+        Assert.False(aggregate.RequiresReview);
+        Assert.Contains(aggregate.Evidence, item => item.Contains("semantic room-use evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(aggregate.Evidence, item => item.Contains("room-use evidence Living", StringComparison.OrdinalIgnoreCase));
+        Assert.All(furnitureChildren, child => Assert.Contains(child.Id, aggregate.ChildObjectIds));
+
+        Assert.DoesNotContain(result.RoutingLayer.Obstacles, obstacle => obstacle.SourceId == aggregate.Id);
+        Assert.DoesNotContain(result.RoutingLayer.Obstacles, obstacle => furnitureChildren.Any(child => child.Id == obstacle.SourceId));
+        Assert.All(furnitureChildren, child =>
+        {
+            Assert.Contains(child.Id, result.RoutingLayer.SuppressedObjectCandidateIds);
+            Assert.Contains(child.Id, result.RoutingLayer.IgnoredObjectCandidateIds);
+
+            var suppression = Assert.Single(result.RoutingLayer.SuppressedObjects, item => item.ObjectCandidateId == child.Id);
+            Assert.Equal(aggregate.Id, suppression.SuppressedByAggregateId);
+            Assert.Equal(RoutingSuppressionReason.AggregateRoomUseEvidenceOnly, suppression.Reason);
+            Assert.Equal(RoutingSuppressedObjectAction.UseAggregateRoomUseHint, suppression.Action);
+            Assert.Null(suppression.ReplacementRoutingObstacleId);
+            Assert.Equal($"routing-room-use:{aggregate.Id}", suppression.RoomUseHintId);
+
+            var ignored = Assert.Single(result.RoutingLayer.IgnoredObjects, item => item.ObjectCandidateId == child.Id);
+            Assert.Equal(RoutingIgnoredObjectReason.SuppressedByAggregate, ignored.Reason);
+            Assert.Equal($"routing-room-use:{aggregate.Id}", ignored.RoomUseHintId);
+        });
+
+        var furnitureHint = Assert.Single(
+            result.RoutingLayer.RoomUseHints,
+            hint => hint.SourceKind == RoutingSourceKind.ObjectAggregate && hint.SourceId == aggregate.Id);
+        Assert.Equal(RoomUseKind.Living, furnitureHint.RoomUseKind);
+        Assert.Equal(aggregate.Bounds, furnitureHint.Bounds);
+    }
+
+    [Fact]
+    public async Task ScanAsync_KeepsFixedCabinetFurnitureAggregateAsSoftObstacle()
+    {
+        var document = new PlanDocument(
+            "fixed-cabinet-furniture-aggregate",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(760, 520),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-top", new PlanPoint(80, 80), new PlanPoint(680, 80)),
+                        Wall("wall-right", new PlanPoint(680, 80), new PlanPoint(680, 440)),
+                        Wall("wall-bottom", new PlanPoint(680, 440), new PlanPoint(80, 440)),
+                        Wall("wall-left", new PlanPoint(80, 440), new PlanPoint(80, 80)),
+                        RoomText("kitchen-label", "KITCHEN", new PlanRect(325, 130, 80, 16)),
+                        Symbol("cabinet-1", "BASE_CABINET", "A-FURN-CABINET", new PlanRect(250, 245, 32, 28)),
+                        Symbol("cabinet-2", "BASE_CABINET", "A-FURN-CABINET", new PlanRect(284, 245, 32, 28)),
+                        Symbol("cabinet-3", "BASE_CABINET", "A-FURN-CABINET", new PlanRect(318, 245, 32, 28))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        var cabinetChildren = result.ObjectCandidates
+            .Where(candidate => candidate.Category == ObjectCategory.Furniture)
+            .OrderBy(candidate => candidate.Id, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(3, cabinetChildren.Length);
+
+        var aggregate = Assert.Single(result.ObjectAggregates, item => item.Category == ObjectCategory.Furniture);
+        Assert.Equal(ObjectRoutingInfluence.SoftObstacle, aggregate.RoutingInfluence);
+        Assert.Equal(ObjectStructuralInfluence.NonStructural, aggregate.StructuralInfluence);
+        Assert.True(aggregate.SuppressChildObjectsForRouting);
+
+        var obstacle = Assert.Single(result.RoutingLayer.Obstacles, obstacle => obstacle.SourceId == aggregate.Id);
+        Assert.Equal(RoutingObstacleKind.SoftObstacle, obstacle.ObstacleKind);
+        Assert.Equal(ObjectRoutingInfluence.SoftObstacle, obstacle.RoutingInfluence);
+
+        Assert.All(cabinetChildren, child =>
+        {
+            var suppression = Assert.Single(result.RoutingLayer.SuppressedObjects, item => item.ObjectCandidateId == child.Id);
+            Assert.Equal(RoutingSuppressedObjectAction.UseAggregateObstacle, suppression.Action);
+            Assert.Equal($"routing-obstacle:{aggregate.Id}", suppression.ReplacementRoutingObstacleId);
+            Assert.Null(suppression.RoomUseHintId);
+            Assert.DoesNotContain(result.RoutingLayer.Obstacles, obstacle => obstacle.SourceId == child.Id);
+        });
+    }
+
     private static LinePrimitive Wall(string sourceId, PlanPoint start, PlanPoint end) =>
         new(new PlanLineSegment(start, end))
         {

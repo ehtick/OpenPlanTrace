@@ -59,12 +59,12 @@ const defaultEnabledLayers = [
   "dimensions",
   "gridAxes",
   "annotations",
-  "walls",
   "rooms",
   "openings",
   "objectAggregates",
   "surfacePatterns",
-  "placementIssues"
+  "placementIssues",
+  "routingLayer"
 ];
 
 const overlayLegendItems = [
@@ -87,7 +87,7 @@ const overlayLegendItems = [
   { key: "wallGraphGaps", label: "Wall graph gaps", stroke: "#a65f00", fill: "rgba(166, 95, 0, 0.055)", dash: "3 3" },
   { key: "wallGraphRepairs", label: "Wall repairs", stroke: "#d04b24", fill: "rgba(208, 75, 36, 0.06)", dash: "2 2" },
   { key: "reviewQueue", label: "Scan review queue", stroke: "#c43d3d", fill: "rgba(196, 61, 61, 0.08)", dash: "7 4" },
-  { key: "routingLayer", label: "Routing layer", stroke: "#0f6b78", fill: "rgba(15, 107, 120, 0.07)", dash: "3 3" },
+  { key: "routingLayer", label: "Trusted routing layer", stroke: "#0f6b78", fill: "rgba(15, 107, 120, 0.07)", dash: "3 3" },
   { key: "objects", label: "Objects", stroke: "#7854a8", fill: "rgba(120, 84, 168, 0.10)" },
   { key: "benchmarkTargets", label: "Benchmark targets", stroke: "#1f559b", fill: "rgba(31, 85, 155, 0.10)", dash: "5 4" },
   { key: "compare", label: "Compare deltas", stroke: "#c43d3d", fill: "rgba(196, 61, 61, 0.08)" }
@@ -130,12 +130,13 @@ function initialEnabledLayerSet() {
 
 function initialWorkspaceTab() {
   const tab = new URLSearchParams(window.location.search).get("tab");
-  return ["visualizer", "ai", "general", "advanced"].includes(tab) ? tab : "visualizer";
+  return ["visualizer", "ai", "general", "pipeline", "advanced"].includes(tab) ? tab : "visualizer";
 }
 
 const state = {
   pdf: null,
   scan: null,
+  visualSnapshot: null,
   placement: null,
   currentPage: 1,
   rendering: false,
@@ -241,10 +242,12 @@ const elements = {
     visualizer: document.querySelector("#tabVisualizer"),
     ai: document.querySelector("#tabAi"),
     general: document.querySelector("#tabGeneral"),
+    pipeline: document.querySelector("#tabPipeline"),
     advanced: document.querySelector("#tabAdvanced")
   },
   aiTabDetails: document.querySelector("#aiTabDetails"),
   generalTabDetails: document.querySelector("#generalTabDetails"),
+  pipelineTabDetails: document.querySelector("#pipelineTabDetails"),
   advancedTabDetails: document.querySelector("#advancedTabDetails")
 };
 
@@ -315,24 +318,27 @@ elements.nextPage.addEventListener("click", () => {
 });
 
 elements.downloadJson.addEventListener("click", () => {
-  if (!state.scan) {
+  if (!state.scan && !state.visualSnapshot) {
     return;
   }
 
-  const payload = state.placement ?? state.scan;
-  const suffix = state.placement ? "placement" : "scan";
+  const payload = state.placement ?? state.scan ?? state.visualSnapshot;
+  const suffix = state.placement ? "placement" : state.visualSnapshot ? "visual-snapshot" : "scan";
   downloadBlob(
     new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
     `${safeDocumentName()}-${suffix}.json`);
 });
 
 elements.downloadLayers.addEventListener("click", () => {
-  if (!state.scan) {
+  if (!state.scan && !state.visualSnapshot) {
     return;
   }
 
+  const layers = state.visualSnapshot
+    ? visualSnapshotCurrentPage()?.layers ?? []
+    : state.scan.layers ?? [];
   downloadBlob(
-    new Blob([JSON.stringify(state.scan.layers ?? [], null, 2)], { type: "application/json" }),
+    new Blob([JSON.stringify(layers, null, 2)], { type: "application/json" }),
     `${safeDocumentName()}-layers.json`);
 });
 
@@ -640,6 +646,13 @@ async function loadScanJsonFile(file) {
 
     if (isBatchComparison(payload)) {
       loadBatchComparisonPayload(payload, file.name);
+      return;
+    }
+
+    if (isVisualSnapshotPayload(payload)) {
+      const documentRevision = beginDocumentLoad();
+      resetViewerState("visual-snapshot");
+      await loadVisualSnapshotPayload(payload, file.name, documentRevision);
       return;
     }
 
@@ -1411,6 +1424,7 @@ async function loadScanFromQueryString() {
   const kvemoUrl = params.get("kvemo") ?? params.get("kvemoManifest") ?? params.get("crops");
   const pdfUrl = params.get("pdf") ?? params.get("sourcePdf") ?? params.get("source");
   const placementUrl = params.get("placement") ?? params.get("placementJson") ?? params.get("placementPacket");
+  const snapshotUrl = params.get("snapshot") ?? params.get("visualSnapshot") ?? params.get("visual");
   const scanUrl = params.get("scan");
   const benchmarkUrl = params.get("benchmark") ?? params.get("manifest") ?? params.get("draft");
   const benchmarkResultUrl = params.get("benchmarkResult") ?? params.get("result") ?? params.get("run");
@@ -1436,6 +1450,11 @@ async function loadScanFromQueryString() {
 
   if (placementUrl && !pdfUrl) {
     await loadPlacementFromUrl(placementUrl);
+    return;
+  }
+
+  if (snapshotUrl && !pdfUrl) {
+    await loadVisualSnapshotFromUrl(snapshotUrl);
     return;
   }
 
@@ -1487,6 +1506,30 @@ async function loadScanFromQueryString() {
       await tryLoadBenchmarkResultFromUrl(benchmarkResultUrl);
     }
   } catch (error) {
+    setStatus("Failed");
+    elements.emptyState.style.display = "grid";
+    elements.pageFrame.style.display = "none";
+    setDiagnostics([{ severity: "Error", stage: "viewer", message: error.message || String(error) }]);
+  }
+}
+
+async function loadVisualSnapshotFromUrl(snapshotUrl) {
+  const documentRevision = beginDocumentLoad();
+  resetViewerState("visual-snapshot");
+  const label = cleanUrlLabel(snapshotUrl);
+  elements.fileMeta.textContent = `Loading ${label}`;
+  setStatus("Loading visual snapshot");
+
+  try {
+    await loadVisualSnapshotPayload(
+      await fetchJson(resolveJsonArtifactUrl(snapshotUrl)),
+      label,
+      documentRevision);
+  } catch (error) {
+    if (!isCurrentDocumentLoad(documentRevision)) {
+      return;
+    }
+
     setStatus("Failed");
     elements.emptyState.style.display = "grid";
     elements.pageFrame.style.display = "none";
@@ -1676,6 +1719,46 @@ async function loadScanPayload(
   if (!benchmarkOverlayChangedSince(overlayRevision) && !viewerOperationChangedSince(operationRevision)) {
     setStatus("Ready");
   }
+}
+
+async function loadVisualSnapshotPayload(payload, label, documentRevision = state.documentLoadRevision) {
+  if (!isCurrentDocumentLoad(documentRevision)) {
+    return;
+  }
+
+  state.pdf = null;
+  state.scan = null;
+  state.placement = null;
+  state.visualSnapshot = normalizeVisualSnapshotPayload(payload, label);
+  state.currentPage = state.visualSnapshot.pages[0]?.number ?? 1;
+  state.sourceMode = "visual-snapshot";
+  state.enabledSourceLayers = new Set();
+  state.compare = null;
+  state.benchmarkComparison = null;
+  state.batchComparison = null;
+  state.selectedItem = null;
+
+  const displayLabel = label.startsWith("data:") ? "visual snapshot URL" : label;
+
+  setCounts();
+  setSourceLayers();
+  setCalibration();
+  setQuality(visualSnapshotQualityReport(state.visualSnapshot));
+  setTitleBlocks();
+  setObjectGroups();
+  setCompare();
+  setBenchmarkDetails();
+  setDiagnostics(visualSnapshotDiagnostics(state.visualSnapshot));
+  setSelection();
+  elements.fileMeta.textContent = `${displayLabel} - ${state.visualSnapshot.pages.length} snapshot page${state.visualSnapshot.pages.length === 1 ? "" : "s"}`;
+  elements.emptyState.style.display = "none";
+  elements.pageFrame.style.display = "block";
+  await renderCurrentPage();
+  if (!isCurrentDocumentLoad(documentRevision)) {
+    return;
+  }
+
+  setStatus("Ready");
 }
 
 async function loadPlacementFromUrl(placementUrl) {
@@ -2372,10 +2455,6 @@ async function renderCurrentPage(options = {}) {
 
 function renderScanJsonCurrentPage(options = {}) {
   const preserveStatus = Boolean(options.preserveStatus);
-  if (!state.scan) {
-    return;
-  }
-
   const page = currentPageDefinition();
   if (!page) {
     return;
@@ -2436,10 +2515,50 @@ function drawBlankPageGrid(width, height, scale) {
   context.restore();
 }
 
+function drawVisualSnapshotOverlay() {
+  const page = visualSnapshotCurrentPage();
+  if (!page) {
+    return;
+  }
+
+  elements.overlay.setAttribute("viewBox", `0 0 ${page.width} ${page.height}`);
+  setCoordinateDetails();
+  setLegend();
+  setAnalysisCounts();
+
+  (page.layers ?? [])
+    .filter((layer) => layer.count > 0 && normalizeRect(layer.bounds))
+    .forEach((layer) => {
+      const key = visualSnapshotOverlayKey(layer.name);
+      if (key && !state.enabledLayers.has(key)) {
+        return;
+      }
+
+      const item = {
+        type: "Snapshot layer",
+        id: layer.name,
+        kind: snapshotLayerLabel(layer.name),
+        pageNumber: page.pageNumber,
+        bounds: layer.bounds,
+        confidence: layer.averageConfidence,
+        metadata: visualSnapshotLayerMeta(layer)
+      };
+      addRect(
+        layer.bounds,
+        `visual-snapshot-layer ${key || "snapshot"}`,
+        `${snapshotLayerLabel(layer.name)} - ${layer.count} item${layer.count === 1 ? "" : "s"}, density ${formatNumber(layer.normalizedDensity ?? 0, 1)}`,
+        Math.max(0.18, Math.min(0.72, 0.22 + Math.min(0.5, (layer.normalizedDensity ?? 0) / 4000))),
+        item);
+    });
+}
+
 function drawOverlay() {
   clearOverlay();
 
   if (!state.scan) {
+    if (state.visualSnapshot) {
+      drawVisualSnapshotOverlay();
+    }
     return;
   }
 
@@ -2698,13 +2817,6 @@ function drawOverlay() {
       if (!visibleBySourceLayer(wall)) {
         return;
       }
-      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      line.setAttribute("x1", wall.centerLine.start.x);
-      line.setAttribute("y1", wall.centerLine.start.y);
-      line.setAttribute("x2", wall.centerLine.end.x);
-      line.setAttribute("y2", wall.centerLine.end.y);
-      line.setAttribute("class", wallClassName(wall));
-      line.setAttribute("opacity", confidence(wall.confidence));
       const component = wall.wallComponentKind
         ? `${wall.wallComponentKind}${wall.excludedFromStructuralTopology ? ", topology excluded" : ""}`
         : "no component";
@@ -2715,9 +2827,18 @@ function drawOverlay() {
         `confidence ${wall.confidence.toFixed(2)}`,
         reliability
       ].filter(Boolean).join(" - ");
-      addTitle(line, title);
-      attachInspection(line, inspection);
-      elements.overlay.appendChild(line);
+      wallTopologyDrawSpans(wall).forEach((span) => {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", span.centerLine.start.x);
+        line.setAttribute("y1", span.centerLine.start.y);
+        line.setAttribute("x2", span.centerLine.end.x);
+        line.setAttribute("y2", span.centerLine.end.y);
+        line.setAttribute("class", wallClassName(wall));
+        line.setAttribute("opacity", wallDrawOpacity({ ...wall, confidence: span.confidence ?? wall.confidence }));
+        addTitle(line, span.isFallback ? title : `${title} - topology span ${span.id}`);
+        attachInspection(line, inspection);
+        elements.overlay.appendChild(line);
+      });
       addWallHitTarget(wall, title, inspection);
     });
   }
@@ -2727,7 +2848,7 @@ function drawOverlay() {
       const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
       circle.setAttribute("cx", node.position.x);
       circle.setAttribute("cy", node.position.y);
-      circle.setAttribute("r", 2);
+      circle.setAttribute("r", 0.95);
       circle.setAttribute("class", "node");
       circle.setAttribute("opacity", nodeOpacity(node.confidence));
       addTitle(circle, `${node.kind} - ${node.id}`);
@@ -2745,6 +2866,8 @@ function drawOverlay() {
       const gapDistance = candidate.gapDistanceDrawingUnits ?? candidate.gapDistance;
       const title = [
         candidate.suggestedAction || candidate.kind || "Wall graph repair",
+        candidate.importImpact || "",
+        candidate.severity ? `${String(candidate.severity).toLowerCase()} severity` : "",
         Number.isFinite(Number(gapDistance)) ? `${formatNumber(gapDistance)} drawing units` : "",
         candidate.id
       ].filter(Boolean).join(" - ");
@@ -2988,23 +3111,26 @@ function addLine(line, className, title, opacity, item = null) {
 }
 
 function addWallHitTarget(wall, title, item) {
-  if (!wall?.centerLine?.start || !wall?.centerLine?.end) {
+  const spans = wallTopologyDrawSpans(wall);
+  if (!spans.length) {
     return;
   }
 
-  const element = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  element.setAttribute("x1", wall.centerLine.start.x);
-  element.setAttribute("y1", wall.centerLine.start.y);
-  element.setAttribute("x2", wall.centerLine.end.x);
-  element.setAttribute("y2", wall.centerLine.end.y);
-  element.setAttribute("class", [
-    "wall-hit-target",
-    wallRequiresReliabilityReview(wall) ? "wall-review-hit-target" : "",
-    wallCoordinateBlocked(wall) ? "wall-blocked-hit-target" : ""
-  ].filter(Boolean).join(" "));
-  addTitle(element, title);
-  attachInspection(element, item);
-  elements.overlay.appendChild(element);
+  spans.forEach((span) => {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    element.setAttribute("x1", span.centerLine.start.x);
+    element.setAttribute("y1", span.centerLine.start.y);
+    element.setAttribute("x2", span.centerLine.end.x);
+    element.setAttribute("y2", span.centerLine.end.y);
+    element.setAttribute("class", [
+      "wall-hit-target",
+      wallRequiresReliabilityReview(wall) ? "wall-review-hit-target" : "",
+      wallCoordinateBlocked(wall) ? "wall-blocked-hit-target" : ""
+    ].filter(Boolean).join(" "));
+    addTitle(element, span.isFallback ? title : `${title} - topology span ${span.id}`);
+    attachInspection(element, item);
+    elements.overlay.appendChild(element);
+  });
 }
 
 function addCircle(point, radius, className, title, opacity, item = null) {
@@ -3631,8 +3757,20 @@ function describeWallGraphRepairCandidate(candidate) {
       candidate.sourceNodeId ? `Source node: ${candidate.sourceNodeId}` : "",
       candidate.targetNodeId ? `Target node: ${candidate.targetNodeId}` : "",
       candidate.hostWallId ? `Host wall: ${candidate.hostWallId}` : "",
+      candidate.severity ? `Severity: ${candidate.severity}` : "",
+      candidate.importImpact ? `Import impact: ${candidate.importImpact}` : "",
+      candidate.applicability ? `Applicability: ${candidate.applicability}` : "",
       Number.isFinite(Number(gapDistance)) ? `Gap: ${formatNumber(gapDistance)} drawing units` : "",
       candidate.gapDistanceMillimeters != null ? `Gap: ${formatNumber(candidate.gapDistanceMillimeters)} mm` : "",
+      candidate.safeSnapDistanceDrawingUnits != null || candidate.safeSnapDistance != null
+        ? `Safe snap: ${formatNumber(candidate.safeSnapDistanceDrawingUnits ?? candidate.safeSnapDistance)} drawing units`
+        : "",
+      candidate.excessDistanceBeyondSafeSnapDrawingUnits != null || candidate.excessDistanceBeyondSafeSnap != null
+        ? `Excess beyond safe snap: ${formatNumber(candidate.excessDistanceBeyondSafeSnapDrawingUnits ?? candidate.excessDistanceBeyondSafeSnap)} drawing units`
+        : "",
+      candidate.reviewDistanceLimitDrawingUnits != null || candidate.reviewDistanceLimit != null
+        ? `Review limit: ${formatNumber(candidate.reviewDistanceLimitDrawingUnits ?? candidate.reviewDistanceLimit)} drawing units`
+        : "",
       candidate.wallIds?.length ? `Walls: ${candidate.wallIds.join(", ")}` : "",
       candidate.requiresReview ? "Requires review before applying" : ""
     ].filter(Boolean).join("\n")
@@ -3926,6 +4064,10 @@ function wallClassName(wall) {
       break;
   }
 
+  if (wall.excludedFromStructuralTopology) {
+    classes.push("wall-excluded");
+  }
+
   if (wallCoordinateBlocked(wall)) {
     classes.push("wall-blocked");
   } else if (wallRequiresReliabilityReview(wall)) {
@@ -3933,6 +4075,19 @@ function wallClassName(wall) {
   }
 
   return classes.join(" ");
+}
+
+function wallDrawOpacity(wall) {
+  const baseOpacity = confidence(wall?.confidence);
+  if (wall?.excludedFromStructuralTopology) {
+    return Math.max(0.12, baseOpacity * 0.32);
+  }
+
+  if (wall?.wallComponentKind === "IsolatedFragment") {
+    return Math.max(0.2, baseOpacity * 0.55);
+  }
+
+  return baseOpacity;
 }
 
 function wallRequiresReliabilityReview(wall) {
@@ -3959,6 +4114,23 @@ function wallReliabilitySummary(wall) {
 
 function wallReliabilityReasons(wall) {
   return normalizeStringArray(wall?.reliability?.reasons);
+}
+
+function wallTopologyDrawSpans(wall) {
+  const spans = (Array.isArray(wall?.topologySpans) ? wall.topologySpans : [])
+    .filter((span) => span?.centerLine?.start && span?.centerLine?.end);
+  if (spans.length) {
+    return spans;
+  }
+
+  return wall?.centerLine?.start && wall?.centerLine?.end
+    ? [{
+      id: wall.id,
+      centerLine: wall.centerLine,
+      confidence: wall.confidence,
+      isFallback: true
+    }]
+    : [];
 }
 
 function wallReliabilityReviewWalls(scan = state.scan) {
@@ -4015,6 +4187,77 @@ function wallReliabilityAuditListItems(scan = state.scan, limit = 14) {
       ].filter(Boolean).join(" / "),
       onClick: () => selectWallReliabilityItem(wall)
     }));
+}
+
+function wallGraphRepairAuditListItems(scan = state.scan, limit = 14) {
+  return (scan?.wallGraphRepairCandidates ?? [])
+    .filter((candidate) => !candidate.pageNumber || candidate.pageNumber === state.currentPage)
+    .slice()
+    .sort((first, second) =>
+      wallGraphRepairSeverityRank(second.severity) - wallGraphRepairSeverityRank(first.severity)
+      || wallGraphRepairNumericValue(second, "excessDistanceBeyondSafeSnap") - wallGraphRepairNumericValue(first, "excessDistanceBeyondSafeSnap")
+      || wallGraphRepairNumericValue(second, "gapDistance") - wallGraphRepairNumericValue(first, "gapDistance")
+      || String(first.id || "").localeCompare(String(second.id || "")))
+    .slice(0, limit)
+    .map((candidate) => ({
+      title: `${candidate.id || "repair"} - ${candidate.kind || "Wall graph repair"}`,
+      meta: [
+        candidate.suggestedAction || "",
+        candidate.severity ? `${candidate.severity} severity` : "",
+        candidate.importImpact || "",
+        candidate.applicability || "",
+        wallGraphRepairDistanceSummary(candidate)
+      ].filter(Boolean).join(" / "),
+      onClick: () => selectWallGraphRepairCandidate(candidate)
+    }));
+}
+
+function wallGraphRepairSeverityRank(severity) {
+  switch (String(severity || "").toLowerCase()) {
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function wallGraphRepairNumericValue(candidate, field) {
+  const drawingUnitField = `${field}DrawingUnits`;
+  const value = candidate?.[drawingUnitField] ?? candidate?.[field];
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function wallGraphRepairDistanceSummary(candidate) {
+  const gap = wallGraphRepairNumericValue(candidate, "gapDistance");
+  const safe = wallGraphRepairNumericValue(candidate, "safeSnapDistance");
+  const excess = wallGraphRepairNumericValue(candidate, "excessDistanceBeyondSafeSnap");
+  const reviewLimit = wallGraphRepairNumericValue(candidate, "reviewDistanceLimit");
+  return [
+    gap > 0 ? `gap ${formatNumber(gap)} du` : "",
+    safe > 0 ? `safe ${formatNumber(safe)} du` : "",
+    excess > 0 ? `excess ${formatNumber(excess)} du` : "within safe snap",
+    reviewLimit > 0 ? `review limit ${formatNumber(reviewLimit)} du` : ""
+  ].filter(Boolean).join(", ");
+}
+
+function selectWallGraphRepairCandidate(candidate) {
+  const selected = describeWallGraphRepairCandidate(candidate);
+  state.selectedItem = selected;
+  const pageNumber = normalizedPageNumber(candidate.pageNumber ?? selected.pageNumber);
+  if (pageNumber && pageNumber !== state.currentPage) {
+    state.currentPage = pageNumber;
+    void renderCurrentPage();
+  } else {
+    drawOverlay();
+  }
+
+  setSelection(selected);
+  setStatus(`Selected wall graph repair ${candidate.id || ""}`.trim());
 }
 
 function selectWallReliabilityItem(wall) {
@@ -4508,13 +4751,42 @@ function confidence(value) {
 }
 
 function nodeOpacity(value) {
-  return Math.max(0.25, Math.min(0.7, 0.25 + ((value ?? 0.5) * 0.45)));
+  return Math.max(0.18, Math.min(0.52, 0.18 + ((value ?? 0.5) * 0.34)));
 }
 
 function setSourceLayers(scan = null) {
   elements.sourceLayerList.replaceChildren();
   if (state.kvemo) {
     renderKvemoSourceEvidence(state.kvemo).forEach((item) => elements.sourceLayerList.appendChild(item));
+    refreshWorkspaceTabs();
+    return;
+  }
+
+  if (state.visualSnapshot && !scan) {
+    const page = visualSnapshotCurrentPage(state.visualSnapshot);
+    const layers = visualSnapshotDensestLayers(page, 24);
+    if (!layers.length) {
+      elements.sourceLayerList.textContent = "No snapshot layers";
+      refreshWorkspaceTabs();
+      return;
+    }
+
+    layers.forEach((layer) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = "source-layer";
+
+      const spacer = document.createElement("span");
+      spacer.className = "source-layer-spacer";
+
+      const text = document.createElement("span");
+      text.innerHTML = `<strong>${escapeHtml(snapshotLayerLabel(layer.name))}</strong><span>${escapeHtml(visualSnapshotLayerMeta(layer))}</span>`;
+
+      const category = document.createElement("em");
+      category.textContent = visualSnapshotOverlayKey(layer.name) || "Snapshot";
+
+      wrapper.append(spacer, text, category);
+      elements.sourceLayerList.appendChild(wrapper);
+    });
     refreshWorkspaceTabs();
     return;
   }
@@ -5453,6 +5725,8 @@ function qualityGradeClass(grade) {
 function setCounts(scan = null) {
   const counts = state.kvemo
     ? kvemoCountRows(state.kvemo)
+    : state.visualSnapshot && !scan
+    ? visualSnapshotCountRows(state.visualSnapshot)
     : state.benchmarkComparison
     ? benchmarkComparisonCountRows(state.benchmarkComparison)
     : state.batchComparison
@@ -5542,9 +5816,11 @@ function setAnalysisCounts(scan = null) {
   const legendItems = overlayLegendItemsForCurrentPayload(scan);
   const visibleLayerCount = legendItems.filter((item) => state.enabledLayers.has(item.key)).length;
   const layerSummary = `${visibleLayerCount} / ${legendItems.length}`;
-  const page = scan ? currentPageDefinition() : null;
+  const page = scan || state.visualSnapshot ? currentPageDefinition() : null;
   const rows = state.kvemo
     ? kvemoAnalysisRows(state.kvemo)
+    : state.visualSnapshot && !scan
+    ? visualSnapshotAnalysisRows(state.visualSnapshot, page, layerSummary)
     : state.benchmarkComparison
     ? benchmarkComparisonAnalysisRows(state.benchmarkComparison, visibleLayerCount)
     : state.batchComparison
@@ -5605,7 +5881,9 @@ function setLegend() {
   }
 
   if (!state.scan) {
-    if (state.benchmarkComparison) {
+    if (state.visualSnapshot) {
+      appendVisualSnapshotLegend(elements.legendList, state.visualSnapshot);
+    } else if (state.benchmarkComparison) {
       appendBenchmarkComparisonLegend(elements.legendList);
     } else if (state.batchComparison) {
       appendBatchComparisonLegend(elements.legendList);
@@ -5655,6 +5933,7 @@ function setLegend() {
   }
 
   if (state.enabledLayers.has("walls")) {
+    appendWallTopologyLegend(elements.legendList, state.scan);
     appendWallReliabilityLegend(elements.legendList, state.scan);
   }
 
@@ -5662,6 +5941,44 @@ function setLegend() {
   if (state.enabledLayers.has("reviewQueue") && reviewQueue.length) {
     appendScanReviewQueueLegend(elements.legendList, reviewQueue);
   }
+}
+
+function appendVisualSnapshotLegend(container, snapshot = state.visualSnapshot) {
+  const page = visualSnapshotCurrentPage(snapshot);
+  const layers = visualSnapshotDensestLayers(page, 16);
+  if (!layers.length) {
+    container.textContent = "No snapshot layers";
+    return;
+  }
+
+  layers.forEach((layer) => {
+    const key = visualSnapshotOverlayKey(layer.name);
+    const legendItem = overlayLegendItems.find((item) => item.key === key);
+    const enabled = !key || state.enabledLayers.has(key);
+    const row = document.createElement("div");
+    row.className = `legend-row${enabled ? "" : " muted"}`;
+
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.borderColor = legendItem?.stroke ?? "#5f6b7a";
+    swatch.style.background = legendItem?.fill ?? "rgba(95, 107, 122, 0.08)";
+    if (legendItem?.dash) {
+      swatch.style.backgroundImage = `repeating-linear-gradient(90deg, ${legendItem.stroke} 0 5px, transparent 5px 9px)`;
+    }
+
+    const text = document.createElement("span");
+    text.className = "legend-label";
+    text.textContent = snapshotLayerLabel(layer.name);
+
+    const meta = document.createElement("span");
+    meta.className = "legend-meta";
+    meta.textContent = enabled
+      ? `${layer.count} / d ${formatNumber(layer.normalizedDensity, 1)}`
+      : "off";
+
+    row.append(swatch, text, meta);
+    container.appendChild(row);
+  });
 }
 
 function appendWallReliabilityLegend(container, scan = state.scan) {
@@ -5693,6 +6010,43 @@ function appendWallReliabilityLegend(container, scan = state.scan) {
     meta.textContent = currentPageCount === items.length
       ? items.length
       : `${currentPageCount}/${items.length}`;
+
+    row.append(swatch, text, meta);
+    container.appendChild(row);
+  });
+}
+
+function appendWallTopologyLegend(container, scan = state.scan) {
+  const walls = (scan?.walls ?? []).filter(onCurrentPage);
+  if (!walls.length) {
+    return;
+  }
+
+  const structuralWalls = walls.filter((wall) => !wall.excludedFromStructuralTopology);
+  const excludedWalls = walls.filter((wall) => wall.excludedFromStructuralTopology);
+  const rows = [
+    ["wall-main", "Structural wall candidates", structuralWalls.length],
+    ["wall-excluded", "Excluded wall/detail fragments", excludedWalls.length]
+  ];
+
+  rows.forEach(([className, label, count]) => {
+    if (!count) {
+      return;
+    }
+
+    const row = document.createElement("div");
+    row.className = `legend-row ${className}`;
+
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+
+    const text = document.createElement("span");
+    text.className = "legend-label";
+    text.textContent = label;
+
+    const meta = document.createElement("span");
+    meta.className = "legend-meta";
+    meta.textContent = count;
 
     row.append(swatch, text, meta);
     container.appendChild(row);
@@ -6271,6 +6625,8 @@ function setCoordinateDetails(scan = state.scan) {
         ["Items", activeBenchmarkTargets().length],
         ["Schema", state.benchmarkResult.schemaVersion]
       ]));
+    } else if (state.visualSnapshot) {
+      elements.coordinateDetails.appendChild(renderDefinitionList(visualSnapshotCoordinateRows(state.visualSnapshot)));
     } else {
       elements.coordinateDetails.textContent = "No page loaded";
     }
@@ -6407,6 +6763,7 @@ function setWorkspaceTab(tabKey = "visualizer") {
 function refreshWorkspaceTabs() {
   renderAiTabDetails();
   renderGeneralTabDetails();
+  renderPipelineTabDetails();
   renderAdvancedTabDetails();
 }
 
@@ -6435,6 +6792,28 @@ function renderAiTabDetails() {
           meta: [entry.reviewPriority, entry.suggestedTrainingUse, entry.pageNumber ? `p${entry.pageNumber}` : ""].filter(Boolean).join(" / ")
         })),
         "No visible crops")
+    );
+    return;
+  }
+
+  if (state.visualSnapshot) {
+    const snapshot = state.visualSnapshot;
+    const page = visualSnapshotCurrentPage(snapshot);
+    container.append(
+      renderTabCard("AI / Kvemo", [
+        ["Model output", "Not present"],
+        ["Snapshot type", "Deterministic visual QA"],
+        ["Schema", snapshot.schemaVersion || "-"],
+        ["Review queue", snapshot.reviewQueueCount ?? 0],
+        ["Page issues", visualSnapshotIssuesForPage(page, snapshot).length]
+      ]),
+      renderTabListCard(
+        "Evidence-heavy layers",
+        visualSnapshotDensestLayers(page, 10).map((layer) => ({
+          title: snapshotLayerLabel(layer.name),
+          meta: visualSnapshotLayerMeta(layer)
+        })),
+        "No layer evidence")
     );
     return;
   }
@@ -6535,7 +6914,7 @@ function renderAiTabDetails() {
   if (state.placement) {
     container.append(
       renderTabCard("Placement intelligence", [
-        ["Source", "openplantrace.placement.v1"],
+        ["Source", "openplantrace.placement.v4"],
         ["Surface patterns", scan?.surfacePatterns?.length ?? 0],
         ["Object aggregates", scan?.objectAggregates?.length ?? 0],
         ["Review aggregates", scan?.objectAggregates?.filter((aggregate) => aggregate.requiresReview).length ?? 0],
@@ -6712,6 +7091,37 @@ function renderGeneralTabDetails() {
     return;
   }
 
+  if (state.visualSnapshot) {
+    const snapshot = state.visualSnapshot;
+    const snapshotPage = visualSnapshotCurrentPage(snapshot);
+    const issues = visualSnapshotIssuesForPage(snapshotPage, snapshot);
+    container.append(
+      renderTabCard("Visual snapshot", [
+        ["Document", snapshot.documentId || "-"],
+        ["Pages", snapshot.pages.length],
+        ["Current page", snapshotPage ? `${snapshotPage.pageNumber}` : "-"],
+        ["Schema", snapshot.schemaVersion || "-"],
+        ["Scan schema", snapshot.scanSchemaVersion || "-"]
+      ]),
+      renderTabCard("Quality", [
+        ["Grade", snapshot.qualityGrade || "-"],
+        ["Confidence", snapshot.qualityConfidence == null ? "-" : formatNumber(snapshot.qualityConfidence, 3)],
+        ["Review", snapshot.requiresReview ? "Required" : "No"],
+        ["Issues on page", issues.length],
+        ["Total issues", visualSnapshotIssues(snapshot).length]
+      ]),
+      renderTabCard("Current page", [
+        ["Page size", snapshotPage ? `${formatCoordinateNumber(snapshotPage.width)} x ${formatCoordinateNumber(snapshotPage.height)}` : "-"],
+        ["Detection coverage", snapshotPage?.detectionCoverage == null ? "-" : formatPercent(snapshotPage.detectionCoverage)],
+        ["Drawable items", snapshotPage?.drawableItemCount ?? 0],
+        ["Primitive count", snapshotPage?.primitiveCount ?? 0],
+        ["SVG path", snapshotPage?.svgPath || "-"]
+      ]),
+      renderTabCard("Counts", visualSnapshotCountRows(snapshot), true)
+    );
+    return;
+  }
+
   container.append(
     renderTabCard("Document", [
       ["Source", scan?.document?.sourceName ?? scan?.sourceName ?? "-"],
@@ -6720,6 +7130,7 @@ function renderGeneralTabDetails() {
       ["Page size", page ? `${formatCoordinateNumber(page.width)} x ${formatCoordinateNumber(page.height)}` : "-"],
       ["Schema", scan?.schemaVersion ?? "-"]
     ]),
+    renderTabCard("Source readiness", sourceReadinessGeneralRows(scan)),
     renderTabCard("Quality", [
       ["Grade", scan?.quality?.grade ?? "-"],
       ["Confidence", scan?.quality?.overallConfidence == null ? "-" : formatNumber(scan.quality.overallConfidence)],
@@ -6753,6 +7164,100 @@ function renderGeneralTabDetails() {
       ["Calibration", state.placement.qualityGate.hasReliableCalibration ? "Reliable" : "Unreliable"]
     ], true));
   }
+}
+
+function renderPipelineTabDetails() {
+  const container = elements.pipelineTabDetails;
+  if (!container) {
+    return;
+  }
+
+  container.replaceChildren();
+  if (state.benchmarkResult) {
+    const cases = state.benchmarkResult.cases ?? [];
+    const stages = benchmarkStageSummaries(cases);
+    const lifecycles = stages.flatMap((stage) => (stage.artifactDeltas ?? []).map((delta) => ({
+      ...delta,
+      stage: stage.stage || stage.displayName || "stage",
+      fixtureId: stage.fixtureId || ""
+    })));
+    const byKind = lifecycleCountRows(lifecycles);
+    container.append(
+      renderTabCard("Benchmark pipeline", [
+        ["Cases", cases.length],
+        ["Stage summaries", stages.length],
+        ["Lifecycle rows", lifecycles.length],
+        ["Changed rows", lifecycles.filter((item) => item.changed || numericDelta(item) !== 0).length],
+        ["Empty declared", lifecycles.filter((item) => item.isEmptyDeclaredOutput).length],
+        ["Schema", state.benchmarkResult.schemaVersion || "-"]
+      ]),
+      renderTabCard("Lifecycle mix", byKind),
+      renderTabCard("Stage health", benchmarkStageHealthRows(cases)),
+      renderTabListCard(
+        "Stage telemetry review",
+        benchmarkStageHealthItems(cases),
+        "No dependency or contract issues in benchmark stages",
+        true),
+      renderTabListCard(
+        "Largest benchmark stage deltas",
+        lifecycles
+          .slice()
+          .sort(compareArtifactLifecycleRows)
+          .slice(0, 24)
+          .map((item) => pipelineArtifactLifecycleListItem(item)),
+        "No benchmark artifact lifecycle rows",
+        true)
+    );
+    return;
+  }
+
+  const scan = state.scan;
+  container.append(
+    renderTabCard("Pipeline plan", pipelinePlanRows(scan)),
+    renderTabCard("Runtime read readiness", pipelineRuntimeReadinessRows(scan)),
+    renderTabCard("Artifact lifecycle", pipelineArtifactLifecycleRows(scan)),
+    renderTabListCard(
+      "Stage lifecycle",
+      pipelineStageLifecycleItems(scan),
+      "No stage lifecycle telemetry",
+      true),
+    renderTabListCard(
+      "Largest artifact movements",
+      pipelineArtifactLifecycleItems(scan),
+      "No artifact lifecycle rows",
+      true),
+    renderTabListCard(
+      "Empty declared outputs",
+      pipelineEmptyDeclaredOutputItems(scan),
+      "No empty declared outputs",
+      true),
+    renderTabListCard(
+      "Stages with empty runtime reads",
+      pipelineRuntimeReadinessItems(scan),
+      "All declared runtime reads had data",
+      true),
+    renderTabListCard(
+      "Stage contract issues",
+      pipelineStageContractIssueItems(scan),
+      "All stage changes match declared writes",
+      true),
+    renderTabListCard(
+      "Execution waves",
+      pipelineExecutionWaveItems(scan),
+      "No execution waves recorded",
+      true),
+    renderTabCard("Artifact ledger", pipelineArtifactLedgerRows(scan)),
+    renderTabListCard(
+      "Final artifact inventory",
+      pipelineArtifactInventoryItems(scan),
+      "No final artifact inventory",
+      true),
+    renderTabListCard(
+      "Pipeline plan issues",
+      pipelinePlanIssueItems(scan),
+      "No pipeline plan issues",
+      true)
+  );
 }
 
 function renderAdvancedTabDetails() {
@@ -6841,8 +7346,62 @@ function renderAdvancedTabDetails() {
     return;
   }
 
+  if (state.visualSnapshot) {
+    const snapshot = state.visualSnapshot;
+    const snapshotPage = visualSnapshotCurrentPage(snapshot);
+    const pageIssues = visualSnapshotIssuesForPage(snapshotPage, snapshot);
+    const reviewQueue = snapshotPage?.reviewQueue ?? [];
+    container.append(
+      renderTabCard("Coordinates", visualSnapshotCoordinateRows(snapshot)),
+      renderTabCard("Snapshot contract", [
+        ["Schema", snapshot.schemaVersion || "-"],
+        ["Scan schema", snapshot.scanSchemaVersion || "-"],
+        ["Coordinate space", snapshot.coordinateSpace || "-"],
+        ["Unit", snapshot.unit || "-"],
+        ["Review queue", snapshot.reviewQueueCount ?? 0],
+        ["Requires review", snapshot.requiresReview ? "Yes" : "No"]
+      ]),
+      renderTabListCard(
+        "Densest layers",
+        visualSnapshotDensestLayers(snapshotPage, 14).map((layer) => ({
+          title: snapshotLayerLabel(layer.name),
+          meta: visualSnapshotLayerMeta(layer)
+        })),
+        "No populated snapshot layers",
+        true),
+      renderTabListCard(
+        "Visual issues",
+        pageIssues.slice(0, 14).map((issue) => ({
+          title: issue.code || "visual.snapshot.issue",
+          meta: [issue.severity || "Info", issue.message || "", issue.pageNumber ? `page ${issue.pageNumber}` : ""].filter(Boolean).join(" / ")
+        })),
+        "No visual issues on this page",
+        true),
+      renderTabListCard(
+        "Review queue",
+        reviewQueue.slice(0, 14).map((item) => ({
+          title: item.itemId || item.kind || item.code || "review item",
+          meta: [item.kind, item.severity, item.message, item.bounds ? formatRectCoordinates(item.bounds) : ""].filter(Boolean).join(" / ")
+        })),
+        "No compact review items on this page",
+        true)
+    );
+    return;
+  }
+
   container.append(
     renderTabCard("Coordinates", workspaceCoordinateRows(scan)),
+    renderTabCard("Source ingestion", sourceReadinessAdvancedRows(scan)),
+    renderTabListCard(
+      "Source readiness messages",
+      sourceReadinessMessageItems(scan),
+      "No source readiness messages",
+      true),
+    renderTabListCard(
+      "Source evidence",
+      sourceReadinessEvidenceItems(scan),
+      "No source readiness evidence",
+      true),
     renderTabCard("Benchmark", [
       ["Manifest", state.benchmarkManifest?.name ?? "-"],
       ["Result", state.benchmarkResult?.name ?? "-"],
@@ -6890,6 +7449,11 @@ function renderAdvancedTabDetails() {
       "Wall reliability audit",
       wallReliabilityAuditListItems(scan),
       "No walls require reliability review on this page",
+      true),
+    renderTabListCard(
+      "Wall graph repair audit",
+      wallGraphRepairAuditListItems(scan),
+      "No wall graph repair candidates on this page",
       true),
     renderTabListCard(
       "Placement issue audit",
@@ -6964,6 +7528,9 @@ function renderTabListCard(title, items, emptyText, wide = false) {
   list.className = "tab-list";
   items.forEach((item) => {
     const row = document.createElement("li");
+    if (item.className) {
+      row.classList.add(...String(item.className).split(/\s+/).filter(Boolean));
+    }
     const strong = document.createElement("strong");
     const meta = document.createElement("small");
     strong.textContent = item.title || "-";
@@ -7080,8 +7647,975 @@ function generalCountRows(scan) {
   ];
 }
 
+function sourceReadinessGeneralRows(scan) {
+  const document = scan?.document ?? {};
+  const readiness = document.sourceReadiness ?? {};
+  return [
+    ["Status", readiness.status || sourceReadinessFallbackStatus(document)],
+    ["Geometry basis", readiness.geometryBasis || "-"],
+    ["Ingestion", document.ingestionPath || "-"],
+    ["Format", document.sourceFormat || document.properties?.format || "-"],
+    ["Loader", document.loader || document.properties?.loader || "-"],
+    ["Vector geometry", formatNullableBoolean(readiness.canUseVectorGeometry)],
+    ["Needs adapter", formatNullableBoolean(readiness.requiresExternalAdapter)],
+    ["Needs OCR", formatNullableBoolean(readiness.requiresOcr)]
+  ];
+}
+
+function sourceReadinessAdvancedRows(scan) {
+  const document = scan?.document ?? {};
+  const readiness = document.sourceReadiness ?? {};
+  return [
+    ["Source kind", document.sourceKind || document.properties?.sourceKind || "-"],
+    ["Effective kind", document.effectiveSourceKind || document.properties?.effectiveSourceKind || "-"],
+    ["Clipboard kind", document.clipboardContentKind || "-"],
+    ["Extension", document.fileExtension || "-"],
+    ["Content type", document.contentType || "-"],
+    ["DWG-derived", formatNullableBoolean(document.isDwgDerived)],
+    ["Raster-derived", formatNullableBoolean(document.isRasterDerived)],
+    ["Legal adapter", formatNullableBoolean(readiness.isLegalAdapterBacked)]
+  ];
+}
+
+function sourceReadinessMessageItems(scan) {
+  const readiness = scan?.document?.sourceReadiness;
+  if (!readiness) {
+    return [];
+  }
+
+  return (readiness.messages ?? []).map((message, index) => ({
+    title: `message ${index + 1}`,
+    meta: message
+  }));
+}
+
+function sourceReadinessEvidenceItems(scan) {
+  const readiness = scan?.document?.sourceReadiness;
+  if (!readiness) {
+    return [];
+  }
+
+  return (readiness.evidence ?? []).map((evidence, index) => ({
+    title: `evidence ${index + 1}`,
+    meta: evidence
+  }));
+}
+
+function pipelinePlanRows(scan) {
+  const diagnostics = normalizedDiagnostics(scan);
+  const stages = pipelineStages(scan);
+  const issueCounts = pipelineIssueCounts(scan);
+  const contractCounts = pipelineContractCounts(scan);
+  const maxHardLevel = stages.reduce((max, stage) => Math.max(max, nonNegativeInteger(stage.dependencyLevel)), 0);
+  const maxPreferredLevel = stages.reduce((max, stage) => Math.max(max, nonNegativeInteger(stage.preferredDependencyLevel)), 0);
+  return [
+    ["Execution", diagnostics?.executionModel || "-"],
+    ["Stages", diagnostics?.stageCount ?? stages.length],
+    ["Execution waves", diagnostics?.executionWaveCount ?? pipelineExecutionWaves(scan).length],
+    ["Parallel candidates", diagnostics?.parallelCandidateStageCount ?? "-"],
+    ["Dependency ready", formatNullableBoolean(diagnostics?.isDependencyReady)],
+    ["Source artifacts", listSummary(diagnostics?.sourceArtifacts, 4)],
+    ["Known artifacts", listSummary(diagnostics?.artifactKinds, 4)],
+    ["Hard levels", maxHardLevel || "-"],
+    ["Preferred levels", maxPreferredLevel || "-"],
+    ["Contract clean", contractCounts.violations ? "No" : "Yes"],
+    ["Contract violations", contractCounts.violations],
+    ["Plan issues", issueCounts.total],
+    ["Warnings", issueCounts.warnings],
+    ["Errors", issueCounts.errors]
+  ];
+}
+
+function pipelineRuntimeReadinessRows(scan) {
+  const stages = pipelineStages(scan);
+  const readiness = stages.map(stageRuntimeReadiness);
+  const stagesWithTelemetry = readiness.filter(Boolean);
+  const emptyRequiredStages = stagesWithTelemetry.filter((item) => item.hasEmptyRequiredReads);
+  const emptyOptionalStages = stagesWithTelemetry.filter((item) => item.hasEmptyOptionalReads);
+  const nonEmptyRequiredReads = stagesWithTelemetry.reduce((total, item) => total + arrayCount(item.nonEmptyRequiredReads), 0);
+  const emptyRequiredReads = stagesWithTelemetry.reduce((total, item) => total + arrayCount(item.emptyRequiredReads), 0);
+  const nonEmptyOptionalReads = stagesWithTelemetry.reduce((total, item) => total + arrayCount(item.nonEmptyOptionalReads), 0);
+  const emptyOptionalReads = stagesWithTelemetry.reduce((total, item) => total + arrayCount(item.emptyOptionalReads), 0);
+  const noDataStages = stagesWithTelemetry.filter((item) =>
+    !arrayCount(item.nonEmptyRequiredReads)
+    && arrayCount(item.emptyRequiredReads) > 0);
+  return [
+    ["Stages with telemetry", `${stagesWithTelemetry.length} / ${stages.length}`],
+    ["Stages with empty required", emptyRequiredStages.length],
+    ["Stages with empty optional", emptyOptionalStages.length],
+    ["Required reads with data", nonEmptyRequiredReads],
+    ["Empty required reads", emptyRequiredReads],
+    ["Optional reads with data", nonEmptyOptionalReads],
+    ["Empty optional reads", emptyOptionalReads],
+    ["Stages with no required data", noDataStages.length]
+  ];
+}
+
+function benchmarkStageSummaries(cases) {
+  return (Array.isArray(cases) ? cases : [])
+    .flatMap((item, caseIndex) => (Array.isArray(item?.stages) ? item.stages : []).map((stage, stageIndex) => ({
+      ...stage,
+      fixtureId: stage.fixtureId || item?.fixtureId || `case-${caseIndex + 1}`,
+      fixtureName: stage.fixtureName || item?.fixtureName || item?.fixtureId || `case-${caseIndex + 1}`,
+      stageIndex
+    })));
+}
+
+function benchmarkStageHealthRows(cases) {
+  const stages = benchmarkStageSummaries(cases);
+  const health = stages.map(benchmarkStageHealth);
+  return [
+    ["Stages", stages.length],
+    ["Dependency gaps", health.filter((item) => item.hasDependencyGap).length],
+    ["Runtime read gaps", health.filter((item) => item.emptyRequiredReads > 0 || item.emptyOptionalReads > 0).length],
+    ["Contract drift", health.filter((item) => item.hasContractDrift).length],
+    ["Undeclared changes", health.reduce((total, item) => total + item.undeclaredChangedArtifacts, 0)],
+    ["Empty declared outputs", health.reduce((total, item) => total + item.emptyDeclaredOutputs, 0)],
+    ["Missing required deps", health.reduce((total, item) => total + item.missingRequiredReads, 0)],
+    ["Missing optional deps", health.reduce((total, item) => total + item.missingOptionalReads, 0)]
+  ];
+}
+
+function benchmarkStageHealthItems(cases) {
+  return benchmarkStageSummaries(cases)
+    .map((stage) => ({ stage, health: benchmarkStageHealth(stage) }))
+    .filter((item) => item.health.hasDependencyGap || item.health.hasContractDrift || item.health.emptyDeclaredOutputs)
+    .sort((first, second) =>
+      Number(second.health.hasContractDrift) - Number(first.health.hasContractDrift)
+      || Number(second.health.hasDependencyGap) - Number(first.health.hasDependencyGap)
+      || second.health.emptyDeclaredOutputs - first.health.emptyDeclaredOutputs
+      || second.health.undeclaredChangedArtifacts - first.health.undeclaredChangedArtifacts
+      || second.health.missingRequiredReads - first.health.missingRequiredReads
+      || String(first.stage.fixtureId || "").localeCompare(String(second.stage.fixtureId || ""))
+      || String(first.stage.stage || "").localeCompare(String(second.stage.stage || "")))
+    .slice(0, 30)
+    .map(({ stage, health }) => ({
+      title: `${stage.fixtureId || "fixture"} / ${stage.displayName || stage.stage || "stage"}`,
+      meta: [
+        health.hasContractDrift ? `contract drift ${listSummary(health.undeclaredArtifacts, 4)}` : "contract ok",
+        health.hasDependencyGap ? "dependency gap" : "dependencies ready",
+        health.emptyRequiredReads ? `empty required ${listSummary(health.emptyRequiredArtifacts, 4)}` : "",
+        health.emptyOptionalReads ? `empty optional ${listSummary(health.emptyOptionalArtifacts, 3)}` : "",
+        health.emptyDeclaredOutputs ? `empty outputs ${listSummary(health.emptyDeclaredArtifacts, 4)}` : "",
+        health.changedArtifacts.length ? `changes ${pipelineArtifactLifecycleSummary(health.changedArtifacts, 3)}` : ""
+      ].filter(Boolean).join(" / "),
+      className: health.hasContractDrift || health.missingRequiredReads ? "lifecycle-warning" : "lifecycle-empty"
+    }));
+}
+
+function benchmarkStageHealth(stage) {
+  const readiness = stageRuntimeReadiness(stage);
+  const outputReadiness = stageOutputReadiness(stage);
+  const contract = stageContract(stage);
+  const lifecycles = pipelineStageArtifactDeltas(stage);
+  const changedArtifacts = lifecycles.filter((item) => item.changed || numericDelta(item) !== 0);
+  const emptyDeclaredArtifacts = normalizeStringList(outputReadiness?.emptyDeclaredOutputs);
+  const undeclaredArtifacts = normalizeStringList(contract.undeclaredChangedArtifacts);
+  const missingRequired = arrayCount(stage?.missingRequiredReads);
+  const missingOptional = arrayCount(stage?.missingOptionalReads);
+  const emptyRequiredArtifacts = normalizeStringList(readiness?.emptyRequiredReads);
+  const emptyOptionalArtifacts = normalizeStringList(readiness?.emptyOptionalReads);
+  return {
+    hasDependencyGap: stage?.isDependencyReady === false || missingRequired > 0 || missingOptional > 0,
+    hasContractDrift: contract.writesOnlyDeclaredArtifacts === false || undeclaredArtifacts.length > 0,
+    missingRequiredReads: missingRequired,
+    missingOptionalReads: missingOptional,
+    emptyRequiredReads: emptyRequiredArtifacts.length,
+    emptyOptionalReads: emptyOptionalArtifacts.length,
+    undeclaredChangedArtifacts: undeclaredArtifacts.length,
+    emptyDeclaredOutputs: emptyDeclaredArtifacts.length,
+    emptyRequiredArtifacts,
+    emptyOptionalArtifacts,
+    undeclaredArtifacts,
+    emptyDeclaredArtifacts,
+    changedArtifacts
+  };
+}
+
+function stageContract(stage) {
+  if (stage?.contract) {
+    return stage.contract;
+  }
+
+  const declaredWrites = normalizeStringList(stage?.writes);
+  const changedArtifacts = normalizeStringList(
+    Array.isArray(stage?.changedArtifacts)
+      ? stage.changedArtifacts.map((item) => item?.artifact ?? item)
+      : []);
+  const declared = new Set(declaredWrites);
+  const changed = new Set(changedArtifacts);
+  const undeclaredChangedArtifacts = changedArtifacts.filter((artifact) => !declared.has(artifact));
+  const declaredUnchangedArtifacts = declaredWrites.filter((artifact) => !changed.has(artifact));
+  return {
+    writesOnlyDeclaredArtifacts: undeclaredChangedArtifacts.length === 0,
+    declaredWrites,
+    changedArtifacts,
+    undeclaredChangedArtifacts,
+    declaredUnchangedArtifacts
+  };
+}
+
+function pipelineExecutionWaveItems(scan) {
+  return pipelineExecutionWaves(scan)
+    .slice()
+    .sort((first, second) => nonNegativeInteger(first.level) - nonNegativeInteger(second.level))
+    .slice(0, 18)
+    .map((wave) => {
+      const hasConflicts = wave.hasWriteConflicts || arrayCount(wave.writeConflictArtifacts) > 0;
+      const hasDependencies = wave.hasIntraWaveDependencies || arrayCount(wave.intraWaveDependencies) > 0;
+      return {
+        title: `Wave ${nonNegativeInteger(wave.level) || "-"} - ${arrayCount(wave.stages)} stage${arrayCount(wave.stages) === 1 ? "" : "s"}`,
+        meta: [
+          wave.isParallelCandidate ? "parallel candidate" : "serial",
+          hasConflicts ? `write conflicts ${listSummary(wave.writeConflictArtifacts, 3)}` : "no write conflicts",
+          hasDependencies ? `${arrayCount(wave.intraWaveDependencies)} intra-wave deps` : "no intra-wave deps",
+          listSummary(wave.stages, 4),
+          `writes ${listSummary(wave.writes, 4)}`
+        ].filter(Boolean).join(" / ")
+      };
+    });
+}
+
+function pipelineArtifactLedgerRows(scan) {
+  const stages = pipelineStages(scan);
+  const diagnostics = normalizedDiagnostics(scan);
+  const ledgerStages = stages.filter(stageHasArtifactLedger);
+  const changes = pipelineArtifactChanges(scan);
+  const lifecycles = pipelineArtifactLifecycles(scan);
+  const positiveChanges = changes.filter((change) => numericDelta(change) > 0);
+  const negativeChanges = changes.filter((change) => numericDelta(change) < 0);
+  const totalAbsDelta = changes.reduce((total, change) => total + Math.abs(numericDelta(change)), 0);
+  const artifactTotals = pipelineArtifactDeltaTotals(scan);
+  const topArtifact = artifactTotals[0];
+  const inventory = pipelineArtifactInventory(scan);
+  const available = diagnostics?.availableArtifactCount ?? inventory.filter((item) => item.isPresent).length;
+  const criticalMissing = diagnostics?.missingImportCriticalArtifactCount
+    ?? inventory.filter((item) => item.isImportCritical && !item.isPresent).length;
+  return [
+    ["Final artifacts", inventory.length ? `${available} / ${inventory.length}` : "-"],
+    ["Critical missing", criticalMissing],
+    ["Stages with ledger", `${ledgerStages.length} / ${stages.length}`],
+    ["Changed records", changes.length],
+    ["Lifecycle records", lifecycles.length],
+    ["Positive deltas", positiveChanges.length],
+    ["Negative deltas", negativeChanges.length],
+    ["Total abs delta", totalAbsDelta || "-"],
+    ["Top artifact", topArtifact ? `${topArtifact.artifact} ${formatSigned(topArtifact.delta)}` : "-"],
+    ["Output snapshots", stages.reduce((total, stage) => total + arrayCount(stage.outputArtifacts), 0)],
+    ["Input snapshots", stages.reduce((total, stage) => total + arrayCount(stage.inputArtifacts), 0)]
+  ];
+}
+
+function pipelineArtifactLifecycleRows(scan) {
+  const lifecycles = pipelineArtifactLifecycles(scan);
+  const byKind = lifecycleCountMap(lifecycles);
+  return [
+    ["Lifecycle rows", lifecycles.length],
+    ["Changed", lifecycles.filter((item) => item.changed || numericDelta(item) !== 0).length],
+    ["Created", byKind.get("Created") ?? 0],
+    ["Increased", byKind.get("Increased") ?? 0],
+    ["Decreased", byKind.get("Decreased") ?? 0],
+    ["Removed", byKind.get("Removed") ?? 0],
+    ["Unchanged", byKind.get("Unchanged") ?? 0],
+    ["Declared outputs", lifecycles.filter((item) => item.isDeclaredWrite).length],
+    ["Empty declared", pipelineOutputReadinessEmptyItems(scan).length],
+    ["Undeclared changes", lifecycles.filter((item) => !item.isDeclaredWrite && (item.changed || numericDelta(item) !== 0)).length]
+  ];
+}
+
+function pipelineStageLifecycleItems(scan) {
+  return pipelineStages(scan)
+    .filter(stageHasArtifactLedger)
+    .slice()
+    .sort((first, second) => nonNegativeInteger(first.order) - nonNegativeInteger(second.order)
+      || String(first.stage || "").localeCompare(String(second.stage || "")))
+    .slice(0, 36)
+    .map((stage, index) => {
+      const lifecycles = pipelineStageArtifactDeltas(stage);
+      const changed = lifecycles.filter((item) => item.changed || numericDelta(item) !== 0);
+      const outputReadiness = stageOutputReadiness(stage);
+      const emptyDeclaredArtifacts = normalizeStringList(outputReadiness?.emptyDeclaredOutputs);
+      const created = lifecycles.filter((item) => artifactChangeKind(item) === "Created");
+      const contract = stage.contract ?? {};
+      const contractIssues = arrayCount(contract.undeclaredChangedArtifacts);
+      const readiness = stageRuntimeReadiness(stage);
+      const outputReadiness = stageOutputReadiness(stage);
+      const emptyRequired = arrayCount(readiness?.emptyRequiredReads);
+      const emptyOptional = arrayCount(readiness?.emptyOptionalReads);
+      const emptyOutputs = arrayCount(outputReadiness?.emptyDeclaredOutputs);
+      return {
+        title: `${String(nonNegativeInteger(stage.order) || index + 1).padStart(2, "0")} ${stage.displayName || stage.stage || "stage"}`,
+        meta: [
+          stage.kind || "",
+          `wave ${nonNegativeInteger(stage.executionWave) || nonNegativeInteger(stage.dependencyLevel) || "-"}`,
+          emptyRequired ? `empty required ${listSummary(readiness.emptyRequiredReads, 3)}` : "reads ready",
+          emptyOptional ? `empty optional ${listSummary(readiness.emptyOptionalReads, 2)}` : "",
+          changed.length ? `changed ${pipelineArtifactLifecycleSummary(changed, 4)}` : "no changes",
+          created.length ? `created ${listSummary(created.map((item) => item.artifact), 3)}` : "",
+          emptyDeclaredArtifacts.length ? `empty ${listSummary(emptyDeclaredArtifacts, 4)}` : "",
+          contractIssues ? `contract drift ${listSummary(contract.undeclaredChangedArtifacts, 3)}` : "contract ok"
+        ].filter(Boolean).join(" / "),
+        className: contractIssues || emptyRequired ? "lifecycle-warning" : changed.length ? "lifecycle-created" : "lifecycle-empty"
+      };
+    });
+}
+
+function pipelineArtifactLifecycleItems(scan) {
+  return pipelineArtifactLifecycles(scan)
+    .slice()
+    .sort(compareArtifactLifecycleRows)
+    .slice(0, 32)
+    .map((item) => pipelineArtifactLifecycleListItem(item));
+}
+
+function pipelineEmptyDeclaredOutputItems(scan) {
+  return pipelineOutputReadinessEmptyItems(scan)
+    .slice()
+    .sort((first, second) => String(first.stage || "").localeCompare(String(second.stage || ""))
+      || String(first.artifact || "").localeCompare(String(second.artifact || "")))
+    .slice(0, 28)
+    .map((item) => ({
+      title: `${item.stage || "stage"} -> ${item.artifact || "artifact"}`,
+      meta: [
+        item.changeKind || artifactChangeKind(item),
+        item.beforeCount !== undefined || item.afterCount !== undefined
+          ? `${formatLedgerCount(item.beforeCount)} -> ${formatLedgerCount(item.afterCount)}`
+          : "",
+        "declared output count is zero",
+        listSummary(item.evidence, 2)
+      ].filter(Boolean).join(" / "),
+      className: "lifecycle-empty"
+    }));
+}
+
+function pipelineRuntimeReadinessItems(scan) {
+  return pipelineStages(scan)
+    .map((stage, index) => ({ stage, index, readiness: stageRuntimeReadiness(stage) }))
+    .filter((item) => item.readiness?.hasEmptyRequiredReads || item.readiness?.hasEmptyOptionalReads)
+    .slice()
+    .sort((first, second) =>
+      Number(Boolean(second.readiness?.hasEmptyRequiredReads)) - Number(Boolean(first.readiness?.hasEmptyRequiredReads))
+      || arrayCount(second.readiness?.emptyRequiredReads) - arrayCount(first.readiness?.emptyRequiredReads)
+      || arrayCount(second.readiness?.emptyOptionalReads) - arrayCount(first.readiness?.emptyOptionalReads)
+      || nonNegativeInteger(first.stage.order) - nonNegativeInteger(second.stage.order)
+      || String(first.stage.stage || "").localeCompare(String(second.stage.stage || "")))
+    .slice(0, 30)
+    .map(({ stage, index, readiness }) => ({
+      title: `${String(nonNegativeInteger(stage.order) || index + 1).padStart(2, "0")} ${stage.displayName || stage.stage || "stage"}`,
+      meta: [
+        readiness.hasEmptyRequiredReads ? `empty required ${listSummary(readiness.emptyRequiredReads, 5)}` : "required reads ready",
+        readiness.hasEmptyOptionalReads ? `empty optional ${listSummary(readiness.emptyOptionalReads, 4)}` : "",
+        arrayCount(readiness.nonEmptyRequiredReads) ? `has ${listSummary(readiness.nonEmptyRequiredReads, 4)}` : "no required read data",
+        runtimeReadinessCountSummary(readiness)
+      ].filter(Boolean).join(" / "),
+      className: readiness.hasEmptyRequiredReads ? "lifecycle-warning" : "lifecycle-empty"
+    }));
+}
+
+function pipelineArtifactInventoryItems(scan) {
+  return pipelineArtifactInventory(scan)
+    .slice()
+    .sort((first, second) => Number(second.isImportCritical) - Number(first.isImportCritical)
+      || Number(first.isPresent) - Number(second.isPresent)
+      || nonNegativeInteger(second.count) - nonNegativeInteger(first.count)
+      || String(first.artifact || "").localeCompare(String(second.artifact || "")))
+    .slice(0, 42)
+    .map((item) => ({
+      title: `${item.artifact || "artifact"} ${formatLedgerCount(item.count)}`,
+      meta: [
+        item.isPresent ? "present" : "empty",
+        item.isImportCritical ? "import critical" : "",
+        item.isSourceArtifact ? "source" : "",
+        item.importance || "",
+        item.readinessImpact || "",
+        arrayCount(item.producerStages) ? `from ${listSummary(item.producerStages, 3)}` : "",
+        arrayCount(item.consumerStages) ? `used by ${listSummary(item.consumerStages, 3)}` : ""
+      ].filter(Boolean).join(" / ")
+    }));
+}
+
+function pipelineStageListItems(scan) {
+  return pipelineStages(scan)
+    .slice()
+    .sort((first, second) => nonNegativeInteger(first.order) - nonNegativeInteger(second.order)
+      || nonNegativeInteger(first.dependencyLevel) - nonNegativeInteger(second.dependencyLevel)
+      || String(first.stage || "").localeCompare(String(second.stage || "")))
+    .slice(0, 32)
+    .map((stage, index) => {
+      const hardLevel = nonNegativeInteger(stage.dependencyLevel);
+      const preferredLevel = nonNegativeInteger(stage.preferredDependencyLevel);
+      const missingRequired = arrayCount(stage.missingRequiredReads);
+      const missingOptional = arrayCount(stage.missingOptionalReads);
+      const changedArtifacts = pipelineStageChangedArtifacts(stage);
+      const contract = stage.contract ?? {};
+      const contractIssues = arrayCount(contract.undeclaredChangedArtifacts);
+      const readiness = stageRuntimeReadiness(stage);
+      const emptyRequired = arrayCount(readiness?.emptyRequiredReads);
+      const emptyOptional = arrayCount(readiness?.emptyOptionalReads);
+      return {
+        title: `${String(nonNegativeInteger(stage.order) || index + 1).padStart(2, "0")} ${stage.displayName || stage.stage || "stage"}`,
+        meta: [
+          stage.kind || "",
+          `wave ${nonNegativeInteger(stage.executionWave) || hardLevel || "-"}`,
+          stage.isParallelCandidate ? "parallel candidate" : "",
+          `L${hardLevel || "-"}`,
+          `pref L${preferredLevel || "-"}`,
+          stage.isDependencyReady === false ? `${missingRequired} missing required` : "ready",
+          missingOptional ? `${missingOptional} missing optional` : "",
+          emptyRequired ? `${emptyRequired} empty required data` : "",
+          emptyOptional ? `${emptyOptional} empty optional data` : "",
+          emptyOutputs ? `${emptyOutputs} empty outputs` : "",
+          `reads ${arrayCount(stage.reads)}`,
+          `writes ${arrayCount(stage.writes)}`,
+          contractIssues ? `contract drift ${listSummary(contract.undeclaredChangedArtifacts, 3)}` : "contract ok",
+          changedArtifacts.length ? `changes ${pipelineArtifactChangeSummary(changedArtifacts, 3)}` : "",
+          listSummary(stage.capabilities, 3)
+        ].filter(Boolean).join(" / ")
+      };
+    });
+}
+
+function pipelineNoisyArtifactChangeItems(scan) {
+  return pipelineArtifactChanges(scan)
+    .sort((first, second) => Math.abs(numericDelta(second)) - Math.abs(numericDelta(first))
+      || String(first.stage || "").localeCompare(String(second.stage || ""))
+      || String(first.artifact || "").localeCompare(String(second.artifact || "")))
+    .slice(0, 18)
+    .map((change) => ({
+      title: `${change.stage || "stage"} -> ${change.artifact || "artifact"}`,
+      meta: [
+        `${formatLedgerCount(change.beforeCount)} -> ${formatLedgerCount(change.afterCount)}`,
+        `delta ${formatSigned(numericDelta(change))}`,
+        Math.abs(numericDelta(change)) >= 50 ? "review large jump" : ""
+      ].filter(Boolean).join(" / ")
+    }));
+}
+
+function pipelineStageContractIssueItems(scan) {
+  return pipelineStages(scan)
+    .filter((stage) => arrayCount(stage?.contract?.undeclaredChangedArtifacts) > 0
+      || stage?.contract?.writesOnlyDeclaredArtifacts === false)
+    .slice()
+    .sort((first, second) => nonNegativeInteger(first.order) - nonNegativeInteger(second.order)
+      || String(first.stage || "").localeCompare(String(second.stage || "")))
+    .slice(0, 18)
+    .map((stage, index) => ({
+      title: `${String(nonNegativeInteger(stage.order) || index + 1).padStart(2, "0")} ${stage.displayName || stage.stage || "stage"}`,
+      meta: [
+        `undeclared ${listSummary(stage.contract?.undeclaredChangedArtifacts, 5)}`,
+        `changed ${listSummary(stage.contract?.changedArtifacts, 5)}`,
+        `declared ${listSummary(stage.contract?.declaredWrites, 5)}`
+      ].filter(Boolean).join(" / ")
+    }));
+}
+
+function pipelineStageArtifactSnapshotItems(scan) {
+  return pipelineStages(scan)
+    .filter(stageHasArtifactLedger)
+    .slice()
+    .sort((first, second) => nonNegativeInteger(first.order) - nonNegativeInteger(second.order)
+      || String(first.stage || "").localeCompare(String(second.stage || "")))
+    .slice(0, 32)
+    .map((stage, index) => ({
+      title: `${String(nonNegativeInteger(stage.order) || index + 1).padStart(2, "0")} ${stage.displayName || stage.stage || "stage"}`,
+      meta: [
+        `in ${pipelineArtifactSnapshotSummary(stage.inputArtifacts, 3)}`,
+        `out ${pipelineArtifactSnapshotSummary(stage.outputArtifacts, 3)}`,
+        `delta ${pipelineArtifactLifecycleSummary(pipelineStageArtifactDeltas(stage), 4)}`
+      ].join(" / ")
+    }));
+}
+
+function pipelinePlanIssueItems(scan) {
+  const diagnostics = normalizedDiagnostics(scan);
+  return (diagnostics?.planIssues ?? [])
+    .slice(0, 16)
+    .map((issue) => ({
+      title: issue.code || issue.stage || "pipeline.plan.issue",
+      meta: [
+        issue.severity || "Info",
+        issue.stage || "",
+        listSummary(issue.artifacts, 4),
+        issue.message || ""
+      ].filter(Boolean).join(" / ")
+    }));
+}
+
+function pipelineStages(scan) {
+  const diagnostics = normalizedDiagnostics(scan);
+  return Array.isArray(diagnostics?.stages) ? diagnostics.stages : [];
+}
+
+function pipelineExecutionWaves(scan) {
+  const diagnostics = normalizedDiagnostics(scan);
+  return Array.isArray(diagnostics?.executionWaves) ? diagnostics.executionWaves : [];
+}
+
+function pipelineContractCounts(scan) {
+  const stages = pipelineStages(scan);
+  const contractStages = stages.filter((stage) => stage?.contract);
+  const violations = contractStages.filter((stage) => stage.contract?.writesOnlyDeclaredArtifacts === false
+    || arrayCount(stage.contract?.undeclaredChangedArtifacts) > 0).length;
+  return {
+    stages: contractStages.length,
+    violations
+  };
+}
+
+function stageHasArtifactLedger(stage) {
+  return arrayCount(stage?.inputArtifacts) > 0
+    || arrayCount(stage?.outputArtifacts) > 0
+    || arrayCount(stage?.changedArtifacts) > 0
+    || arrayCount(stage?.artifactDeltas) > 0
+    || Boolean(stage?.outputReadiness);
+}
+
+function pipelineArtifactChanges(scan) {
+  return pipelineStages(scan)
+    .flatMap((stage) => pipelineStageChangedArtifacts(stage)
+      .map((change) => ({
+        ...change,
+        stage: stage.stage || stage.displayName || "stage"
+      })));
+}
+
+function pipelineArtifactInventory(scan) {
+  const diagnostics = normalizedDiagnostics(scan);
+  return Array.isArray(diagnostics?.artifactInventory) ? diagnostics.artifactInventory : [];
+}
+
+function pipelineStageChangedArtifacts(stage) {
+  return Array.isArray(stage?.changedArtifacts) ? stage.changedArtifacts : [];
+}
+
+function stageRuntimeReadiness(stage) {
+  if (!stage) {
+    return null;
+  }
+
+  if (stage.runtimeReadiness) {
+    return stage.runtimeReadiness;
+  }
+
+  const counts = new Map();
+  for (const item of Array.isArray(stage.inputArtifacts) ? stage.inputArtifacts : []) {
+    const artifact = String(item?.artifact || "");
+    if (!artifact) {
+      continue;
+    }
+
+    counts.set(artifact, Math.max(counts.get(artifact) ?? 0, nonNegativeInteger(item?.count)));
+  }
+
+  const requiredReads = normalizeStringList(stage.reads);
+  const optionalReads = normalizeStringList(stage.optionalReads);
+  const nonEmptyRequiredReads = requiredReads.filter((artifact) => (counts.get(artifact) ?? 0) > 0);
+  const emptyRequiredReads = requiredReads.filter((artifact) => (counts.get(artifact) ?? 0) === 0);
+  const nonEmptyOptionalReads = optionalReads.filter((artifact) => (counts.get(artifact) ?? 0) > 0);
+  const emptyOptionalReads = optionalReads.filter((artifact) => (counts.get(artifact) ?? 0) === 0);
+  const evidence = [
+    `required runtime reads with data ${nonEmptyRequiredReads.length}/${requiredReads.length}`,
+    `optional runtime reads with data ${nonEmptyOptionalReads.length}/${optionalReads.length}`
+  ];
+
+  if (emptyRequiredReads.length) {
+    evidence.push(`empty required runtime reads: ${emptyRequiredReads.join(",")}`);
+  }
+
+  if (emptyOptionalReads.length) {
+    evidence.push(`empty optional runtime reads: ${emptyOptionalReads.join(",")}`);
+  }
+
+  return {
+    requiredReadsHaveData: emptyRequiredReads.length === 0,
+    hasEmptyRequiredReads: emptyRequiredReads.length > 0,
+    nonEmptyRequiredReads,
+    emptyRequiredReads,
+    optionalReadsHaveData: optionalReads.length === 0 || emptyOptionalReads.length === 0,
+    hasEmptyOptionalReads: emptyOptionalReads.length > 0,
+    nonEmptyOptionalReads,
+    emptyOptionalReads,
+    evidence
+  };
+}
+
+function stageOutputReadiness(stage) {
+  if (!stage) {
+    return null;
+  }
+
+  if (stage.outputReadiness) {
+    return stage.outputReadiness;
+  }
+
+  const declaredWrites = normalizeStringList(stage.writes);
+  const outputCounts = new Map();
+  for (const item of Array.isArray(stage.outputArtifacts) ? stage.outputArtifacts : []) {
+    const artifact = String(item?.artifact || "");
+    if (!artifact) {
+      continue;
+    }
+
+    outputCounts.set(artifact, Math.max(outputCounts.get(artifact) ?? 0, nonNegativeInteger(item?.count)));
+  }
+
+  const lifecycles = pipelineStageArtifactDeltas(stage);
+  const changedArtifacts = new Set(
+    lifecycles
+      .filter((item) => item.changed || numericDelta(item) !== 0)
+      .map((item) => String(item.artifact || ""))
+      .filter(Boolean));
+  const contract = stageContract(stage);
+  const nonEmptyDeclaredOutputs = declaredWrites.filter((artifact) => (outputCounts.get(artifact) ?? 0) > 0);
+  const emptyDeclaredOutputs = declaredWrites.filter((artifact) => (outputCounts.get(artifact) ?? 0) === 0);
+  const changedDeclaredOutputs = declaredWrites.filter((artifact) => changedArtifacts.has(artifact));
+  const unchangedDeclaredOutputs = declaredWrites.filter((artifact) => !changedArtifacts.has(artifact));
+  const undeclaredChangedArtifacts = normalizeStringList(contract.undeclaredChangedArtifacts);
+  const evidence = [
+    `declared outputs with data ${nonEmptyDeclaredOutputs.length}/${declaredWrites.length}`,
+    `changed declared outputs ${changedDeclaredOutputs.length}/${declaredWrites.length}`
+  ];
+
+  if (emptyDeclaredOutputs.length) {
+    evidence.push(`empty declared outputs: ${emptyDeclaredOutputs.join(",")}`);
+  }
+
+  if (undeclaredChangedArtifacts.length) {
+    evidence.push(`undeclared changed artifacts: ${undeclaredChangedArtifacts.join(",")}`);
+  }
+
+  return {
+    declaredOutputsHaveData: emptyDeclaredOutputs.length === 0,
+    hasEmptyDeclaredOutputs: emptyDeclaredOutputs.length > 0,
+    nonEmptyDeclaredOutputs,
+    emptyDeclaredOutputs,
+    changedDeclaredOutputs,
+    unchangedDeclaredOutputs,
+    hasUndeclaredChanges: undeclaredChangedArtifacts.length > 0,
+    undeclaredChangedArtifacts,
+    evidence
+  };
+}
+
+function pipelineOutputReadinessEmptyItems(scan) {
+  return pipelineStages(scan).flatMap((stage) => {
+    const readiness = stageOutputReadiness(stage);
+    const emptyArtifacts = normalizeStringList(readiness?.emptyDeclaredOutputs);
+    if (!emptyArtifacts.length) {
+      return [];
+    }
+
+    const lifecycles = pipelineStageArtifactDeltas(stage);
+    return emptyArtifacts.map((artifact) => {
+      const lifecycle = lifecycles.find((item) => item?.artifact === artifact);
+      return {
+        ...(lifecycle ?? {}),
+        artifact,
+        stage: stage.stage || stage.displayName || "stage",
+        evidence: normalizeStringList(readiness?.evidence).length
+          ? normalizeStringList(readiness?.evidence)
+          : normalizeStringList(lifecycle?.evidence),
+        isDeclaredWrite: true,
+        isEmptyDeclaredOutput: true
+      };
+    });
+  });
+}
+
+function runtimeReadinessCountSummary(readiness) {
+  const requiredWithData = arrayCount(readiness?.nonEmptyRequiredReads);
+  const requiredTotal = requiredWithData + arrayCount(readiness?.emptyRequiredReads);
+  const optionalWithData = arrayCount(readiness?.nonEmptyOptionalReads);
+  const optionalTotal = optionalWithData + arrayCount(readiness?.emptyOptionalReads);
+  return `required data ${requiredWithData}/${requiredTotal}, optional data ${optionalWithData}/${optionalTotal}`;
+}
+
+function pipelineArtifactLifecycles(scan) {
+  return pipelineStages(scan)
+    .flatMap((stage) => pipelineStageArtifactDeltas(stage)
+      .map((delta) => ({
+        ...delta,
+        stage: stage.stage || stage.displayName || "stage"
+      })));
+}
+
+function pipelineStageArtifactDeltas(stage) {
+  if (Array.isArray(stage?.artifactDeltas) && stage.artifactDeltas.length) {
+    return stage.artifactDeltas;
+  }
+
+  return pipelineStageChangedArtifacts(stage).map((change) => ({
+    ...change,
+    changeKind: artifactChangeKind(change),
+    changed: numericDelta(change) !== 0,
+    wasPresent: Number(change?.beforeCount) > 0,
+    isPresent: Number(change?.afterCount) > 0,
+    isDeclaredWrite: Array.isArray(stage?.writes) ? stage.writes.includes(change.artifact) : true,
+    isEmptyDeclaredOutput: false,
+    evidence: []
+  }));
+}
+
+function pipelineArtifactDeltaTotals(scan) {
+  const totals = new Map();
+  const rows = pipelineArtifactLifecycles(scan).filter((item) => item.changed || numericDelta(item) !== 0);
+  for (const change of rows.length ? rows : pipelineArtifactChanges(scan)) {
+    const artifact = String(change.artifact || "Unknown");
+    totals.set(artifact, (totals.get(artifact) ?? 0) + numericDelta(change));
+  }
+
+  return [...totals.entries()]
+    .map(([artifact, delta]) => ({ artifact, delta }))
+    .sort((first, second) => Math.abs(second.delta) - Math.abs(first.delta)
+      || String(first.artifact).localeCompare(String(second.artifact)));
+}
+
+function pipelineArtifactSnapshotSummary(items, limit = 4) {
+  if (!Array.isArray(items) || !items.length) {
+    return "-";
+  }
+
+  return items
+    .slice(0, limit)
+    .map((item) => `${item.artifact || "artifact"} ${formatLedgerCount(item.count)}`)
+    .join(", ")
+    + (items.length > limit ? ` +${items.length - limit}` : "");
+}
+
+function pipelineArtifactChangeSummary(items, limit = 4) {
+  if (!Array.isArray(items) || !items.length) {
+    return "-";
+  }
+
+  return items
+    .slice(0, limit)
+    .map((item) => `${item.artifact || "artifact"} ${formatSigned(numericDelta(item))}`)
+    .join(", ")
+    + (items.length > limit ? ` +${items.length - limit}` : "");
+}
+
+function pipelineArtifactLifecycleSummary(items, limit = 4) {
+  if (!Array.isArray(items) || !items.length) {
+    return "-";
+  }
+
+  return items
+    .slice(0, limit)
+    .map((item) => `${item.artifact || "artifact"} ${artifactChangeKind(item)} ${formatSigned(numericDelta(item))}`)
+    .join(", ")
+    + (items.length > limit ? ` +${items.length - limit}` : "");
+}
+
+function pipelineArtifactLifecycleListItem(item) {
+  const kind = artifactChangeKind(item);
+  return {
+    title: `${item.stage || "stage"} -> ${item.artifact || "artifact"}`,
+    meta: [
+      kind,
+      `${formatLedgerCount(item.beforeCount)} -> ${formatLedgerCount(item.afterCount)}`,
+      `delta ${formatSigned(numericDelta(item))}`,
+      item.isDeclaredWrite ? "declared" : "undeclared",
+      item.isEmptyDeclaredOutput ? "empty declared output" : "",
+      listSummary(item.evidence, 2)
+    ].filter(Boolean).join(" / "),
+    className: lifecycleClassName(item)
+  };
+}
+
+function compareArtifactLifecycleRows(first, second) {
+  const firstWeight = lifecyclePriority(first);
+  const secondWeight = lifecyclePriority(second);
+  return secondWeight - firstWeight
+    || Math.abs(numericDelta(second)) - Math.abs(numericDelta(first))
+    || String(first.stage || "").localeCompare(String(second.stage || ""))
+    || String(first.artifact || "").localeCompare(String(second.artifact || ""));
+}
+
+function lifecyclePriority(item) {
+  if (!item?.isDeclaredWrite && (item?.changed || numericDelta(item) !== 0)) {
+    return 6;
+  }
+
+  if (item?.isEmptyDeclaredOutput) {
+    return 5;
+  }
+
+  switch (artifactChangeKind(item)) {
+    case "Removed":
+      return 4;
+    case "Created":
+      return 3;
+    case "Increased":
+    case "Decreased":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+function lifecycleClassName(item) {
+  if (!item?.isDeclaredWrite && (item?.changed || numericDelta(item) !== 0)) {
+    return "lifecycle-warning";
+  }
+
+  if (item?.isEmptyDeclaredOutput) {
+    return "lifecycle-empty";
+  }
+
+  switch (artifactChangeKind(item)) {
+    case "Created":
+      return "lifecycle-created";
+    case "Increased":
+      return "lifecycle-increased";
+    case "Decreased":
+    case "Removed":
+      return "lifecycle-warning";
+    default:
+      return "lifecycle-unchanged";
+  }
+}
+
+function artifactChangeKind(item) {
+  if (item?.changeKind) {
+    return String(item.changeKind);
+  }
+
+  const before = Number(item?.beforeCount);
+  const after = Number(item?.afterCount);
+  if (!Number.isFinite(before) || !Number.isFinite(after) || before === after) {
+    return "Unchanged";
+  }
+
+  if (before === 0 && after > 0) {
+    return "Created";
+  }
+
+  if (before > 0 && after === 0) {
+    return "Removed";
+  }
+
+  return after > before ? "Increased" : "Decreased";
+}
+
+function lifecycleCountRows(items) {
+  const counts = lifecycleCountMap(items);
+  return [
+    ["Created", counts.get("Created") ?? 0],
+    ["Increased", counts.get("Increased") ?? 0],
+    ["Decreased", counts.get("Decreased") ?? 0],
+    ["Removed", counts.get("Removed") ?? 0],
+    ["Unchanged", counts.get("Unchanged") ?? 0],
+    ["Empty declared", items.filter((item) => item.isEmptyDeclaredOutput).length]
+  ];
+}
+
+function lifecycleCountMap(items) {
+  const counts = new Map();
+  (items ?? []).forEach((item) => {
+    const kind = artifactChangeKind(item);
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  });
+  return counts;
+}
+
+function numericDelta(change) {
+  const delta = Number(change?.delta);
+  if (Number.isFinite(delta)) {
+    return delta;
+  }
+
+  const before = Number(change?.beforeCount);
+  const after = Number(change?.afterCount);
+  return Number.isFinite(before) && Number.isFinite(after) ? after - before : 0;
+}
+
+function formatLedgerCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString() : "-";
+}
+
+function normalizedDiagnostics(scan) {
+  const diagnostics = scan?.diagnostics;
+  if (!diagnostics || Array.isArray(diagnostics)) {
+    return null;
+  }
+
+  return diagnostics;
+}
+
+function pipelineIssueCounts(scan) {
+  const diagnostics = normalizedDiagnostics(scan);
+  const issues = Array.isArray(diagnostics?.planIssues) ? diagnostics.planIssues : [];
+  return {
+    total: diagnostics?.planIssueCount ?? issues.length,
+    warnings: diagnostics?.planWarningCount ?? issues.filter((issue) => String(issue.severity || "").toLowerCase() === "warning").length,
+    errors: diagnostics?.planErrorCount ?? issues.filter((issue) => String(issue.severity || "").toLowerCase() === "error").length
+  };
+}
+
+function listSummary(values, limit = 4) {
+  if (!Array.isArray(values) || !values.length) {
+    return "-";
+  }
+
+  const visible = values.slice(0, limit).map((value) => String(value || "").trim()).filter(Boolean);
+  if (!visible.length) {
+    return "-";
+  }
+
+  const suffix = values.length > visible.length ? ` +${values.length - visible.length}` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
+function normalizeStringList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return [...new Set(values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean))]
+    .sort((first, second) => first.localeCompare(second));
+}
+
+function arrayCount(values) {
+  return Array.isArray(values) ? values.length : 0;
+}
+
+function sourceReadinessFallbackStatus(document) {
+  if (!document || !Object.keys(document).length) {
+    return "-";
+  }
+
+  if (document.isDwgDerived) {
+    return "DwgSourceUnverified";
+  }
+
+  if (document.isRasterDerived) {
+    return "RasterSourceUnverified";
+  }
+
+  if (document.sourceFormat || document.loader || document.ingestionPath) {
+    return "SourceRecorded";
+  }
+
+  return "-";
+}
+
+function formatNullableBoolean(value) {
+  if (value == null || value === "") {
+    return "-";
+  }
+
+  return value ? "Yes" : "No";
+}
+
 function workspaceCoordinateRows(scan) {
   if (!scan) {
+    if (state.visualSnapshot) {
+      return visualSnapshotCoordinateRows(state.visualSnapshot);
+    }
+
     return [
       ["Space", "-"],
       ["Origin", "-"],
@@ -7105,6 +8639,225 @@ function workspaceCoordinateRows(scan) {
   ];
 }
 
+function visualSnapshotCurrentPage(snapshot = state.visualSnapshot) {
+  if (!snapshot?.pages?.length) {
+    return null;
+  }
+
+  return snapshot.pages.find((page) => Number(page.number) === Number(state.currentPage))
+    ?? snapshot.pages.find((page) => Number(page.pageNumber) === Number(state.currentPage))
+    ?? snapshot.pages[0];
+}
+
+function visualSnapshotCountRows(snapshot = state.visualSnapshot) {
+  const page = visualSnapshotCurrentPage(snapshot);
+  return [
+    ["Pages", snapshot?.pages?.length ?? 0],
+    ["Current page", page ? `${page.pageNumber}` : "-"],
+    ["Snapshot layers", page?.layers?.length ?? 0],
+    ["Drawable items", page?.drawableItemCount ?? 0],
+    ["Primitive count", page?.primitiveCount ?? 0],
+    ["Review queue", snapshot?.reviewQueueCount ?? 0],
+    ["Issues", visualSnapshotIssues(snapshot).length],
+    ["Quality", snapshot?.qualityGrade ?? "-"]
+  ];
+}
+
+function visualSnapshotAnalysisRows(snapshot = state.visualSnapshot, page = visualSnapshotCurrentPage(snapshot), layerSummary = "-") {
+  const issues = visualSnapshotIssuesForPage(page, snapshot);
+  return [
+    ["Current page", page ? `${page.pageNumber}` : "-"],
+    ["Page size", page ? `${formatCoordinateNumber(page.width)} x ${formatCoordinateNumber(page.height)}` : "-"],
+    ["Visible layers", layerSummary],
+    ["Visible items", visualSnapshotVisibleItemCount(page)],
+    ["All detections", page?.drawableItemCount ?? 0],
+    ["Source layers", page?.layers?.length ?? 0],
+    ["Review queue", page?.reviewQueueCount ?? snapshot?.reviewQueueCount ?? 0],
+    ["Diagnostics", issues.length],
+    ["Quality", snapshot?.qualityGrade ?? "-"]
+  ];
+}
+
+function visualSnapshotCoordinateRows(snapshot = state.visualSnapshot) {
+  const page = visualSnapshotCurrentPage(snapshot);
+  const pageBounds = page?.pageBounds;
+  return [
+    ["Space", snapshot?.coordinateSpace || "-"],
+    ["Origin", snapshot?.origin || "-"],
+    ["Axes", `${snapshot?.xAxisDirection || "Right"} / ${snapshot?.yAxisDirection || "Down"}`],
+    ["Order", "x,y"],
+    ["Unit", snapshot?.unit || "-"],
+    ["Page", page ? `${page.pageNumber}` : "-"],
+    ["Bounds", pageBounds ? formatRectCoordinates(pageBounds) : "-"],
+    ["Size", page ? `${formatCoordinateNumber(page.width)} x ${formatCoordinateNumber(page.height)}` : "-"],
+    ["Normalize", page ? `x/pageWidth, y/pageHeight` : "-"],
+    ["Schema", snapshot?.schemaVersion || "-"]
+  ];
+}
+
+function visualSnapshotIssues(snapshot = state.visualSnapshot) {
+  if (!snapshot) {
+    return [];
+  }
+
+  return uniqueVisualSnapshotIssues([
+    ...(Array.isArray(snapshot.issues) ? snapshot.issues : []),
+    ...(snapshot.pages ?? []).flatMap((page) => Array.isArray(page.issues) ? page.issues : [])
+  ]);
+}
+
+function uniqueVisualSnapshotIssues(issues) {
+  const seen = new Set();
+  return (issues ?? []).filter((issue) => {
+    const key = [
+      issue?.code || "",
+      issue?.severity || "",
+      issue?.pageNumber ?? "",
+      issue?.message || ""
+    ].join("|");
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function visualSnapshotIssuesForPage(page = visualSnapshotCurrentPage(), snapshot = state.visualSnapshot) {
+  if (!snapshot || !page) {
+    return [];
+  }
+
+  return visualSnapshotIssues(snapshot)
+    .filter((issue) => issue.pageNumber == null || Number(issue.pageNumber) === Number(page.pageNumber));
+}
+
+function visualSnapshotDensestLayers(page = visualSnapshotCurrentPage(), limit = 10) {
+  return [...(page?.layers ?? [])]
+    .filter((layer) => layer.count > 0)
+    .sort((first, second) => (second.normalizedDensity ?? 0) - (first.normalizedDensity ?? 0)
+      || (second.count ?? 0) - (first.count ?? 0)
+      || String(first.name).localeCompare(String(second.name)))
+    .slice(0, limit);
+}
+
+function visualSnapshotVisibleItemCount(page = visualSnapshotCurrentPage()) {
+  return (page?.layers ?? [])
+    .filter((layer) => {
+      const key = visualSnapshotOverlayKey(layer.name);
+      return !key || state.enabledLayers.has(key);
+    })
+    .reduce((total, layer) => total + (layer.count ?? 0), 0);
+}
+
+function visualSnapshotOverlayKey(name) {
+  const normalized = String(name || "").toLowerCase();
+  const direct = overlayLegendItems.find((item) => item.key.toLowerCase() === normalized);
+  if (direct) {
+    return direct.key;
+  }
+
+  switch (normalized) {
+    case "titleblocks":
+      return "regions";
+    case "gridbayspacings":
+      return "gridBays";
+    case "wallnodes":
+      return "nodes";
+    case "roomadjacency":
+      return "roomAdjacency";
+    case "objectgroups":
+      return "objects";
+    case "routingbarriers":
+    case "routingpassages":
+    case "routingobstacles":
+    case "routingroomusehints":
+      return "routingLayer";
+    default:
+      return "";
+  }
+}
+
+function snapshotLayerLabel(name) {
+  return String(name || "Layer")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (value) => value.toUpperCase());
+}
+
+function visualSnapshotLayerMeta(layer) {
+  const parts = [
+    `${layer.count ?? 0} item${layer.count === 1 ? "" : "s"}`,
+    `density ${formatNumber(layer.normalizedDensity ?? 0, 1)}`,
+    layer.averageConfidence == null ? "" : `avg ${formatNumber(layer.averageConfidence, 2)}`,
+    layer.normalizedBounds ? `norm ${formatRectCoordinates(layer.normalizedBounds, 4)}` : ""
+  ].filter(Boolean);
+  const breakdown = Object.entries(layer.breakdown ?? {})
+    .slice(0, 4)
+    .map(([key, value]) => `${key} ${value}`)
+    .join(", ");
+  return [parts.join(" / "), breakdown].filter(Boolean).join(" / ");
+}
+
+function visualSnapshotQualityReport(snapshot = state.visualSnapshot) {
+  if (!snapshot) {
+    return null;
+  }
+
+  const issues = visualSnapshotIssues(snapshot);
+  const layers = snapshot.pages.flatMap((page) => page.layers ?? []);
+  const warningCount = issues.filter((issue) => String(issue.severity || "").toLowerCase() === "warning").length;
+  const errorCount = issues.filter((issue) => String(issue.severity || "").toLowerCase() === "error").length;
+  return {
+    grade: snapshot.qualityGrade || "Unknown",
+    overallConfidence: snapshot.qualityConfidence,
+    requiresReview: Boolean(snapshot.requiresReview),
+    detectorCount: layers.length,
+    detectorWithFindingsCount: layers.filter((layer) => layer.count > 0).length,
+    detectionCount: layers.reduce((total, layer) => total + (layer.count ?? 0), 0),
+    diagnosticWarningCount: warningCount,
+    diagnosticErrorCount: errorCount,
+    issues: issues.map((issue) => ({
+      code: issue.code || "visual.snapshot.issue",
+      severity: issue.severity || "Info",
+      message: issue.message || "",
+      pageNumber: issue.pageNumber,
+      properties: issue.properties ?? {}
+    })),
+    detectors: visualSnapshotDensestLayers(visualSnapshotCurrentPage(snapshot), 8).map((layer) => ({
+      name: snapshotLayerLabel(layer.name),
+      itemCount: layer.count ?? 0,
+      averageConfidence: layer.averageConfidence ?? 0,
+      reviewRequiredCount: (layer.normalizedDensity ?? 0) >= 1000 ? 1 : 0
+    }))
+  };
+}
+
+function visualSnapshotDiagnostics(snapshot = state.visualSnapshot) {
+  if (!snapshot) {
+    return null;
+  }
+
+  const messages = visualSnapshotIssues(snapshot).map((issue) => ({
+    code: issue.code || "visual.snapshot.issue",
+    severity: issue.severity || "Info",
+    stage: "visual-snapshot",
+    scope: "visual-review",
+    pageNumber: issue.pageNumber,
+    message: issue.message || "",
+    confidence: issue.confidence,
+    properties: issue.properties ?? {}
+  }));
+  return {
+    infoCount: messages.filter((item) => String(item.severity).toLowerCase() === "info").length,
+    warningCount: messages.filter((item) => String(item.severity).toLowerCase() === "warning").length,
+    errorCount: messages.filter((item) => String(item.severity).toLowerCase() === "error").length,
+    durationMilliseconds: null,
+    stages: ["visual-snapshot"],
+    messages
+  };
+}
+
 function diagnosticItems(scan = state.scan) {
   if (!scan?.diagnostics) {
     return [];
@@ -7122,7 +8875,8 @@ function coordinateFrameForPage(coordinateSystem, pageNumber) {
 }
 
 function pageDefinitionByNumber(pageNumber) {
-  return (state.scan?.pages ?? []).find((page) => Number(page.number) === Number(pageNumber));
+  return (state.scan?.pages ?? []).find((page) => Number(page.number) === Number(pageNumber))
+    ?? (state.visualSnapshot?.pages ?? []).find((page) => Number(page.number) === Number(pageNumber));
 }
 
 function visibleDetectionCount(scan) {
@@ -7169,6 +8923,13 @@ function routingLayerItemCount(layer) {
 }
 
 function overlayLegendItemsForCurrentPayload(scan = state.scan) {
+  if (!scan && state.visualSnapshot) {
+    const layerKeys = new Set((visualSnapshotCurrentPage()?.layers ?? [])
+      .map((layer) => visualSnapshotOverlayKey(layer.name))
+      .filter(Boolean));
+    return overlayLegendItems.filter((item) => layerKeys.has(item.key));
+  }
+
   if (!state.placement || !scan) {
     return overlayLegendItems;
   }
@@ -8905,6 +10666,28 @@ function normalizeRect(bounds) {
   }
 
   return { x, y, width, height };
+}
+
+function normalizePoint(point) {
+  if (!point || typeof point !== "object") {
+    return null;
+  }
+
+  const x = Number(point.x);
+  const y = Number(point.y);
+  return Number.isFinite(x) && Number.isFinite(y)
+    ? { x, y }
+    : null;
+}
+
+function normalizeLine(line) {
+  if (!line || typeof line !== "object") {
+    return null;
+  }
+
+  const start = normalizePoint(line.start);
+  const end = normalizePoint(line.end);
+  return start && end ? { start, end } : null;
 }
 
 function setBenchmarkDetails(manifest = state.benchmarkManifest, targets = activeBenchmarkTargets(), errorMessage = "") {
@@ -11435,11 +13218,14 @@ function diagnosticSummaryText(diagnostics) {
 function updateNavigation() {
   const total = pageCount();
   const scan = state.scan;
+  const visualSnapshot = state.visualSnapshot;
   elements.pageLabel.textContent = `Page ${total ? state.currentPage : 0} / ${total}`;
   elements.prevPage.disabled = !total || state.currentPage <= 1;
   elements.nextPage.disabled = !total || state.currentPage >= total;
-  elements.downloadJson.disabled = !scan;
-  elements.downloadLayers.disabled = !scan || !(scan.layers?.length > 0);
+  elements.downloadJson.disabled = !scan && !visualSnapshot;
+  elements.downloadLayers.disabled = scan
+    ? !(scan.layers?.length > 0)
+    : !(visualSnapshotCurrentPage(visualSnapshot)?.layers?.length > 0);
   elements.downloadCalibration.disabled = !scan || !scan.calibration;
   elements.downloadTitleBlocks.disabled = !scan || !(scan.titleBlocks?.length > 0);
   elements.downloadDimensions.disabled = !scan || !(scan.dimensions?.length > 0);
@@ -11459,20 +13245,23 @@ function pageCount() {
     return Math.max(state.compare.baseline.pages.length, state.compare.candidate.pages.length);
   }
 
-  return state.pdf?.numPages ?? state.scan?.pages?.length ?? 0;
+  return state.pdf?.numPages ?? state.scan?.pages?.length ?? state.visualSnapshot?.pages?.length ?? 0;
 }
 
 function pageExists(pageNumber) {
   return Boolean(
     state.scan?.pages?.some((item) => item.number === pageNumber)
+    || state.visualSnapshot?.pages?.some((item) => item.number === pageNumber)
     || state.compare?.baseline?.pages?.some((item) => item.number === pageNumber)
     || state.compare?.candidate?.pages?.some((item) => item.number === pageNumber));
 }
 
 function currentPageDefinition() {
   return state.scan?.pages?.find((item) => item.number === state.currentPage)
+    ?? state.visualSnapshot?.pages?.find((item) => item.number === state.currentPage)
     ?? state.compare?.baseline?.pages?.find((item) => item.number === state.currentPage)
     ?? state.scan?.pages?.[0]
+    ?? state.visualSnapshot?.pages?.[0]
     ?? state.compare?.baseline?.pages?.[0]
     ?? null;
 }
@@ -11694,11 +13483,12 @@ function serializeCurrentOverlaySvg() {
         .annotation{fill:rgba(37,135,180,.055);stroke:#2587b4;stroke-width:.85;stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
         .annotation-reference{fill:rgba(25,105,166,.10);stroke:#1969a6;stroke-width:1;vector-effect:non-scaling-stroke}
         .annotation-reference-link{stroke:#1969a6;stroke-width:.8;stroke-dasharray:4 4;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}
-        .wall{stroke:#c43d3d;stroke-width:1.15;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}
+        .wall{stroke:#c43d3d;stroke-width:.72;stroke-linecap:butt;fill:none;vector-effect:non-scaling-stroke}
         .wall-main,.wall-secondary{stroke:#b82f42}
-        .wall-object-like{stroke:#c97c18;stroke-width:.95;stroke-dasharray:5 4}
-        .wall-fragment{stroke:#7854a8;stroke-width:.8;stroke-dasharray:3 5}
-        .node{fill:rgba(255,255,255,.65);stroke:#b82f42;stroke-width:.75;vector-effect:non-scaling-stroke}
+        .wall-object-like{stroke:#c97c18;stroke-width:.58;stroke-dasharray:5 4}
+        .wall-fragment{stroke:#7854a8;stroke-width:.48;stroke-dasharray:3 5}
+        .wall-excluded{stroke-width:.42;stroke-dasharray:2 6}
+        .node{fill:rgba(255,255,255,.65);stroke:#b82f42;stroke-width:.42;vector-effect:non-scaling-stroke}
         .room{fill:rgba(63,143,87,.075);stroke:#3f8f57;stroke-width:.95;vector-effect:non-scaling-stroke}
         .room-cluster{fill:rgba(47,125,104,.035);stroke:#2f7d68;stroke-width:1;stroke-dasharray:9 6;vector-effect:non-scaling-stroke}
         .room-adjacency{stroke:#2f7d68;stroke-width:.85;stroke-dasharray:5 5;stroke-linecap:round;fill:none;vector-effect:non-scaling-stroke}
@@ -11761,7 +13551,7 @@ function downloadBlob(blob, fileName) {
 }
 
 function safeDocumentName() {
-  const name = state.scan?.documentId || "openplantrace";
+  const name = state.scan?.documentId || state.visualSnapshot?.documentId || "openplantrace";
   return name.replace(/\.[^.]+$/, "").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "") || "openplantrace";
 }
 
@@ -11793,7 +13583,7 @@ function cleanUrlLabel(value) {
   }
 }
 
-function setEmptyStateMessage(title = "Select a PDF, placement JSON, or scan JSON", detail = "The scan overlay will appear here.") {
+function setEmptyStateMessage(title = "Select a PDF, placement JSON, scan JSON, or visual snapshot JSON", detail = "The scan overlay will appear here.") {
   const heading = elements.emptyState?.querySelector("strong");
   const body = elements.emptyState?.querySelector("span");
   if (heading) {
@@ -11826,6 +13616,7 @@ function resetViewerState(sourceMode = "empty", options = {}) {
 
   state.pdf = null;
   state.scan = null;
+  state.visualSnapshot = null;
   state.placement = null;
   state.currentPage = 1;
   state.sourceMode = sourceMode;
@@ -11869,13 +13660,147 @@ function resetViewerState(sourceMode = "empty", options = {}) {
 }
 
 function isPlacementPayload(payload) {
-  return payload?.schemaVersion === "openplantrace.placement.v1"
+  return String(payload?.schemaVersion || "").startsWith("openplantrace.placement.")
     || (payload?.qualityGate
       && payload?.coordinateSystem
       && Array.isArray(payload?.pages)
       && Array.isArray(payload?.walls)
       && Array.isArray(payload?.rooms)
       && Array.isArray(payload?.openings));
+}
+
+function isVisualSnapshotPayload(payload) {
+  const schemaVersion = String(payload?.schemaVersion || "");
+  return schemaVersion.startsWith("openplantrace.visual-snapshot.")
+    || (payload?.coordinateSpace === "OpenPlanTracePageCoordinates"
+      && Array.isArray(payload?.pages)
+      && payload.pages.some((page) => Array.isArray(page?.layers)));
+}
+
+function normalizeVisualSnapshotPayload(payload, label = "") {
+  if (!isVisualSnapshotPayload(payload)) {
+    throw new Error("JSON is not an OpenPlanTrace visual snapshot.");
+  }
+
+  const pages = (Array.isArray(payload.pages) ? payload.pages : [])
+    .map((page, index) => normalizeVisualSnapshotPage(page, index))
+    .filter(Boolean);
+
+  if (!pages.length) {
+    throw new Error("Visual snapshot JSON does not contain any pages.");
+  }
+
+  return {
+    schemaVersion: payload.schemaVersion ?? "",
+    documentId: payload.documentId ?? label ?? "openplantrace-visual-snapshot",
+    label,
+    coordinateSpace: payload.coordinateSpace ?? "OpenPlanTracePageCoordinates",
+    origin: payload.origin ?? "TopLeft",
+    xAxisDirection: payload.xAxisDirection ?? "Right",
+    yAxisDirection: payload.yAxisDirection ?? "Down",
+    unit: payload.unit ?? "DrawingUnit",
+    scanSchemaVersion: payload.scanSchemaVersion ?? "",
+    qualityGrade: payload.qualityGrade ?? "Unknown",
+    qualityConfidence: nullableFiniteNumber(payload.qualityConfidence),
+    requiresReview: Boolean(payload.requiresReview),
+    reviewQueueCount: nonNegativeInteger(payload.reviewQueueCount),
+    reviewQueueKindBreakdown: payload.reviewQueueKindBreakdown ?? {},
+    reviewQueueSeverityBreakdown: payload.reviewQueueSeverityBreakdown ?? {},
+    issues: Array.isArray(payload.issues) ? payload.issues : [],
+    pages
+  };
+}
+
+function normalizeVisualSnapshotPage(page, index) {
+  if (!page || typeof page !== "object") {
+    return null;
+  }
+
+  const pageBoundsInput = normalizeRect(page.pageBounds);
+  const width = finiteNumber(page.width, pageBoundsInput?.width ?? 0);
+  const height = finiteNumber(page.height, pageBoundsInput?.height ?? 0);
+  const pageBounds = pageBoundsInput ?? (width > 0 && height > 0 ? { x: 0, y: 0, width, height } : null);
+  const resolvedWidth = width > 0 ? width : pageBounds?.width ?? 0;
+  const resolvedHeight = height > 0 ? height : pageBounds?.height ?? 0;
+  if (!(resolvedWidth > 0) || !(resolvedHeight > 0)) {
+    return null;
+  }
+
+  const pageNumber = normalizedPageNumber(page.pageNumber ?? page.number) ?? index + 1;
+  const normalizedPageBounds = pageBounds ?? { x: 0, y: 0, width: resolvedWidth, height: resolvedHeight };
+  const layers = (Array.isArray(page.layers) ? page.layers : [])
+    .map((layer) => normalizeVisualSnapshotLayer(layer, normalizedPageBounds))
+    .filter(Boolean);
+
+  return {
+    ...page,
+    number: pageNumber,
+    pageNumber,
+    width: resolvedWidth,
+    height: resolvedHeight,
+    pageBounds: normalizedPageBounds,
+    detectionBounds: normalizeRect(page.detectionBounds),
+    detectionCoverage: nullableFiniteNumber(page.detectionCoverage),
+    drawableItemCount: nonNegativeInteger(page.drawableItemCount),
+    primitiveCount: nonNegativeInteger(page.primitiveCount),
+    reviewQueueCount: nonNegativeInteger(page.reviewQueueCount),
+    svgPath: page.svgPath || "",
+    layers,
+    issues: Array.isArray(page.issues) ? page.issues : [],
+    reviewQueue: Array.isArray(page.reviewQueue) ? page.reviewQueue : []
+  };
+}
+
+function normalizeVisualSnapshotLayer(layer, pageBounds) {
+  if (!layer || typeof layer !== "object") {
+    return null;
+  }
+
+  const bounds = normalizeRect(layer.bounds);
+  const normalizedBounds = normalizeRect(layer.normalizedBounds)
+    ?? normalizedBoundsFromPage(bounds, pageBounds);
+  const count = nonNegativeInteger(layer.count);
+  const normalizedDensity = nullableFiniteNumber(layer.normalizedDensity)
+    ?? normalizedLayerDensity(count, normalizedBounds);
+
+  return {
+    ...layer,
+    name: String(layer.name || "layer"),
+    count,
+    bounds,
+    normalizedBounds,
+    normalizedDensity,
+    averageConfidence: nullableFiniteNumber(layer.averageConfidence),
+    minimumConfidence: nullableFiniteNumber(layer.minimumConfidence),
+    maximumConfidence: nullableFiniteNumber(layer.maximumConfidence),
+    breakdown: layer.breakdown && typeof layer.breakdown === "object" ? layer.breakdown : {}
+  };
+}
+
+function normalizedBoundsFromPage(bounds, pageBounds) {
+  const rect = normalizeRect(bounds);
+  const page = normalizeRect(pageBounds);
+  if (!rect || !page || !(page.width > 0) || !(page.height > 0)) {
+    return null;
+  }
+
+  return {
+    x: (rect.x - page.x) / page.width,
+    y: (rect.y - page.y) / page.height,
+    width: rect.width / page.width,
+    height: rect.height / page.height
+  };
+}
+
+function normalizedLayerDensity(count, normalizedBounds) {
+  const bounds = normalizeRect(normalizedBounds);
+  if (!(count > 0) || !bounds) {
+    return 0;
+  }
+
+  const area = Math.abs(bounds.width * bounds.height);
+  const densityArea = area <= 0 ? 0.0001 : area;
+  return Math.round((count / densityArea) * 1000) / 1000;
 }
 
 function normalizeScanPayload(payload) {
@@ -11906,7 +13831,7 @@ function normalizeScanPayload(payload) {
     annotations: payload.annotations ?? [],
     regions: payload.regions ?? [],
     surfacePatterns: payload.surfacePatterns ?? [],
-    walls: payload.walls ?? [],
+    walls: normalizeWallItems(payload.walls ?? []),
     wallComponents: payload.wallComponents ?? payload.wallGraph?.components ?? [],
     nodes: payload.nodes ?? payload.wallGraph?.nodes ?? [],
     edges: payload.edges ?? payload.wallGraph?.edges ?? [],
@@ -11940,7 +13865,7 @@ function normalizePlacementPayload(payload) {
   const calibration = normalizePlacementCalibration(payload.calibration);
   const quality = normalizePlacementQuality(payload, calibration);
   return {
-    schemaVersion: payload.schemaVersion || "openplantrace.placement.v1",
+    schemaVersion: payload.schemaVersion || "openplantrace.placement.v4",
     scanSchemaVersion: payload.scanSchemaVersion || "",
     document: payload.document ?? null,
     documentId: payload.document?.id ?? payload.document?.sourceName ?? "openplantrace-placement",
@@ -11956,10 +13881,10 @@ function normalizePlacementPayload(payload) {
     annotations: [],
     regions: [],
     surfacePatterns: (payload.surfacePatterns ?? []).map(normalizePlacementItem),
-    walls: (payload.walls ?? []).map(normalizePlacementItem),
-    wallComponents: [],
-    nodes: [],
-    edges: [],
+    walls: normalizeWallItems(payload.walls ?? []),
+    wallComponents: (payload.wallGraph?.components ?? []).map(normalizePlacementItem),
+    nodes: payload.wallGraph?.nodes ?? [],
+    edges: (payload.wallGraph?.edges ?? []).map(normalizePlacementItem),
     wallGraphRepairCandidates: (payload.wallGraphRepairCandidates ?? []).map(normalizePlacementItem),
     rooms: (payload.rooms ?? []).map(normalizePlacementItem),
     roomAdjacencyEdges: [],
@@ -12005,12 +13930,57 @@ function normalizePlacementItem(item) {
     ...item,
     pageNumber: normalizedPageNumber(item?.pageNumber) ?? 1,
     bounds: normalizeRect(item?.bounds),
-    centerLine: item?.centerLine ?? null,
-    line: item?.line ?? null,
+    centerLine: normalizeLine(item?.centerLine) ?? item?.centerLine ?? null,
+    line: normalizeLine(item?.line) ?? item?.line ?? null,
     boundary: Array.isArray(item?.boundary) ? item.boundary : [],
     sourcePrimitiveIds: item?.sourcePrimitiveIds ?? [],
     sourceLayers: item?.sourceLayers ?? [],
     evidence: item?.evidence ?? []
+  };
+}
+
+function normalizeWallItems(items) {
+  return (Array.isArray(items) ? items : [])
+    .map(normalizeWallItem)
+    .filter(Boolean);
+}
+
+function normalizeWallItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  return {
+    ...normalizePlacementItem(item),
+    topologySpans: normalizeWallTopologySpans(item.topologySpans)
+  };
+}
+
+function normalizeWallTopologySpans(spans) {
+  return (Array.isArray(spans) ? spans : [])
+    .map(normalizeWallTopologySpan)
+    .filter(Boolean);
+}
+
+function normalizeWallTopologySpan(span) {
+  if (!span || typeof span !== "object") {
+    return null;
+  }
+
+  const centerLine = normalizeLine(span.centerLine ?? span.line);
+  if (!centerLine) {
+    return null;
+  }
+
+  return {
+    ...span,
+    pageNumber: normalizedPageNumber(span.pageNumber) ?? 1,
+    centerLine,
+    line: centerLine,
+    bounds: normalizeRect(span.bounds) ?? boundsFromLine(centerLine),
+    sourcePrimitiveIds: span.sourcePrimitiveIds ?? [],
+    sourceLayers: span.sourceLayers ?? [],
+    evidence: span.evidence ?? []
   };
 }
 

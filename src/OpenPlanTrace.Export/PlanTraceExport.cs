@@ -33,7 +33,7 @@ public sealed record PlanTraceExport(
     QualityExport Quality,
     DiagnosticsExport Diagnostics)
 {
-    public const string CurrentSchemaVersion = "openplantrace.scan.v44";
+    public const string CurrentSchemaVersion = "openplantrace.scan.v60";
 
     public static PlanTraceExport From(PlanScanResult result) =>
         Create(result);
@@ -45,6 +45,10 @@ public sealed record PlanTraceExport(
             .Where(source => !string.IsNullOrWhiteSpace(source.SourceId))
             .ToDictionary(source => source.SourceId, StringComparer.Ordinal);
         var wallComponentLookup = BuildWallComponentLookup(result.WallGraph.Components);
+        var wallTopologySpans = WallGraphTopologySpanBuilder.Build(result.WallGraph, result.Walls);
+        var wallTopologySpansByWallId = wallTopologySpans
+            .GroupBy(span => span.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
 
         return new PlanTraceExport(
             CurrentSchemaVersion,
@@ -63,8 +67,12 @@ public sealed record PlanTraceExport(
             result.GridBaySpacings.Select(bay => GridBaySpacingExport.From(bay, sourceLookup)).ToArray(),
             result.SheetRegions.Select(region => RegionExport.From(region, sourceLookup)).ToArray(),
             result.SurfacePatterns.Select(pattern => SurfacePatternExport.From(pattern, sourceLookup)).ToArray(),
-            result.Walls.Select(wall => WallExport.From(wall, sourceLookup, wallComponentLookup)).ToArray(),
-            WallGraphExport.From(result.WallGraph, sourceLookup),
+            result.Walls.Select(wall => WallExport.From(
+                wall,
+                sourceLookup,
+                wallComponentLookup,
+                wallTopologySpansByWallId.TryGetValue(wall.Id, out var spans) ? spans : Array.Empty<WallGraphTopologySpan>())).ToArray(),
+            WallGraphExport.From(result.WallGraph, wallTopologySpans, sourceLookup),
             result.Rooms.Select(RoomExport.From).ToArray(),
             RoomAdjacencyGraphExport.From(result.RoomAdjacencyGraph),
             result.Openings.Select(opening => OpeningExport.From(opening, sourceLookup)).ToArray(),
@@ -646,14 +654,136 @@ public sealed record DocumentExport(
     string Id,
     string? SourceName,
     string? SourcePath,
+    string? SourceFormat,
+    string? Loader,
+    string? SourceKind,
+    string? EffectiveSourceKind,
+    string? ClipboardContentKind,
+    string? FileExtension,
+    string? ContentType,
+    bool IsDwgDerived,
+    bool IsRasterDerived,
+    string IngestionPath,
+    SourceReadinessExport SourceReadiness,
     IReadOnlyDictionary<string, string> Properties)
 {
-    public static DocumentExport From(PlanDocument document) =>
-        new(
+    public static DocumentExport From(PlanDocument document)
+    {
+        var readiness = PlanSourceReadiness.From(document.Metadata.Properties);
+        return new(
             document.Id,
             document.Metadata.SourceName,
             document.Metadata.SourcePath,
-            document.Metadata.Properties);
+            readiness.SourceFormat,
+            readiness.Loader,
+            readiness.SourceKind,
+            readiness.EffectiveSourceKind,
+            ReadProperty(document.Metadata.Properties, "clipboardContentKind"),
+            ReadProperty(document.Metadata.Properties, "fileExtension"),
+            ReadProperty(document.Metadata.Properties, "contentType"),
+            readiness.IsDwgDerived,
+            readiness.IsRasterDerived,
+            readiness.IngestionPath,
+            SourceReadinessExport.From(readiness),
+            document.Metadata.Properties
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+    }
+
+    private static string? ReadProperty(
+        IReadOnlyDictionary<string, string> properties,
+        string key)
+    {
+        foreach (var pair in properties)
+        {
+            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(pair.Value))
+            {
+                return pair.Value.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ComputeIsDwgDerived(IReadOnlyDictionary<string, string> properties) =>
+        string.Equals(ReadProperty(properties, "format"), "dwg", StringComparison.OrdinalIgnoreCase)
+        || ReadProperty(properties, "dwg.conversion") is not null
+        || ReadProperty(properties, "dwg.converter") is not null;
+
+    private static bool ComputeIsRasterDerived(IReadOnlyDictionary<string, string> properties) =>
+        string.Equals(ReadProperty(properties, "format"), "raster", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(ReadProperty(properties, "sourceKind"), PlanSourceKind.RasterImage.ToString(), StringComparison.OrdinalIgnoreCase)
+        || string.Equals(ReadProperty(properties, "effectiveSourceKind"), PlanSourceKind.RasterImage.ToString(), StringComparison.OrdinalIgnoreCase)
+        || ReadProperty(properties, "raster.adapter") is not null
+        || ReadProperty(properties, "raster.extractor") is not null
+        || ReadProperty(properties, "extractorName") is not null;
+
+    private static string ComputeIngestionPath(IReadOnlyDictionary<string, string> properties)
+    {
+        if (ReadProperty(properties, "dwg.conversion") is not null)
+        {
+            return "dwg-to-dxf";
+        }
+
+        if (ComputeIsDwgDerived(properties))
+        {
+            return "dwg-adapter";
+        }
+
+        if (ComputeIsRasterDerived(properties))
+        {
+            return "raster-extraction";
+        }
+
+        return ReadProperty(properties, "format")?.Trim().ToLowerInvariant() switch
+        {
+            "pdf" => "pdf-vector",
+            "dxf" => "dxf-vector",
+            "extracted-primitives" => "extracted-primitives",
+            "vector" or "vector-image" => "vector-image",
+            _ => "unknown"
+        };
+    }
+
+    private static string? InferSourceKind(string? format) =>
+        format?.Trim().ToLowerInvariant() switch
+        {
+            "pdf" => PlanSourceKind.Pdf.ToString(),
+            "dwg" => PlanSourceKind.Dwg.ToString(),
+            "dxf" => PlanSourceKind.Dxf.ToString(),
+            "raster" => PlanSourceKind.RasterImage.ToString(),
+            "raster-image" => PlanSourceKind.RasterImage.ToString(),
+            "vector" => PlanSourceKind.VectorImage.ToString(),
+            "vector-image" => PlanSourceKind.VectorImage.ToString(),
+            "extracted-primitives" => PlanSourceKind.ExtractedPrimitives.ToString(),
+            _ => null
+        };
+}
+
+public sealed record SourceReadinessExport(
+    string Status,
+    string GeometryBasis,
+    bool CanUseVectorGeometry,
+    bool RequiresExternalAdapter,
+    bool RequiresOcr,
+    bool IsLegalAdapterBacked,
+    IReadOnlyList<string> Messages,
+    IReadOnlyList<string> Evidence)
+{
+    public static SourceReadinessExport From(IReadOnlyDictionary<string, string> properties) =>
+        From(PlanSourceReadiness.From(properties));
+
+    public static SourceReadinessExport From(PlanSourceReadiness readiness) =>
+        new(
+            readiness.Status,
+            readiness.GeometryBasis,
+            readiness.CanUseVectorGeometry,
+            readiness.RequiresExternalAdapter,
+            readiness.RequiresOcr,
+            readiness.IsLegalAdapterBacked,
+            readiness.Messages,
+            readiness.Evidence);
 }
 
 public sealed record PageExport(
@@ -866,6 +996,7 @@ public sealed record WallExport(
     string Id,
     int PageNumber,
     LineExport CenterLine,
+    IReadOnlyList<WallTopologySpanExport> TopologySpans,
     RectExport Bounds,
     double Thickness,
     string DetectionKind,
@@ -886,7 +1017,8 @@ public sealed record WallExport(
     public static WallExport From(
         WallSegment wall,
         IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup,
-        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup)
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup,
+        IReadOnlyList<WallGraphTopologySpan> topologySpans)
     {
         wallComponentLookup.TryGetValue(wall.Id, out var component);
         return
@@ -894,6 +1026,7 @@ public sealed record WallExport(
             wall.Id,
             wall.PageNumber,
             LineExport.From(wall.CenterLine),
+            topologySpans.Select(span => WallTopologySpanExport.From(span, sourceLookup)).ToArray(),
             RectExport.From(wall.Bounds),
             wall.Thickness,
             wall.DetectionKind.ToString(),
@@ -911,6 +1044,58 @@ public sealed record WallExport(
             wall.Evidence,
             ExportSourceHelpers.SourceLayers(wall.SourcePrimitiveIds, sourceLookup));
     }
+}
+
+public sealed record WallTopologySpanExport(
+    string Id,
+    string WallGraphEdgeId,
+    int PageNumber,
+    string WallId,
+    string FromNodeId,
+    string ToNodeId,
+    LineExport CenterLine,
+    RectExport Bounds,
+    double DrawingLength,
+    double? SourceWallStartOffsetDrawingUnits,
+    double? SourceWallEndOffsetDrawingUnits,
+    double? SourceWallProjectedLengthDrawingUnits,
+    double? SourceWallStartParameter,
+    double? SourceWallEndParameter,
+    double? SourceWallCenterParameter,
+    double? SourceWallStartProjectionDistanceDrawingUnits,
+    double? SourceWallEndProjectionDistanceDrawingUnits,
+    double Thickness,
+    double Confidence,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> Evidence)
+{
+    public static WallTopologySpanExport From(
+        WallGraphTopologySpan span,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        new(
+            span.Id,
+            span.Id,
+            span.PageNumber,
+            span.WallId,
+            span.FromNodeId,
+            span.ToNodeId,
+            LineExport.From(span.CenterLine),
+            RectExport.From(span.Bounds),
+            span.DrawingLength,
+            span.SourceWallStartOffsetDrawingUnits,
+            span.SourceWallEndOffsetDrawingUnits,
+            span.SourceWallProjectedLengthDrawingUnits,
+            span.SourceWallStartParameter,
+            span.SourceWallEndParameter,
+            span.SourceWallCenterParameter,
+            span.SourceWallStartProjectionDistanceDrawingUnits,
+            span.SourceWallEndProjectionDistanceDrawingUnits,
+            span.Thickness,
+            span.Confidence.Value,
+            span.SourcePrimitiveIds,
+            ExportSourceHelpers.SourceLayers(span.SourcePrimitiveIds, sourceLookup),
+            span.Evidence);
 }
 
 public sealed record WallPairEvidenceExport(
@@ -945,10 +1130,14 @@ public sealed record WallGraphExport(
 {
     public static WallGraphExport From(
         WallGraph graph,
+        IReadOnlyList<WallGraphTopologySpan> topologySpans,
         IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
         new(
             graph.Nodes.Select(WallNodeExport.From).ToArray(),
-            graph.Edges.Select(WallEdgeExport.From).ToArray(),
+            graph.Edges.Select(edge => WallEdgeExport.From(
+                edge,
+                topologySpans.FirstOrDefault(span => string.Equals(span.Id, edge.Id, StringComparison.Ordinal)),
+                sourceLookup)).ToArray(),
             graph.Components.Select(component => WallGraphComponentExport.From(component, sourceLookup)).ToArray(),
             graph.RepairCandidates.Select(candidate => WallGraphRepairCandidateExport.From(candidate, sourceLookup)).ToArray());
 }
@@ -1021,16 +1210,33 @@ public sealed record WallEdgeExport(
     string FromNodeId,
     string ToNodeId,
     string WallId,
-    double Confidence)
+    LineExport? Line,
+    RectExport? Bounds,
+    double DrawingLength,
+    double Confidence,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> Evidence)
 {
-    public static WallEdgeExport From(WallEdge edge) =>
+    public static WallEdgeExport From(
+        WallEdge edge,
+        WallGraphTopologySpan? topologySpan,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
         new(
             edge.Id,
             edge.PageNumber,
             edge.FromNodeId,
             edge.ToNodeId,
             edge.WallId,
-            edge.Confidence.Value);
+            topologySpan is null ? null : LineExport.From(topologySpan.CenterLine),
+            topologySpan is null ? null : RectExport.From(topologySpan.Bounds),
+            topologySpan?.DrawingLength ?? 0,
+            edge.Confidence.Value,
+            topologySpan?.SourcePrimitiveIds ?? Array.Empty<string>(),
+            topologySpan is null
+                ? Array.Empty<string>()
+                : ExportSourceHelpers.SourceLayers(topologySpan.SourcePrimitiveIds, sourceLookup),
+            topologySpan?.Evidence ?? Array.Empty<string>());
 }
 
 public sealed record WallGraphRepairCandidateExport(
@@ -1038,12 +1244,18 @@ public sealed record WallGraphRepairCandidateExport(
     int PageNumber,
     string Kind,
     string SuggestedAction,
+    string Severity,
+    string ImportImpact,
+    string Applicability,
     string SourceNodeId,
     PointExport SourcePoint,
     PointExport TargetPoint,
     string? TargetNodeId,
     string? HostWallId,
     double GapDistance,
+    double SafeSnapDistance,
+    double ReviewDistanceLimit,
+    double ExcessDistanceBeyondSafeSnap,
     LineExport RepairLine,
     RectExport Bounds,
     IReadOnlyList<string> WallIds,
@@ -1061,12 +1273,18 @@ public sealed record WallGraphRepairCandidateExport(
             candidate.PageNumber,
             candidate.Kind.ToString(),
             candidate.SuggestedAction.ToString(),
+            candidate.Severity.ToString(),
+            candidate.ImportImpact.ToString(),
+            candidate.Applicability.ToString(),
             candidate.SourceNodeId,
             PointExport.From(candidate.SourcePoint),
             PointExport.From(candidate.TargetPoint),
             candidate.TargetNodeId,
             candidate.HostWallId,
             candidate.GapDistance,
+            candidate.SafeSnapDistance,
+            candidate.ReviewDistanceLimit,
+            candidate.ExcessDistanceBeyondSafeSnap,
             LineExport.From(candidate.RepairLine),
             RectExport.From(candidate.Bounds),
             candidate.WallIds,
@@ -1173,12 +1391,25 @@ public sealed record OpeningPlacementExport(
     string? HostWallId,
     IReadOnlyList<string> AnchorWallIds,
     LineExport ReferenceLine,
+    LineExport? ReferenceLineMillimeters,
     PointExport StartPoint,
+    PointExport? StartPointMillimeters,
     PointExport EndPoint,
+    PointExport? EndPointMillimeters,
     double StartOffsetDrawingUnits,
     double EndOffsetDrawingUnits,
     double CenterOffsetDrawingUnits,
     double LengthDrawingUnits,
+    RectExport FootprintBounds,
+    RectExport? FootprintBoundsMillimeters,
+    IReadOnlyList<PointExport> FootprintCorners,
+    IReadOnlyList<PointExport>? FootprintCornersMillimeters,
+    LineExport StartJambLine,
+    LineExport? StartJambLineMillimeters,
+    LineExport EndJambLine,
+    LineExport? EndJambLineMillimeters,
+    double DepthDrawingUnits,
+    double? DepthMillimeters,
     double? StartOffsetMillimeters,
     double? EndOffsetMillimeters,
     double? CenterOffsetMillimeters,
@@ -1189,39 +1420,85 @@ public sealed record OpeningPlacementExport(
     VectorExport AlongVector,
     VectorExport NormalVector,
     double CrossWallOffsetDrawingUnits,
+    double? CrossWallOffsetMillimeters,
     double Confidence,
     IReadOnlyList<string> Evidence)
 {
-    public static OpeningPlacementExport From(OpeningPlacement placement) =>
-        new(
+    public static OpeningPlacementExport From(OpeningPlacement placement, double? millimetersPerDrawingUnit = null)
+    {
+        static double? ScaleNullable(double value, double? scale) =>
+            scale is > 0 ? value * scale.Value : null;
+
+        return new OpeningPlacementExport(
             placement.HostWallId,
             placement.AnchorWallIds,
             LineExport.From(placement.ReferenceLine),
+            ScaleLine(placement.ReferenceLine, millimetersPerDrawingUnit),
             PointExport.From(placement.StartPoint),
+            ScalePoint(placement.StartPoint, millimetersPerDrawingUnit),
             PointExport.From(placement.EndPoint),
+            ScalePoint(placement.EndPoint, millimetersPerDrawingUnit),
             placement.StartOffsetDrawingUnits,
             placement.EndOffsetDrawingUnits,
             placement.CenterOffsetDrawingUnits,
             placement.LengthDrawingUnits,
-            placement.StartOffsetMillimeters,
-            placement.EndOffsetMillimeters,
-            placement.CenterOffsetMillimeters,
-            placement.LengthMillimeters,
+            RectExport.From(placement.FootprintBounds),
+            ScaleRect(placement.FootprintBounds, millimetersPerDrawingUnit),
+            placement.FootprintCorners.Select(PointExport.From).ToArray(),
+            millimetersPerDrawingUnit is > 0
+                ? placement.FootprintCorners.Select(point => ScalePoint(point, millimetersPerDrawingUnit)!).ToArray()
+                : null,
+            LineExport.From(placement.StartJambLine),
+            ScaleLine(placement.StartJambLine, millimetersPerDrawingUnit),
+            LineExport.From(placement.EndJambLine),
+            ScaleLine(placement.EndJambLine, millimetersPerDrawingUnit),
+            placement.DepthDrawingUnits,
+            placement.DepthMillimeters ?? ScaleNullable(placement.DepthDrawingUnits, millimetersPerDrawingUnit),
+            placement.StartOffsetMillimeters ?? ScaleNullable(placement.StartOffsetDrawingUnits, millimetersPerDrawingUnit),
+            placement.EndOffsetMillimeters ?? ScaleNullable(placement.EndOffsetDrawingUnits, millimetersPerDrawingUnit),
+            placement.CenterOffsetMillimeters ?? ScaleNullable(placement.CenterOffsetDrawingUnits, millimetersPerDrawingUnit),
+            placement.LengthMillimeters ?? ScaleNullable(placement.LengthDrawingUnits, millimetersPerDrawingUnit),
             placement.HostWallStartParameter,
             placement.HostWallEndParameter,
             placement.HostWallCenterParameter,
             VectorExport.From(placement.AlongVector),
             VectorExport.From(placement.NormalVector),
             placement.CrossWallOffsetDrawingUnits,
+            ScaleNullable(placement.CrossWallOffsetDrawingUnits, millimetersPerDrawingUnit),
             placement.Confidence.Value,
             placement.Evidence);
-}
+    }
 
+    private static PointExport? ScalePoint(PlanPoint point, double? millimetersPerDrawingUnit) =>
+        millimetersPerDrawingUnit is > 0
+            ? new PointExport(point.X * millimetersPerDrawingUnit.Value, point.Y * millimetersPerDrawingUnit.Value)
+            : null;
+
+    private static LineExport? ScaleLine(PlanLineSegment line, double? millimetersPerDrawingUnit) =>
+        millimetersPerDrawingUnit is > 0
+            ? new LineExport(ScalePoint(line.Start, millimetersPerDrawingUnit)!, ScalePoint(line.End, millimetersPerDrawingUnit)!)
+            : null;
+
+    private static RectExport? ScaleRect(PlanRect rect, double? millimetersPerDrawingUnit)
+    {
+        if (millimetersPerDrawingUnit is not > 0)
+        {
+            return null;
+        }
+
+        var scale = millimetersPerDrawingUnit.Value;
+        return new RectExport(rect.X * scale, rect.Y * scale, rect.Width * scale, rect.Height * scale);
+    }
+}
 public sealed record OpeningRoomConnectionExport(
     string RoomId,
     string? RoomLabel,
     string RoomUseKind,
     IReadOnlyList<string> RoomAdjacencyIds,
+    string Side,
+    PointExport? RoomSidePoint,
+    PointExport? NearestBoundaryPoint,
+    double SignedDistanceFromOpening,
     double DistanceToOpening,
     bool SharesHostWall,
     double Confidence,
@@ -1233,6 +1510,10 @@ public sealed record OpeningRoomConnectionExport(
             connection.RoomLabel,
             connection.RoomUseKind.ToString(),
             connection.RoomAdjacencyIds,
+            connection.Side.ToString(),
+            connection.RoomSidePoint is null ? null : PointExport.From(connection.RoomSidePoint.Value),
+            connection.NearestBoundaryPoint is null ? null : PointExport.From(connection.NearestBoundaryPoint.Value),
+            connection.SignedDistanceFromOpening,
             connection.DistanceToOpening,
             connection.SharesHostWall,
             connection.Confidence.Value,
@@ -1541,7 +1822,13 @@ public sealed record RoutingPassageExport(
     IReadOnlyList<string> HostWallIds,
     IReadOnlyList<string> ConnectedRoomIds,
     IReadOnlyList<string> ConnectedRoomLabels,
+    IReadOnlyList<OpeningRoomConnectionExport> ConnectedRoomLinks,
+    IReadOnlyList<string> RoomAdjacencyIds,
     OpeningPlacementExport? Placement,
+    string PlacementStatus,
+    bool ReadyForCoordinatePlacement,
+    bool RequiresReview,
+    IReadOnlyList<string> ReviewReasons,
     double Confidence,
     IReadOnlyList<string> SourcePrimitiveIds,
     IReadOnlyList<string> SourceLayers,
@@ -1566,7 +1853,13 @@ public sealed record RoutingPassageExport(
             passage.HostWallIds,
             passage.ConnectedRoomIds,
             passage.ConnectedRoomLabels,
+            passage.ConnectedRoomLinks.Select(OpeningRoomConnectionExport.From).ToArray(),
+            passage.RoomAdjacencyIds,
             passage.Placement is null ? null : OpeningPlacementExport.From(passage.Placement),
+            passage.Placement is null ? "Unanchored" : "Anchored",
+            passage.ReadyForCoordinatePlacement,
+            passage.RequiresReview,
+            passage.ReviewReasons,
             passage.Confidence.Value,
             passage.SourcePrimitiveIds,
             ExportSourceHelpers.SourceLayers(passage.SourcePrimitiveIds, sourceLookup),
@@ -2152,13 +2445,14 @@ public sealed record ScanReviewQueueItemExport(
                      .ThenBy(opening => opening.Id, StringComparer.Ordinal))
         {
             var reasons = OpeningReviewReasons(opening).ToArray();
+            var placementReady = ScanReviewQueueSummary.OpeningPlacementIsCoordinateReady(opening);
             items.Add(new ScanReviewQueueItemExport(
                 $"review:opening:{opening.Id}",
                 ScanReviewQueueKinds.OpeningReview,
                 "openings",
                 opening.Id,
-                opening.Placement is null ? 20 : 45,
-                opening.Placement is null ? DiagnosticSeverity.Warning.ToString() : DiagnosticSeverity.Info.ToString(),
+                placementReady ? 45 : 20,
+                placementReady ? DiagnosticSeverity.Info.ToString() : DiagnosticSeverity.Warning.ToString(),
                 opening.PageNumber,
                 new[] { opening.PageNumber },
                 RectExport.From(opening.Bounds),
@@ -2188,23 +2482,8 @@ public sealed record ScanReviewQueueItemExport(
     private static bool NeedsOpeningReview(OpeningCandidate opening) =>
         ScanReviewQueueSummary.NeedsOpeningReview(opening);
 
-    private static IEnumerable<string> OpeningReviewReasons(OpeningCandidate opening)
-    {
-        if (opening.Placement is null)
-        {
-            yield return "opening is not anchored to a host-wall placement reference";
-        }
-
-        if (opening.Operation == OpeningOperation.Unknown)
-        {
-            yield return "opening operation is unknown";
-        }
-
-        if (opening.Confidence.Value < 0.5)
-        {
-            yield return "opening confidence is below 0.5";
-        }
-    }
+    private static IReadOnlyList<string> OpeningReviewReasons(OpeningCandidate opening) =>
+        ScanReviewQueueSummary.OpeningReviewReasons(opening);
 
     private static string Format(double value) =>
         value.ToString("0.######", CultureInfo.InvariantCulture);
@@ -2293,6 +2572,32 @@ public sealed record QualityIssueExport(
 
 public sealed record DiagnosticsExport(
     double DurationMilliseconds,
+    string ExecutionModel,
+    int StageCount,
+    int ExecutionWaveCount,
+    int ParallelCandidateStageCount,
+    IReadOnlyList<string> ArtifactKinds,
+    IReadOnlyList<string> SourceArtifacts,
+    int ArtifactPlanCount,
+    IReadOnlyList<ArtifactPlanExport> ArtifactPlans,
+    int SourceArtifactPlanCount,
+    int TerminalArtifactPlanCount,
+    int MultiProducerArtifactPlanCount,
+    IReadOnlyList<ArtifactInventoryExport> ArtifactInventory,
+    int AvailableArtifactCount,
+    int EmptyArtifactCount,
+    int ImportCriticalArtifactCount,
+    int MissingImportCriticalArtifactCount,
+    IReadOnlyList<ExecutionWaveExport> ExecutionWaves,
+    int RerunImpactCount,
+    IReadOnlyList<RerunImpactExport> RerunImpacts,
+    int RerunPlanCount,
+    IReadOnlyList<RerunPlanExport> RerunPlans,
+    bool IsDependencyReady,
+    int PlanIssueCount,
+    int PlanWarningCount,
+    int PlanErrorCount,
+    IReadOnlyList<PipelinePlanIssueExport> PlanIssues,
     bool HasErrors,
     int InfoCount,
     int WarningCount,
@@ -2300,19 +2605,255 @@ public sealed record DiagnosticsExport(
     IReadOnlyList<StageExport> Stages,
     IReadOnlyList<DiagnosticExport> Messages)
 {
-    public static DiagnosticsExport From(PipelineDiagnostics diagnostics) =>
-        new(
+    public static DiagnosticsExport From(PipelineDiagnostics diagnostics)
+    {
+        var plan = diagnostics.ExecutionPlan;
+        var stagePlans = plan.Stages.ToDictionary(stage => stage.Stage, StringComparer.Ordinal);
+        var artifactPlans = plan.ArtifactPlans.Select(ArtifactPlanExport.From).ToArray();
+        var artifactInventory = ArtifactInventoryExport.From(diagnostics).ToArray();
+
+        return new DiagnosticsExport(
             diagnostics.Duration.TotalMilliseconds,
+            plan.ExecutionModel,
+            plan.Stages.Count == 0 ? diagnostics.StageReports.Count : plan.Stages.Count,
+            plan.ExecutionWaves.Count,
+            plan.ExecutionWaves.Sum(wave => wave.IsParallelCandidate ? wave.Stages.Count : 0),
+            Enum.GetNames<PlanArtifactKind>()
+                .Where(name => !string.Equals(name, nameof(PlanArtifactKind.Unknown), StringComparison.Ordinal))
+                .ToArray(),
+            plan.SourceArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            artifactPlans.Length,
+            artifactPlans,
+            artifactPlans.Count(artifact => artifact.IsSourceArtifact),
+            artifactPlans.Count(artifact => artifact.IsTerminalArtifact),
+            artifactPlans.Count(artifact => artifact.HasMultipleProducers),
+            artifactInventory,
+            artifactInventory.Count(artifact => artifact.IsPresent),
+            artifactInventory.Count(artifact => !artifact.IsPresent),
+            artifactInventory.Count(artifact => artifact.IsImportCritical),
+            artifactInventory.Count(artifact => artifact.IsImportCritical && !artifact.IsPresent),
+            plan.ExecutionWaves.Select(ExecutionWaveExport.From).ToArray(),
+            plan.RerunImpacts.Count,
+            plan.RerunImpacts.Select(RerunImpactExport.From).ToArray(),
+            plan.RerunPlans.Count,
+            plan.RerunPlans.Select(RerunPlanExport.From).ToArray(),
+            plan.IsDependencyReady,
+            plan.Issues.Count,
+            plan.Issues.Count(issue => issue.Severity == DiagnosticSeverity.Warning),
+            plan.Issues.Count(issue => issue.Severity == DiagnosticSeverity.Error),
+            plan.Issues.Select(PipelinePlanIssueExport.From).ToArray(),
             diagnostics.HasErrors,
             diagnostics.InfoCount,
             diagnostics.WarningCount,
             diagnostics.ErrorCount,
-            diagnostics.StageReports.Select(StageExport.From).ToArray(),
+            diagnostics.StageReports
+                .Select(report => StageExport.From(report, stagePlans.TryGetValue(report.Stage, out var stagePlan) ? stagePlan : null))
+                .ToArray(),
             diagnostics.Messages.Select(DiagnosticExport.From).ToArray());
+    }
+}
+
+public sealed record ArtifactPlanExport(
+    string Artifact,
+    bool IsSourceArtifact,
+    bool IsProducedByStage,
+    bool IsConsumedByStage,
+    bool IsTerminalArtifact,
+    IReadOnlyList<string> ProducerStages,
+    IReadOnlyList<string> RequiredConsumerStages,
+    IReadOnlyList<string> OptionalConsumerStages,
+    IReadOnlyList<string> ConsumerStages,
+    int ProducerCount,
+    int ConsumerCount,
+    int FirstProducerOrder,
+    int LastProducerOrder,
+    int FirstConsumerOrder,
+    int LastConsumerOrder,
+    int FirstProducerWave,
+    int LastProducerWave,
+    int FirstConsumerWave,
+    int LastConsumerWave,
+    bool HasMultipleProducers,
+    bool HasRequiredConsumers,
+    string DependencyRole,
+    IReadOnlyList<string> Evidence)
+{
+    public static ArtifactPlanExport From(PipelineArtifactPlan plan) =>
+        new(
+            plan.Artifact.ToString(),
+            plan.IsSourceArtifact,
+            plan.IsProducedByStage,
+            plan.IsConsumedByStage,
+            plan.IsTerminalArtifact,
+            plan.ProducerStages,
+            plan.RequiredConsumerStages,
+            plan.OptionalConsumerStages,
+            plan.ConsumerStages,
+            plan.ProducerCount,
+            plan.ConsumerCount,
+            plan.FirstProducerOrder,
+            plan.LastProducerOrder,
+            plan.FirstConsumerOrder,
+            plan.LastConsumerOrder,
+            plan.FirstProducerWave,
+            plan.LastProducerWave,
+            plan.FirstConsumerWave,
+            plan.LastConsumerWave,
+            plan.HasMultipleProducers,
+            plan.HasRequiredConsumers,
+            plan.DependencyRole,
+            plan.Evidence);
+}
+
+public sealed record ArtifactInventoryExport(
+    string Artifact,
+    int Count,
+    string StateKey,
+    int Revision,
+    bool IsPresent,
+    bool IsSourceArtifact,
+    bool IsImportCritical,
+    string Importance,
+    string ReadinessImpact,
+    IReadOnlyList<string> ProducerStages,
+    IReadOnlyList<string> ConsumerStages,
+    IReadOnlyList<string> Evidence)
+{
+    public static IReadOnlyList<ArtifactInventoryExport> From(PipelineDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        var snapshots = diagnostics.ArtifactInventory.Count > 0
+            ? diagnostics.ArtifactInventory
+            : Enum.GetValues<PlanArtifactKind>()
+                .Where(artifact => artifact != PlanArtifactKind.Unknown)
+                .Select(artifact => new PipelineArtifactSnapshot(artifact, 0))
+                .ToArray();
+        var plan = diagnostics.ExecutionPlan;
+        var sourceArtifacts = plan.SourceArtifacts.ToHashSet();
+
+        return snapshots
+            .Where(snapshot => snapshot.Artifact != PlanArtifactKind.Unknown)
+            .OrderBy(snapshot => snapshot.Artifact.ToString(), StringComparer.Ordinal)
+            .Select(snapshot =>
+            {
+                var producers = plan.Stages
+                    .Where(stage => stage.Writes.Contains(snapshot.Artifact))
+                    .OrderBy(stage => stage.Order)
+                    .Select(stage => stage.Stage)
+                    .ToArray();
+                var consumers = plan.Stages
+                    .Where(stage => stage.Reads.Contains(snapshot.Artifact) || stage.OptionalReads.Contains(snapshot.Artifact))
+                    .OrderBy(stage => stage.Order)
+                    .Select(stage => stage.Stage)
+                    .ToArray();
+                var isSourceArtifact = sourceArtifacts.Contains(snapshot.Artifact);
+                var evidence = new List<string>
+                {
+                    snapshot.Count > 0 ? "final inventory has count > 0" : "final inventory count is 0",
+                    isSourceArtifact ? "artifact is provided by source ingestion" : "artifact is produced by scanner stages"
+                };
+                if (producers.Length > 0)
+                {
+                    evidence.Add($"producer stages: {string.Join(", ", producers)}");
+                }
+
+                if (consumers.Length > 0)
+                {
+                    evidence.Add($"consumer stages: {string.Join(", ", consumers)}");
+                }
+
+                return new ArtifactInventoryExport(
+                    snapshot.Artifact.ToString(),
+                    snapshot.Count,
+                    snapshot.StateKey,
+                    snapshot.Revision,
+                    snapshot.Count > 0,
+                    isSourceArtifact,
+                    IsImportCriticalArtifact(snapshot.Artifact),
+                    ImportanceFor(snapshot.Artifact),
+                    ReadinessImpactFor(snapshot.Artifact),
+                    producers,
+                    consumers,
+                    evidence);
+            })
+            .ToArray();
+    }
+
+    private static bool IsImportCriticalArtifact(PlanArtifactKind artifact) =>
+        artifact is PlanArtifactKind.Document
+            or PlanArtifactKind.Pages
+            or PlanArtifactKind.Primitives
+            or PlanArtifactKind.SheetRegions
+            or PlanArtifactKind.Calibration
+            or PlanArtifactKind.Walls
+            or PlanArtifactKind.WallGraph;
+
+    private static string ImportanceFor(PlanArtifactKind artifact) =>
+        artifact switch
+        {
+            PlanArtifactKind.Document or PlanArtifactKind.Pages or PlanArtifactKind.Primitives => "Source",
+            PlanArtifactKind.RasterImages or PlanArtifactKind.PdfImages => "SourceMedia",
+            PlanArtifactKind.Layers or PlanArtifactKind.SheetRegions or PlanArtifactKind.TitleBlocks
+                or PlanArtifactKind.Annotations or PlanArtifactKind.GridAxes or PlanArtifactKind.SurfacePatterns => "Layout",
+            PlanArtifactKind.Calibration or PlanArtifactKind.Dimensions or PlanArtifactKind.GridBays
+                or PlanArtifactKind.MeasurementConsistency or PlanArtifactKind.DimensionChains => "Measurement",
+            PlanArtifactKind.Walls => "Geometry",
+            PlanArtifactKind.WallGraph or PlanArtifactKind.TopologySpans or PlanArtifactKind.Openings
+                or PlanArtifactKind.Rooms or PlanArtifactKind.RoomAdjacency => "Topology",
+            PlanArtifactKind.ObjectCandidates or PlanArtifactKind.ObjectGroups or PlanArtifactKind.ObjectAggregates
+                or PlanArtifactKind.VisualAiClassifications => "Semantics",
+            PlanArtifactKind.RoutingBarriers or PlanArtifactKind.RoutingPassages or PlanArtifactKind.RoutingObstacles
+                or PlanArtifactKind.RoutingRoomUseHints or PlanArtifactKind.RoutingSuppressedObjects
+                or PlanArtifactKind.RoutingIgnoredObjects => "Routing",
+            PlanArtifactKind.Diagnostics or PlanArtifactKind.LayerConsistency or PlanArtifactKind.Quality => "Quality",
+            _ => "Other"
+        };
+
+    private static string ReadinessImpactFor(PlanArtifactKind artifact) =>
+        artifact switch
+        {
+            PlanArtifactKind.Document or PlanArtifactKind.Pages or PlanArtifactKind.Primitives => "SourceIngestion",
+            PlanArtifactKind.RasterImages or PlanArtifactKind.PdfImages => "RasterReview",
+            PlanArtifactKind.SheetRegions or PlanArtifactKind.TitleBlocks or PlanArtifactKind.Annotations
+                or PlanArtifactKind.GridAxes or PlanArtifactKind.SurfacePatterns => "LayoutReview",
+            PlanArtifactKind.Calibration or PlanArtifactKind.Dimensions or PlanArtifactKind.GridBays
+                or PlanArtifactKind.MeasurementConsistency or PlanArtifactKind.DimensionChains => "MetricImport",
+            PlanArtifactKind.Walls or PlanArtifactKind.WallGraph or PlanArtifactKind.TopologySpans
+                or PlanArtifactKind.Openings or PlanArtifactKind.Rooms or PlanArtifactKind.RoomAdjacency => "GeometryImport",
+            PlanArtifactKind.ObjectCandidates or PlanArtifactKind.ObjectGroups or PlanArtifactKind.ObjectAggregates
+                or PlanArtifactKind.VisualAiClassifications => "SemanticReview",
+            PlanArtifactKind.RoutingBarriers or PlanArtifactKind.RoutingPassages or PlanArtifactKind.RoutingObstacles
+                or PlanArtifactKind.RoutingRoomUseHints or PlanArtifactKind.RoutingSuppressedObjects
+                or PlanArtifactKind.RoutingIgnoredObjects => "RoutingImport",
+            PlanArtifactKind.Diagnostics or PlanArtifactKind.LayerConsistency or PlanArtifactKind.Quality => "QualityReview",
+            _ => "None"
+        };
 }
 
 public sealed record StageExport(
     string Stage,
+    string DisplayName,
+    string Kind,
+    int ExecutionWave,
+    bool IsParallelCandidate,
+    IReadOnlyList<string> Reads,
+    IReadOnlyList<string> OptionalReads,
+    IReadOnlyList<string> Writes,
+    IReadOnlyList<string> Capabilities,
+    bool IsDependencyReady,
+    int DependencyLevel,
+    int PreferredDependencyLevel,
+    IReadOnlyList<string> AvailableBefore,
+    IReadOnlyList<string> MissingRequiredReads,
+    IReadOnlyList<string> MissingOptionalReads,
+    StageRuntimeReadinessExport RuntimeReadiness,
+    StageOutputReadinessExport OutputReadiness,
+    IReadOnlyList<ArtifactSnapshotExport> InputArtifacts,
+    IReadOnlyList<ArtifactSnapshotExport> OutputArtifacts,
+    IReadOnlyList<ArtifactChangeExport> ChangedArtifacts,
+    IReadOnlyList<ArtifactDeltaExport> ArtifactDeltas,
+    StageContractExport Contract,
     double DurationMilliseconds,
     int InputCount,
     int OutputCount,
@@ -2321,9 +2862,30 @@ public sealed record StageExport(
     int WarningCount,
     int ErrorCount)
 {
-    public static StageExport From(PipelineStageReport report) =>
+    public static StageExport From(PipelineStageReport report, PipelineStagePlan? stagePlan = null) =>
         new(
             report.Stage,
+            report.Metadata.DisplayName,
+            report.Metadata.Kind.ToString(),
+            stagePlan?.ExecutionWave ?? 0,
+            stagePlan?.IsParallelCandidate ?? false,
+            report.Metadata.Reads.Select(artifact => artifact.ToString()).ToArray(),
+            report.Metadata.OptionalReads.Select(artifact => artifact.ToString()).ToArray(),
+            report.Metadata.Writes.Select(artifact => artifact.ToString()).ToArray(),
+            report.Metadata.Capabilities.ToArray(),
+            stagePlan?.IsDependencyReady ?? true,
+            stagePlan?.DependencyLevel ?? 0,
+            stagePlan?.PreferredDependencyLevel ?? 0,
+            stagePlan?.AvailableBefore.Select(artifact => artifact.ToString()).ToArray() ?? Array.Empty<string>(),
+            stagePlan?.MissingRequiredReads.Select(artifact => artifact.ToString()).ToArray() ?? Array.Empty<string>(),
+            stagePlan?.MissingOptionalReads.Select(artifact => artifact.ToString()).ToArray() ?? Array.Empty<string>(),
+            StageRuntimeReadinessExport.From(report.RuntimeReadiness),
+            StageOutputReadinessExport.From(report.OutputReadiness),
+            report.InputArtifacts.Select(ArtifactSnapshotExport.From).ToArray(),
+            report.OutputArtifacts.Select(ArtifactSnapshotExport.From).ToArray(),
+            report.ChangedArtifacts.Select(ArtifactChangeExport.From).ToArray(),
+            report.ArtifactDeltas.Select(ArtifactDeltaExport.From).ToArray(),
+            StageContractExport.From(report.Contract),
             report.Duration.TotalMilliseconds,
             report.InputCount,
             report.OutputCount,
@@ -2331,6 +2893,284 @@ public sealed record StageExport(
             report.InfoCount,
             report.WarningCount,
             report.ErrorCount);
+}
+
+public sealed record StageOutputReadinessExport(
+    bool DeclaredOutputsHaveData,
+    bool HasEmptyDeclaredOutputs,
+    IReadOnlyList<string> NonEmptyDeclaredOutputs,
+    IReadOnlyList<string> EmptyDeclaredOutputs,
+    IReadOnlyList<string> ChangedDeclaredOutputs,
+    IReadOnlyList<string> UnchangedDeclaredOutputs,
+    bool HasUndeclaredChanges,
+    IReadOnlyList<string> UndeclaredChangedArtifacts,
+    IReadOnlyList<string> Evidence)
+{
+    public static StageOutputReadinessExport From(PipelineStageOutputReadiness readiness) =>
+        new(
+            readiness.DeclaredOutputsHaveData,
+            readiness.HasEmptyDeclaredOutputs,
+            readiness.NonEmptyDeclaredOutputs.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.EmptyDeclaredOutputs.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.ChangedDeclaredOutputs.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.UnchangedDeclaredOutputs.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.HasUndeclaredChanges,
+            readiness.UndeclaredChangedArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.Evidence);
+}
+
+public sealed record StageRuntimeReadinessExport(
+    bool RequiredReadsHaveData,
+    bool HasEmptyRequiredReads,
+    IReadOnlyList<string> NonEmptyRequiredReads,
+    IReadOnlyList<string> EmptyRequiredReads,
+    bool OptionalReadsHaveData,
+    bool HasEmptyOptionalReads,
+    IReadOnlyList<string> NonEmptyOptionalReads,
+    IReadOnlyList<string> EmptyOptionalReads,
+    IReadOnlyList<string> Evidence)
+{
+    public static StageRuntimeReadinessExport From(PipelineStageRuntimeReadiness readiness) =>
+        new(
+            readiness.RequiredReadsHaveData,
+            readiness.HasEmptyRequiredReads,
+            readiness.NonEmptyRequiredReads.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.EmptyRequiredReads.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.OptionalReadsHaveData,
+            readiness.HasEmptyOptionalReads,
+            readiness.NonEmptyOptionalReads.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.EmptyOptionalReads.Select(artifact => artifact.ToString()).ToArray(),
+            readiness.Evidence);
+}
+
+public sealed record StageContractExport(
+    bool WritesOnlyDeclaredArtifacts,
+    IReadOnlyList<string> DeclaredWrites,
+    IReadOnlyList<string> ChangedArtifacts,
+    IReadOnlyList<string> UndeclaredChangedArtifacts,
+    IReadOnlyList<string> DeclaredUnchangedArtifacts)
+{
+    public static StageContractExport From(PipelineStageContract contract) =>
+        new(
+            contract.WritesOnlyDeclaredArtifacts,
+            contract.DeclaredWrites.Select(artifact => artifact.ToString()).ToArray(),
+            contract.ChangedArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            contract.UndeclaredChangedArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            contract.DeclaredUnchangedArtifacts.Select(artifact => artifact.ToString()).ToArray());
+}
+
+public sealed record ExecutionWaveExport(
+    int Level,
+    int StageCount,
+    IReadOnlyList<string> Stages,
+    IReadOnlyList<string> Reads,
+    IReadOnlyList<string> Writes,
+    IReadOnlyList<string> WriteConflictArtifacts,
+    IReadOnlyList<PipelineWaveDependencyExport> IntraWaveDependencies,
+    IReadOnlyList<string> DirectDownstreamStages,
+    int DirectDownstreamStageCount,
+    IReadOnlyList<string> DownstreamReadArtifacts,
+    bool HasWriteConflicts,
+    bool HasIntraWaveDependencies,
+    bool IsParallelCandidate,
+    string ParallelReadiness,
+    IReadOnlyList<string> SchedulingReasons,
+    string RecommendedExecutionMode)
+{
+    public static ExecutionWaveExport From(PipelineExecutionWave wave) =>
+        new(
+            wave.Level,
+            wave.StageCount,
+            wave.Stages,
+            wave.Reads.Select(artifact => artifact.ToString()).ToArray(),
+            wave.Writes.Select(artifact => artifact.ToString()).ToArray(),
+            wave.WriteConflictArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            wave.IntraWaveDependencies.Select(PipelineWaveDependencyExport.From).ToArray(),
+            wave.DirectDownstreamStages,
+            wave.DirectDownstreamStageCount,
+            wave.DownstreamReadArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            wave.HasWriteConflicts,
+            wave.HasIntraWaveDependencies,
+            wave.IsParallelCandidate,
+            wave.ParallelReadiness,
+            wave.SchedulingReasons,
+            wave.RecommendedExecutionMode);
+}
+
+public sealed record RerunImpactExport(
+    string Artifact,
+    bool IsSourceArtifact,
+    string ImpactScope,
+    IReadOnlyList<string> ProducerStages,
+    IReadOnlyList<string> DirectConsumerStages,
+    IReadOnlyList<string> AffectedStages,
+    IReadOnlyList<string> AffectedArtifacts,
+    int FirstAffectedWave,
+    int AffectedStageCount,
+    bool HasImpact,
+    IReadOnlyList<string> Evidence)
+{
+    public static RerunImpactExport From(PipelineRerunImpact impact) =>
+        new(
+            impact.Artifact.ToString(),
+            impact.IsSourceArtifact,
+            impact.ImpactScope,
+            impact.ProducerStages,
+            impact.DirectConsumerStages,
+            impact.AffectedStages,
+            impact.AffectedArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            impact.FirstAffectedWave,
+            impact.AffectedStageCount,
+            impact.HasImpact,
+            impact.Evidence);
+}
+
+public sealed record RerunPlanExport(
+    string PlanId,
+    string DisplayName,
+    IReadOnlyList<string> ChangedArtifacts,
+    IReadOnlyList<string> ChangedSourceArtifacts,
+    IReadOnlyList<string> DirectConsumerStages,
+    IReadOnlyList<string> RerunStages,
+    IReadOnlyList<int> RerunWaves,
+    IReadOnlyList<string> AffectedArtifacts,
+    int FirstRerunWave,
+    int LastRerunWave,
+    int RerunStageCount,
+    int AffectedArtifactCount,
+    bool HasWork,
+    string RecommendedExecutionMode,
+    IReadOnlyList<string> Evidence)
+{
+    public static RerunPlanExport From(PipelineRerunPlan plan) =>
+        new(
+            plan.PlanId,
+            plan.DisplayName,
+            plan.ChangedArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            plan.ChangedSourceArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            plan.DirectConsumerStages,
+            plan.RerunStages,
+            plan.RerunWaves,
+            plan.AffectedArtifacts.Select(artifact => artifact.ToString()).ToArray(),
+            plan.FirstRerunWave,
+            plan.LastRerunWave,
+            plan.RerunStageCount,
+            plan.AffectedArtifactCount,
+            plan.HasWork,
+            plan.RecommendedExecutionMode,
+            plan.Evidence);
+}
+
+public sealed record PipelineWaveDependencyExport(
+    string Stage,
+    string DependsOnStage,
+    IReadOnlyList<string> Artifacts)
+{
+    public static PipelineWaveDependencyExport From(PipelineWaveDependency dependency) =>
+        new(
+            dependency.Stage,
+            dependency.DependsOnStage,
+            dependency.Artifacts.Select(artifact => artifact.ToString()).ToArray());
+}
+
+public sealed record ArtifactSnapshotExport(
+    string Artifact,
+    int Count,
+    string StateKey,
+    int Revision,
+    IReadOnlyList<string> Evidence)
+{
+    public static ArtifactSnapshotExport From(PipelineArtifactSnapshot snapshot) =>
+        new(
+            snapshot.Artifact.ToString(),
+            snapshot.Count,
+            snapshot.StateKey,
+            snapshot.Revision,
+            snapshot.Evidence);
+}
+
+public sealed record ArtifactChangeExport(
+    string Artifact,
+    int BeforeCount,
+    int AfterCount,
+    int Delta,
+    string ChangeKind)
+{
+    public static ArtifactChangeExport From(PipelineArtifactChange change) =>
+        new(
+            change.Artifact.ToString(),
+            change.BeforeCount,
+            change.AfterCount,
+            change.Delta,
+            change.ChangeKind.ToString());
+}
+
+public sealed record ArtifactDeltaExport(
+    string Artifact,
+    int BeforeCount,
+    int AfterCount,
+    int Delta,
+    string ChangeKind,
+    bool Changed,
+    bool WasPresent,
+    bool IsPresent,
+    bool IsDeclaredWrite,
+    bool IsEmptyDeclaredOutput,
+    IReadOnlyList<string> Evidence)
+{
+    public static ArtifactDeltaExport From(PipelineArtifactDelta delta) =>
+        new(
+            delta.Artifact.ToString(),
+            delta.BeforeCount,
+            delta.AfterCount,
+            delta.Delta,
+            delta.ChangeKind.ToString(),
+            delta.Changed,
+            delta.WasPresent,
+            delta.IsPresent,
+            delta.IsDeclaredWrite,
+            delta.IsEmptyDeclaredOutput,
+            EvidenceFor(delta));
+
+    private static IReadOnlyList<string> EvidenceFor(PipelineArtifactDelta delta)
+    {
+        var evidence = new List<string>
+        {
+            delta.IsDeclaredWrite ? "artifact is declared as a stage output" : "artifact changed outside declared stage outputs",
+            $"before count {delta.BeforeCount}, after count {delta.AfterCount}"
+        };
+
+        if (delta.IsEmptyDeclaredOutput)
+        {
+            evidence.Add("declared output count is zero after stage completion");
+        }
+        else if (!delta.Changed)
+        {
+            evidence.Add("artifact count did not change during this stage");
+        }
+        else
+        {
+            evidence.Add($"artifact lifecycle status: {delta.ChangeKind}");
+        }
+
+        return evidence;
+    }
+}
+
+public sealed record PipelinePlanIssueExport(
+    string Code,
+    string Severity,
+    string Stage,
+    string Message,
+    IReadOnlyList<string> Artifacts)
+{
+    public static PipelinePlanIssueExport From(PipelinePlanIssue issue) =>
+        new(
+            issue.Code,
+            issue.Severity.ToString(),
+            issue.Stage,
+            issue.Message,
+            issue.Artifacts.Select(artifact => artifact.ToString()).ToArray());
 }
 
 public sealed record DiagnosticExport(

@@ -2,14 +2,35 @@ namespace OpenPlanTrace;
 
 public static class PlanRoutingLayerBuilder
 {
+    private const double ShortUnreferencedRoutingBarrierLengthMeters = 1.25;
+    private const double ShortUnreferencedRoutingBarrierDrawingLength = 36.0;
+    private const double RoutingNodeMergeTolerance = 0.75;
+    private const int DenseMinorRoutingPatternJunctionThreshold = 4;
+
     public static PlanRoutingLayer FromScanResult(PlanScanResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
 
         var wallComponentLookup = BuildWallComponentLookup(result.WallGraph.Components);
-        var barriers = result.Walls
-            .Select(wall => CreateBarrier(wall, wallComponentLookup))
+        var protectedRoutingWallIds = BuildProtectedRoutingWallIds(result);
+        var structuralComponentPages = BuildStructuralComponentPages(result.WallGraph.Components);
+        var roomSolvedPages = BuildRoomSolvedPages(result.Rooms);
+        var denseMinorRoutingDetailPatterns = DetectDenseMinorRoutingDetailPatterns(result);
+        var denseMinorRoutingDetailWallIds = denseMinorRoutingDetailPatterns
+            .SelectMany(pattern => pattern.WallIds)
+            .ToHashSet(StringComparer.Ordinal);
+        var allBarriers = BuildRoutingBarriers(result, wallComponentLookup);
+        var suppressedIsolatedBarrierCount = allBarriers.Count(barrier =>
+            IsUnusedIsolatedRoutingBarrier(barrier, protectedRoutingWallIds, structuralComponentPages));
+        var suppressedShortUnreferencedBarrierCount = allBarriers.Count(barrier =>
+            IsUnusedShortStructuralRoutingBarrier(barrier, protectedRoutingWallIds, roomSolvedPages));
+        var suppressedDenseMinorDetailBarrierCount = allBarriers.Count(barrier =>
+            IsDenseMinorRoutingDetailBarrier(barrier, denseMinorRoutingDetailWallIds));
+        var barriers = allBarriers
             .Where(barrier => !barrier.ExcludedFromStructuralTopology)
+            .Where(barrier => !IsUnusedIsolatedRoutingBarrier(barrier, protectedRoutingWallIds, structuralComponentPages))
+            .Where(barrier => !IsUnusedShortStructuralRoutingBarrier(barrier, protectedRoutingWallIds, roomSolvedPages))
+            .Where(barrier => !IsDenseMinorRoutingDetailBarrier(barrier, denseMinorRoutingDetailWallIds))
             .ToArray();
 
         var passages = result.Openings
@@ -76,6 +97,10 @@ public static class PlanRoutingLayerBuilder
         var evidence = new[]
         {
             $"routing barriers from structural wall evidence: {barriers.Length}",
+            $"routing barriers are split at wall graph junctions when node geometry is available",
+            $"unused isolated wall fragments suppressed as routing barriers: {suppressedIsolatedBarrierCount}",
+            $"short unreferenced wall fragments suppressed as routing barriers: {suppressedShortUnreferencedBarrierCount}",
+            $"dense minor-detail routing barriers suppressed: {suppressedDenseMinorDetailBarrierCount}",
             $"routing passages from opening evidence: {passages.Length}",
             $"routing obstacles after aggregate suppression: {obstacles.Count}",
             $"suppressed child object candidates: {suppressedObjectIds.Length}",
@@ -134,8 +159,17 @@ public static class PlanRoutingLayerBuilder
             evidence);
     }
 
-    private static RoutingPassage CreatePassage(OpeningCandidate opening) =>
-        new(
+    private static RoutingPassage CreatePassage(OpeningCandidate opening)
+    {
+        var evidence = new List<string>(opening.Evidence);
+        var placementReady = ScanReviewQueueSummary.OpeningPlacementIsCoordinateReady(opening);
+        var reviewReasons = ScanReviewQueueSummary.OpeningReviewReasons(opening).ToArray();
+        if (!placementReady)
+        {
+            evidence.Add("opening placement is not coordinate-ready; routing passage requires review before exact placement use");
+        }
+
+        return new(
             $"routing-passage:{opening.Id}",
             opening.PageNumber,
             opening.Id,
@@ -151,10 +185,16 @@ public static class PlanRoutingLayerBuilder
             opening.HostWallIds,
             opening.ConnectedRoomIds,
             opening.ConnectedRoomLabels,
+            opening.ConnectedRoomLinks,
+            opening.RoomAdjacencyIds,
             opening.Placement,
+            placementReady,
+            reviewReasons.Length > 0,
+            reviewReasons,
             opening.Confidence,
             opening.SourcePrimitiveIds,
-            opening.Evidence);
+            evidence);
+    }
 
     private static RoutingObstacle CreateAggregateObstacle(
         ObjectAggregate aggregate,
@@ -354,11 +394,21 @@ public static class PlanRoutingLayerBuilder
     {
         var influence = InferCandidateRoutingInfluence(candidate);
         var roomUseKind = InferCandidateRoomUseHint(candidate);
-        var roomUseHintId = !string.IsNullOrWhiteSpace(suppressedObject?.RoomUseHintId)
-            ? suppressedObject.RoomUseHintId
-            : roomUseKind is not RoomUseKind.Unknown
+        string? roomUseHintId;
+        if (reason == RoutingIgnoredObjectReason.SuppressedByAggregate)
+        {
+            roomUseHintId = suppressedObject?.RoomUseHintId;
+        }
+        else if (!string.IsNullOrWhiteSpace(suppressedObject?.RoomUseHintId))
+        {
+            roomUseHintId = suppressedObject.RoomUseHintId;
+        }
+        else
+        {
+            roomUseHintId = roomUseKind is not RoomUseKind.Unknown
                 ? $"routing-room-use:{candidate.Id}"
                 : null;
+        }
         var evidence = new List<string>
         {
             reason switch
@@ -534,4 +584,443 @@ public static class PlanRoutingLayerBuilder
 
         return lookup;
     }
+
+    private static RoutingBarrier[] BuildRoutingBarriers(
+        PlanScanResult result,
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup)
+    {
+        var nodesById = result.WallGraph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var edgesByWallId = result.WallGraph.Edges
+            .GroupBy(edge => edge.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var barriers = new List<RoutingBarrier>();
+
+        foreach (var wall in result.Walls)
+        {
+            if (!edgesByWallId.TryGetValue(wall.Id, out var edges))
+            {
+                barriers.Add(CreateBarrier(wall, wallComponentLookup));
+                continue;
+            }
+
+            var edgeBarriers = CreateCompressedGraphSpanBarriers(
+                wall,
+                edges,
+                nodesById,
+                edgesByWallId,
+                result.Walls,
+                wallComponentLookup,
+                result.Calibration);
+            if (edgeBarriers.Length == 0)
+            {
+                barriers.Add(CreateBarrier(wall, wallComponentLookup));
+                continue;
+            }
+
+            barriers.AddRange(edgeBarriers);
+        }
+
+        return barriers.ToArray();
+    }
+
+    public static IReadOnlyList<RoutingDenseMinorDetailPattern> DetectDenseMinorRoutingDetailPatterns(PlanScanResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        var wallComponentLookup = BuildWallComponentLookup(result.WallGraph.Components);
+        var nodesById = result.WallGraph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var wallLookup = result.Walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
+        var edgesByWallId = result.WallGraph.Edges
+            .GroupBy(edge => edge.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var patterns = new List<RoutingDenseMinorDetailPattern>();
+        var sequenceByPage = new Dictionary<int, int>();
+
+        foreach (var hostWall in result.Walls)
+        {
+            if (!wallComponentLookup.TryGetValue(hostWall.Id, out var hostComponent)
+                || hostComponent.Kind != WallGraphComponentKind.SecondaryStructural
+                || !edgesByWallId.TryGetValue(hostWall.Id, out var hostEdges))
+            {
+                continue;
+            }
+
+            var minorIncidentWallIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var nodeId in hostEdges.SelectMany(edge => new[] { edge.FromNodeId, edge.ToNodeId }).Distinct(StringComparer.Ordinal))
+            {
+                if (!nodesById.TryGetValue(nodeId, out var node) || node.Kind != WallNodeKind.TJunction)
+                {
+                    continue;
+                }
+
+                foreach (var incidentWallId in IncidentWallIds(node, edgesByWallId).Where(id => id != hostWall.Id))
+                {
+                    if (!wallLookup.TryGetValue(incidentWallId, out var incidentWall)
+                        || !wallComponentLookup.TryGetValue(incidentWallId, out var incidentComponent)
+                        || incidentComponent.Kind != WallGraphComponentKind.SecondaryStructural
+                        || !IsMinorPerpendicularRoutingDetail(hostWall, incidentWall, nodesById, node))
+                    {
+                        continue;
+                    }
+
+                    minorIncidentWallIds.Add(incidentWallId);
+                }
+            }
+
+            if (minorIncidentWallIds.Count < DenseMinorRoutingPatternJunctionThreshold)
+            {
+                continue;
+            }
+
+            var pageSequence = sequenceByPage.TryGetValue(hostWall.PageNumber, out var lastSequence)
+                ? lastSequence + 1
+                : 1;
+            sequenceByPage[hostWall.PageNumber] = pageSequence;
+            var incidentWallIds = minorIncidentWallIds
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var wallIds = new[] { hostWall.Id }
+                .Concat(incidentWallIds)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var patternWalls = wallIds
+                .Select(id => wallLookup.TryGetValue(id, out var wall) ? wall : null)
+                .OfType<WallSegment>()
+                .ToArray();
+            var sourcePrimitiveIds = patternWalls
+                .SelectMany(wall => wall.SourcePrimitiveIds)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var bounds = PlanRect.Union(patternWalls.Select(wall => wall.Bounds));
+            var confidence = patternWalls.Length == 0
+                ? Confidence.Medium
+                : new Confidence(Math.Min(
+                    0.9,
+                    patternWalls.Average(wall => wall.Confidence.Value) + 0.05));
+            var evidence = new[]
+            {
+                $"secondary wall {hostWall.Id} has {incidentWallIds.Length} repeated minor perpendicular detail wall(s)",
+                $"minor T-junction count {minorIncidentWallIds.Count}",
+                "pattern is suppressed from trusted routing barriers but preserved as raw wall evidence",
+                $"host wall component {hostComponent.Id} classified as {hostComponent.Kind}"
+            };
+
+            patterns.Add(new RoutingDenseMinorDetailPattern(
+                $"routing-dense-minor-detail:p{hostWall.PageNumber}:{pageSequence}",
+                hostWall.PageNumber,
+                hostWall.Id,
+                hostComponent.Id,
+                hostComponent.Kind,
+                incidentWallIds,
+                wallIds,
+                bounds,
+                minorIncidentWallIds.Count,
+                incidentWallIds.Length,
+                confidence,
+                sourcePrimitiveIds,
+                evidence));
+        }
+
+        return patterns;
+    }
+
+    private static RoutingBarrier[] CreateCompressedGraphSpanBarriers(
+        WallSegment wall,
+        IReadOnlyList<WallEdge> edges,
+        IReadOnlyDictionary<string, WallNode> nodesById,
+        IReadOnlyDictionary<string, WallEdge[]> edgesByWallId,
+        IReadOnlyList<WallSegment> walls,
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup,
+        PlanCalibration calibration)
+    {
+        var wallLookup = walls.ToDictionary(item => item.Id, StringComparer.Ordinal);
+        var orderedNodes = edges
+            .SelectMany(edge => new[] { edge.FromNodeId, edge.ToNodeId })
+            .Distinct(StringComparer.Ordinal)
+            .Select(id => nodesById.TryGetValue(id, out var node) ? node : null)
+            .OfType<WallNode>()
+            .Select(node => new RoutingWallNodeProjection(node, wall.CenterLine.ProjectParameter(node.Position)))
+            .Where(item => item.Parameter >= -0.01 && item.Parameter <= 1.01)
+            .OrderBy(item => item.Parameter)
+            .ThenBy(item => item.Node.Id, StringComparer.Ordinal)
+            .ToArray();
+        orderedNodes = DeduplicateProjectedRoutingNodes(orderedNodes);
+        if (orderedNodes.Length < 2)
+        {
+            return Array.Empty<RoutingBarrier>();
+        }
+
+        var splitNodes = orderedNodes
+            .Where((item, index) => index == 0
+                || index == orderedNodes.Length - 1
+                || IsHardRoutingSplitNode(wall, item.Node, edgesByWallId, wallLookup, nodesById))
+            .ToArray();
+        if (splitNodes.Length < 2)
+        {
+            return Array.Empty<RoutingBarrier>();
+        }
+
+        var barriers = new List<RoutingBarrier>();
+        for (var index = 1; index < splitNodes.Length; index++)
+        {
+            var from = splitNodes[index - 1];
+            var to = splitNodes[index];
+            var centerLine = new PlanLineSegment(from.Node.Position, to.Node.Position);
+            if (centerLine.Length <= 0.5)
+            {
+                continue;
+            }
+
+            var compressedNodeCount = orderedNodes.Count(item =>
+                item.Parameter > from.Parameter + 0.0001
+                && item.Parameter < to.Parameter - 0.0001);
+            barriers.Add(CreateGraphSpanBarrier(
+                wall,
+                $"routing-barrier:{wall.Id}:span:{index}",
+                centerLine,
+                from.Node.Id,
+                to.Node.Id,
+                compressedNodeCount,
+                wallComponentLookup,
+                calibration));
+        }
+
+        return barriers.ToArray();
+    }
+
+    private static RoutingWallNodeProjection[] DeduplicateProjectedRoutingNodes(IReadOnlyList<RoutingWallNodeProjection> nodes)
+    {
+        var deduped = new List<RoutingWallNodeProjection>();
+        foreach (var node in nodes)
+        {
+            if (deduped.Any(existing => existing.Node.Position.DistanceTo(node.Node.Position) <= RoutingNodeMergeTolerance))
+            {
+                continue;
+            }
+
+            deduped.Add(node);
+        }
+
+        return deduped.ToArray();
+    }
+
+    private static bool IsHardRoutingSplitNode(
+        WallSegment wall,
+        WallNode node,
+        IReadOnlyDictionary<string, WallEdge[]> edgesByWallId,
+        IReadOnlyDictionary<string, WallSegment> wallLookup,
+        IReadOnlyDictionary<string, WallNode> nodesById)
+    {
+        if (node.Kind == WallNodeKind.Inline)
+        {
+            return false;
+        }
+
+        if (node.Kind is WallNodeKind.Endpoint or WallNodeKind.Corner or WallNodeKind.Crossing or WallNodeKind.Junction)
+        {
+            return true;
+        }
+
+        if (node.Kind != WallNodeKind.TJunction)
+        {
+            return true;
+        }
+
+        var incidentWalls = IncidentWallIds(node, edgesByWallId)
+            .Where(id => !string.Equals(id, wall.Id, StringComparison.Ordinal))
+            .Select(id => wallLookup.TryGetValue(id, out var incidentWall) ? incidentWall : null)
+            .OfType<WallSegment>()
+            .ToArray();
+        return incidentWalls.Length == 0
+            || incidentWalls.Any(incidentWall => !IsMinorPerpendicularRoutingDetail(wall, incidentWall, nodesById, node));
+    }
+
+    private static IReadOnlyList<string> IncidentWallIds(
+        WallNode node,
+        IReadOnlyDictionary<string, WallEdge[]> edgesByWallId)
+    {
+        var ids = new List<string>();
+        foreach (var (wallId, edges) in edgesByWallId)
+        {
+            if (edges.Any(edge =>
+                string.Equals(edge.FromNodeId, node.Id, StringComparison.Ordinal)
+                || string.Equals(edge.ToNodeId, node.Id, StringComparison.Ordinal)))
+            {
+                ids.Add(wallId);
+            }
+        }
+
+        return ids;
+    }
+
+    private static bool IsMinorPerpendicularRoutingDetail(
+        WallSegment hostWall,
+        WallSegment incidentWall,
+        IReadOnlyDictionary<string, WallNode> nodesById,
+        WallNode node)
+    {
+        if (!IsNearPerpendicular(hostWall.CenterLine, incidentWall.CenterLine))
+        {
+            return false;
+        }
+
+        if (incidentWall.DrawingLength <= ShortUnreferencedRoutingBarrierDrawingLength
+            || incidentWall.LengthMeters is > 0 and <= ShortUnreferencedRoutingBarrierLengthMeters)
+        {
+            return true;
+        }
+
+        return incidentWall.CenterLine.Start.DistanceTo(node.Position) <= RoutingNodeMergeTolerance
+            && nodesById.Values.Count(other => other.Position.DistanceTo(incidentWall.CenterLine.End) <= RoutingNodeMergeTolerance) == 0
+            || incidentWall.CenterLine.End.DistanceTo(node.Position) <= RoutingNodeMergeTolerance
+            && nodesById.Values.Count(other => other.Position.DistanceTo(incidentWall.CenterLine.Start) <= RoutingNodeMergeTolerance) == 0;
+    }
+
+    private static bool IsNearPerpendicular(PlanLineSegment first, PlanLineSegment second)
+    {
+        var delta = Math.Abs(
+            GeometryOperations.NormalizeAngleRadians(first.AngleRadians)
+            - GeometryOperations.NormalizeAngleRadians(second.AngleRadians));
+        delta = Math.Min(delta, Math.PI - delta);
+        return Math.Abs(delta - (Math.PI / 2.0)) <= 0.16;
+    }
+
+    private static RoutingBarrier CreateGraphSpanBarrier(
+        WallSegment wall,
+        string id,
+        PlanLineSegment centerLine,
+        string fromNodeId,
+        string toNodeId,
+        int compressedNodeCount,
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup,
+        PlanCalibration calibration)
+    {
+        wallComponentLookup.TryGetValue(wall.Id, out var component);
+        var scaleGroup = calibration.SelectMeasurementScaleGroup(
+            wall.PageNumber,
+            centerLine.Bounds.Inflate(Math.Max(wall.Thickness / 2.0, 0.5)),
+            wall.SourceRegionId);
+        var evidence = new List<string>(wall.Evidence)
+        {
+            $"wall graph span from {fromNodeId} to {toNodeId}",
+            "routing barrier split at hard wall graph junction nodes"
+        };
+        if (compressedNodeCount > 0)
+        {
+            evidence.Add($"compressed {compressedNodeCount} minor routing junction node(s)");
+        }
+
+        if (component is not null)
+        {
+            evidence.Add($"wall graph component {component.Id} classified as {component.Kind}");
+            if (component.ExcludedFromStructuralTopology)
+            {
+                evidence.Add("component is excluded from structural topology and routing barriers");
+            }
+        }
+
+        return new RoutingBarrier(
+            id,
+            wall.PageNumber,
+            wall.Id,
+            RoutingSourceKind.Wall,
+            centerLine,
+            centerLine.Bounds.Inflate(Math.Max(wall.Thickness / 2.0, 0.5)),
+            wall.Thickness,
+            centerLine.Length,
+            calibration.ToMeters(centerLine.Length, scaleGroup),
+            wall.ThicknessMillimeters,
+            scaleGroup?.Id ?? wall.MeasurementScaleGroupId,
+            component?.Id,
+            component?.Kind,
+            component?.ExcludedFromStructuralTopology ?? false,
+            wall.Confidence,
+            wall.SourcePrimitiveIds,
+            evidence);
+    }
+
+    private static IReadOnlySet<string> BuildProtectedRoutingWallIds(PlanScanResult result)
+    {
+        var wallIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var room in result.Rooms)
+        {
+            foreach (var wallId in room.WallIds)
+            {
+                AddIfPresent(wallIds, wallId);
+            }
+        }
+
+        foreach (var opening in result.Openings)
+        {
+            foreach (var wallId in opening.HostWallIds)
+            {
+                AddIfPresent(wallIds, wallId);
+            }
+
+            if (opening.Placement is null)
+            {
+                continue;
+            }
+
+            AddIfPresent(wallIds, opening.Placement.HostWallId);
+            foreach (var wallId in opening.Placement.AnchorWallIds)
+            {
+                AddIfPresent(wallIds, wallId);
+            }
+        }
+
+        return wallIds;
+    }
+
+    private static IReadOnlySet<int> BuildStructuralComponentPages(IReadOnlyList<WallGraphComponent> components) =>
+        components
+            .Where(component => !component.ExcludedFromStructuralTopology)
+            .Where(component => component.Kind is WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural)
+            .Select(component => component.PageNumber)
+            .ToHashSet();
+
+    private static IReadOnlySet<int> BuildRoomSolvedPages(IReadOnlyList<RoomRegion> rooms) =>
+        rooms
+            .Select(room => room.PageNumber)
+            .ToHashSet();
+
+    private static bool IsUnusedIsolatedRoutingBarrier(
+        RoutingBarrier barrier,
+        IReadOnlySet<string> protectedRoutingWallIds,
+        IReadOnlySet<int> structuralComponentPages) =>
+        barrier.WallComponentKind == WallGraphComponentKind.IsolatedFragment
+        && structuralComponentPages.Contains(barrier.PageNumber)
+        && !protectedRoutingWallIds.Contains(barrier.SourceId);
+
+    private static bool IsUnusedShortStructuralRoutingBarrier(
+        RoutingBarrier barrier,
+        IReadOnlySet<string> protectedRoutingWallIds,
+        IReadOnlySet<int> roomSolvedPages) =>
+        barrier.WallComponentKind is WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural
+        && roomSolvedPages.Contains(barrier.PageNumber)
+        && !protectedRoutingWallIds.Contains(barrier.SourceId)
+        && IsShortRoutingBarrier(barrier);
+
+    private static bool IsDenseMinorRoutingDetailBarrier(
+        RoutingBarrier barrier,
+        IReadOnlySet<string> denseMinorRoutingDetailWallIds) =>
+        barrier.WallComponentKind == WallGraphComponentKind.SecondaryStructural
+        && denseMinorRoutingDetailWallIds.Contains(barrier.SourceId);
+
+    private static bool IsShortRoutingBarrier(RoutingBarrier barrier) =>
+        barrier.LengthMeters is > 0
+            ? barrier.LengthMeters <= ShortUnreferencedRoutingBarrierLengthMeters
+            : barrier.DrawingLength <= ShortUnreferencedRoutingBarrierDrawingLength;
+
+    private static void AddIfPresent(HashSet<string> ids, string? id)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            ids.Add(id);
+        }
+    }
+
+    private readonly record struct RoutingWallNodeProjection(WallNode Node, double Parameter);
 }

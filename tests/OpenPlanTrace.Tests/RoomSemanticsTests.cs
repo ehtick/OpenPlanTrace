@@ -225,12 +225,20 @@ public sealed class RoomSemanticsTests
         Assert.Contains(opening.ConnectedRoomLinks, link =>
             link.RoomLabel == "OFFICE"
             && link.SharesHostWall
+            && link.Side == OpeningRoomSide.PositiveNormalSide
+            && link.RoomSidePoint is { X: < 300 }
+            && link.NearestBoundaryPoint is { X: 300 }
+            && link.SignedDistanceFromOpening > 0
             && link.RoomAdjacencyIds.Contains(edge.Id)
             && link.DistanceToOpening <= 1
             && link.Confidence.Value > 0.85);
         Assert.Contains(opening.ConnectedRoomLinks, link =>
             link.RoomLabel == "STORAGE"
             && link.SharesHostWall
+            && link.Side == OpeningRoomSide.NegativeNormalSide
+            && link.RoomSidePoint is { X: > 300 }
+            && link.NearestBoundaryPoint is { X: 300 }
+            && link.SignedDistanceFromOpening < 0
             && link.RoomAdjacencyIds.Contains(edge.Id)
             && link.DistanceToOpening <= 1
             && link.Confidence.Value > 0.85);
@@ -246,6 +254,21 @@ public sealed class RoomSemanticsTests
         var cluster = Assert.Single(result.RoomAdjacencyGraph.Clusters);
         Assert.Equal(RoomClusterKind.ConnectedSuite, cluster.Kind);
         Assert.Contains(cluster.Evidence, item => item.Contains("opening", StringComparison.OrdinalIgnoreCase));
+
+        var routingPassage = Assert.Single(result.RoutingLayer.Passages);
+        Assert.Equal(opening.Id, routingPassage.SourceId);
+        Assert.Equal(opening.ConnectedRoomIds, routingPassage.ConnectedRoomIds);
+        Assert.Equal(opening.ConnectedRoomLabels, routingPassage.ConnectedRoomLabels);
+        Assert.Equal(opening.RoomAdjacencyIds, routingPassage.RoomAdjacencyIds);
+        Assert.Equal(2, routingPassage.ConnectedRoomLinks.Count);
+        Assert.Contains(routingPassage.ConnectedRoomLinks, link =>
+            link.RoomLabel == "OFFICE"
+            && link.Side == OpeningRoomSide.PositiveNormalSide
+            && link.RoomSidePoint is { X: < 300 });
+        Assert.Contains(routingPassage.ConnectedRoomLinks, link =>
+            link.RoomLabel == "STORAGE"
+            && link.Side == OpeningRoomSide.NegativeNormalSide
+            && link.RoomSidePoint is { X: > 300 });
     }
 
     [Fact]
@@ -321,13 +344,30 @@ public sealed class RoomSemanticsTests
         Assert.Contains(links, link =>
             link.GetProperty("roomLabel").GetString() == "OFFICE"
             && link.GetProperty("sharesHostWall").GetBoolean()
+            && link.GetProperty("side").GetString() == "PositiveNormalSide"
+            && link.GetProperty("roomSidePoint").GetProperty("x").GetDouble() < 300
+            && link.GetProperty("nearestBoundaryPoint").GetProperty("x").GetDouble() == 300
+            && link.GetProperty("signedDistanceFromOpening").GetDouble() > 0
             && link.GetProperty("roomAdjacencyIds").GetArrayLength() == 1
             && link.GetProperty("distanceToOpening").GetDouble() <= 1);
         Assert.Contains(links, link =>
             link.GetProperty("roomLabel").GetString() == "STORAGE"
             && link.GetProperty("sharesHostWall").GetBoolean()
+            && link.GetProperty("side").GetString() == "NegativeNormalSide"
+            && link.GetProperty("roomSidePoint").GetProperty("x").GetDouble() > 300
+            && link.GetProperty("nearestBoundaryPoint").GetProperty("x").GetDouble() == 300
+            && link.GetProperty("signedDistanceFromOpening").GetDouble() < 0
             && link.GetProperty("confidence").GetDouble() > 0.85);
         Assert.Equal(1, opening.GetProperty("roomAdjacencyIds").GetArrayLength());
+
+        var passage = parsed.RootElement.GetProperty("routingLayer").GetProperty("passages")[0];
+        Assert.Equal(2, passage.GetProperty("connectedRoomLinks").GetArrayLength());
+        Assert.Equal(1, passage.GetProperty("roomAdjacencyIds").GetArrayLength());
+        Assert.Contains(
+            "PositiveNormalSide",
+            passage.GetProperty("connectedRoomLinks")
+                .EnumerateArray()
+                .Select(link => link.GetProperty("side").GetString()));
     }
 
     [Fact]
@@ -349,7 +389,58 @@ public sealed class RoomSemanticsTests
         Assert.Equal(2, properties.GetProperty("connectedRoomLinkCount").GetInt32());
         Assert.Equal(2, properties.GetProperty("connectedRoomLinkDistances").GetArrayLength());
         Assert.Equal(2, properties.GetProperty("connectedRoomLinkConfidences").GetArrayLength());
+        Assert.Contains("PositiveNormalSide", properties.GetProperty("connectedRoomLinkSides").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("NegativeNormalSide", properties.GetProperty("connectedRoomLinkSides").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(properties.GetProperty("connectedRoomLinkSignedDistances").EnumerateArray(), item => item.GetDouble() > 0);
+        Assert.Contains(properties.GetProperty("connectedRoomLinkSignedDistances").EnumerateArray(), item => item.GetDouble() < 0);
+        Assert.Equal(2, properties.GetProperty("connectedRoomLinkRoomSidePoints").GetArrayLength());
+        Assert.Equal(2, properties.GetProperty("connectedRoomLinkNearestBoundaryPoints").GetArrayLength());
         Assert.Equal(1, properties.GetProperty("roomAdjacencyIds").GetArrayLength());
+
+        var routingPassageFeature = parsed.RootElement
+            .GetProperty("features")
+            .EnumerateArray()
+            .First(feature => feature.GetProperty("properties").GetProperty("featureType").GetString() == "routingPassage");
+        var routingPassageProperties = routingPassageFeature.GetProperty("properties");
+        Assert.Equal(2, routingPassageProperties.GetProperty("connectedRoomLinkCount").GetInt32());
+        Assert.Contains("PositiveNormalSide", routingPassageProperties.GetProperty("connectedRoomLinkSides").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("NegativeNormalSide", routingPassageProperties.GetProperty("connectedRoomLinkSides").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal(1, routingPassageProperties.GetProperty("roomAdjacencyIds").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task PlacementJsonExporter_IncludesOpeningRoomSideLinks()
+    {
+        var result = await ScanAdjacentRoomsWithDividerOpeningAsync();
+
+        var json = PlanPlacementJsonExporter.Serialize(result);
+        using var parsed = JsonDocument.Parse(json);
+        var opening = parsed.RootElement.GetProperty("openings")[0];
+
+        Assert.Equal(2, opening.GetProperty("connectedRoomIds").GetArrayLength());
+        Assert.Equal(2, opening.GetProperty("connectedRoomLabels").GetArrayLength());
+        Assert.Equal(1, opening.GetProperty("roomAdjacencyIds").GetArrayLength());
+        var links = opening.GetProperty("connectedRoomLinks").EnumerateArray().ToArray();
+        Assert.Equal(2, links.Length);
+        Assert.Contains(links, link =>
+            link.GetProperty("roomLabel").GetString() == "OFFICE"
+            && link.GetProperty("side").GetString() == "PositiveNormalSide"
+            && link.GetProperty("roomSidePoint").GetProperty("x").GetDouble() < 300
+            && link.GetProperty("signedDistanceFromOpening").GetDouble() > 0);
+        Assert.Contains(links, link =>
+            link.GetProperty("roomLabel").GetString() == "STORAGE"
+            && link.GetProperty("side").GetString() == "NegativeNormalSide"
+            && link.GetProperty("roomSidePoint").GetProperty("x").GetDouble() > 300
+            && link.GetProperty("signedDistanceFromOpening").GetDouble() < 0);
+
+        var passage = parsed.RootElement.GetProperty("routingLayer").GetProperty("passages")[0];
+        Assert.Equal(2, passage.GetProperty("connectedRoomLinks").GetArrayLength());
+        Assert.Equal(1, passage.GetProperty("roomAdjacencyIds").GetArrayLength());
+        Assert.Contains(
+            "NegativeNormalSide",
+            passage.GetProperty("connectedRoomLinks")
+                .EnumerateArray()
+                .Select(link => link.GetProperty("side").GetString()));
     }
 
     [Fact]

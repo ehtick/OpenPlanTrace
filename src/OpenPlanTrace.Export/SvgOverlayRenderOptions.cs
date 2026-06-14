@@ -1,7 +1,15 @@
 namespace OpenPlanTrace.Export;
 
+public enum SvgOverlayRenderProfile
+{
+    Full,
+    StructuralReview
+}
+
 public sealed record SvgOverlayRenderOptions
 {
+    public SvgOverlayRenderProfile Profile { get; init; } = SvgOverlayRenderProfile.Full;
+
     public bool IncludeLegend { get; init; } = true;
 
     public bool IncludeDiagnostics { get; init; } = true;
@@ -39,4 +47,59 @@ public sealed record SvgOverlayRenderOptions
     public bool IncludeRoutingLayer { get; init; }
 
     public string BackgroundColor { get; init; } = "#ffffff";
+
+    public static SvgOverlayRenderOptions ForProfile(SvgOverlayRenderProfile profile) =>
+        profile switch
+        {
+            SvgOverlayRenderProfile.StructuralReview => new SvgOverlayRenderOptions
+            {
+                Profile = SvgOverlayRenderProfile.StructuralReview,
+                IncludeWallComponents = false,
+                IncludeWallNodes = false,
+                IncludeRoomClusters = false,
+                IncludeRoomAdjacency = false,
+                IncludeObjects = false,
+                IncludeObjectAggregates = false,
+                IncludeRoutingLayer = false
+            },
+            _ => new SvgOverlayRenderOptions()
+            {
+                IncludeRoutingLayer = true
+            }
+        };
+
+    public static bool TryParseProfile(string value, out SvgOverlayRenderProfile profile)
+    {
+        switch (NormalizeProfile(value))
+        {
+            case "full":
+            case "debug":
+            case "all":
+                profile = SvgOverlayRenderProfile.Full;
+                return true;
+            case "structural":
+            case "structuralreview":
+            case "structuralreviewoverlay":
+            case "review":
+            case "geometry":
+                profile = SvgOverlayRenderProfile.StructuralReview;
+                return true;
+            default:
+                profile = SvgOverlayRenderProfile.Full;
+                return false;
+        }
+    }
+
+    public static string ProfileName(SvgOverlayRenderProfile profile) =>
+        profile switch
+        {
+            SvgOverlayRenderProfile.StructuralReview => "structural-review",
+            _ => "full"
+        };
+
+    private static string NormalizeProfile(string value) =>
+        string.Concat(
+            (value ?? string.Empty)
+            .Where(char.IsLetterOrDigit))
+            .ToLowerInvariant();
 }

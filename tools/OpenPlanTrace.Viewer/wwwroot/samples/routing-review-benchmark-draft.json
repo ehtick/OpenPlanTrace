@@ -10,7 +10,7 @@
         "difficulty": "smoke",
         "sourceFormat": "sample",
         "reviewState": "draft",
-        "scanSchemaVersion": "openplantrace.scan.v44"
+        "scanSchemaVersion": "openplantrace.scan.v60"
       },
       "expectations": {
         "minPages": 1,

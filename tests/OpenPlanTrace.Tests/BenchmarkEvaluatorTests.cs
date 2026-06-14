@@ -54,6 +54,77 @@ public sealed class BenchmarkEvaluatorTests
     }
 
     [Fact]
+    public async Task Evaluate_AppliesSourceReadinessExpectations()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreatePdfMetadataBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "source-readiness-case",
+            SourcePath = "source-readiness.pdf",
+            Expectations = new BenchmarkExpectations
+            {
+                RequiredSourceFormat = "pdf",
+                RequiredSourceLoader = "PDF/PdfPig",
+                RequiredSourceKind = "Pdf",
+                RequiredEffectiveSourceKind = "Pdf",
+                RequiredSourceIngestionPath = "pdf-vector",
+                RequiredSourceReadinessStatus = "VectorGeometryReady",
+                RequiredSourceGeometryBasis = "pdf-vector-geometry",
+                RequireSourceVectorGeometryReady = true,
+                RequireSourceExternalAdapter = false,
+                RequireSourceOcr = false,
+                RequireSourceLegalAdapterBacked = true,
+                RequireDwgDerivedSource = false,
+                RequireRasterDerivedSource = false,
+                RequiredSourceEvidenceContains = new[] { "format=pdf", "loader=PDF/PdfPig" },
+                ForbiddenSourceEvidenceContains = new[] { "dwg.converter" }
+            }
+        };
+
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(10));
+
+        Assert.True(
+            benchmark.Passed,
+            string.Join("; ", benchmark.Assertions.Where(assertion => !assertion.Passed).Select(assertion => $"{assertion.Name}: {assertion.Actual}")));
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_format.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_loader.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_ingestion_path.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_readiness_status.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_vector_geometry_ready.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_legal_adapter_backed.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_evidence.required.1" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_evidence.forbidden.1" && assertion.Passed);
+    }
+
+    [Fact]
+    public async Task Evaluate_FailsSourceReadinessExpectationsWhenProvenanceRegresses()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreatePdfMetadataBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "source-readiness-fail-case",
+            SourcePath = "source-readiness.pdf",
+            Expectations = new BenchmarkExpectations
+            {
+                RequiredSourceFormat = "dwg",
+                RequiredSourceReadinessStatus = "DwgAdapterBacked",
+                RequireSourceOcr = true,
+                RequiredSourceEvidenceContains = new[] { "dwg.converter" },
+                ForbiddenSourceEvidenceContains = new[] { "format=pdf" }
+            }
+        };
+
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(10));
+
+        Assert.False(benchmark.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_format.required" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_readiness_status.required" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_ocr.required" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_evidence.required.1" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "source_evidence.forbidden.1" && !assertion.Passed);
+    }
+
+    [Fact]
     public async Task Evaluate_FailsWhenRequiredSignalsAreMissing()
     {
         var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
@@ -120,7 +191,29 @@ public sealed class BenchmarkEvaluatorTests
                         MaxDurationMilliseconds = 100,
                         MaxDiagnostics = 10,
                         MaxWarnings = 0,
-                        MaxErrors = 0
+                        MaxErrors = 0,
+                        RequireDependencyReady = true,
+                        MaxMissingRequiredReads = 0,
+                        MaxMissingOptionalReads = 0,
+                        RequireRuntimeRequiredReadsHaveData = true,
+                        RequireRuntimeOptionalReadsHaveData = true,
+                        MaxEmptyRequiredRuntimeReads = 0,
+                        MaxEmptyOptionalRuntimeReads = 0,
+                        RequireWritesOnlyDeclaredArtifacts = true,
+                        MaxUndeclaredChangedArtifacts = 0,
+                        MaxEmptyDeclaredOutputs = 0,
+                        ArtifactExpectations = new[]
+                        {
+                            new BenchmarkStageArtifactExpectation
+                            {
+                                Artifact = PlanArtifactKind.Openings,
+                                MinAfterCount = 1,
+                                MaxAfterCount = 8,
+                                MinDelta = 1,
+                                MaxDelta = 8,
+                                RequireChanged = true
+                            }
+                        }
                     }
                 }
             }
@@ -136,6 +229,16 @@ public sealed class BenchmarkEvaluatorTests
         Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "diagnostic.forbidden.scanner.internal_error" && assertion.Passed);
         Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.present" && assertion.Passed);
         Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.duration.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.dependency.ready.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.dependency.missing_required.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.runtime.required_reads_have_data.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.runtime.empty_required_reads.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.contract.writes_only_declared.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.contract.undeclared_changed.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.contract.empty_declared_outputs.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.artifact.Openings.visible" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.artifact.Openings.after.min" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.openings.artifact.Openings.delta.max" && assertion.Passed);
         Assert.Contains(
             benchmark.DiagnosticIssues,
             issue => issue.Code == requiredDiagnostic.Code
@@ -146,6 +249,211 @@ public sealed class BenchmarkEvaluatorTests
             stage => string.Equals(stage.Stage, "openings", StringComparison.OrdinalIgnoreCase)
                 && stage.DurationMilliseconds >= 0
                 && stage.OutputCount >= 0);
+        var openingStage = Assert.Single(benchmark.Stages, stage => stage.Stage == "openings");
+        Assert.Equal("Opening detection", openingStage.DisplayName);
+        Assert.Equal(nameof(PipelineStageKind.Topology), openingStage.Kind);
+        Assert.True(openingStage.DependencyLevel > 0);
+        Assert.True(openingStage.PreferredDependencyLevel >= openingStage.DependencyLevel);
+        Assert.True(openingStage.IsDependencyReady);
+        Assert.Contains(nameof(PlanArtifactKind.WallGraph), openingStage.Reads);
+        Assert.Contains(nameof(PlanArtifactKind.Openings), openingStage.Writes);
+        Assert.Contains("door-gap-detection", openingStage.Capabilities);
+        Assert.Empty(openingStage.MissingRequiredReads);
+        Assert.True(openingStage.RuntimeReadiness.RequiredReadsHaveData);
+        Assert.False(openingStage.RuntimeReadiness.HasEmptyRequiredReads);
+        Assert.Contains(PlanArtifactKind.WallGraph, openingStage.RuntimeReadiness.NonEmptyRequiredReads);
+        Assert.True(openingStage.Contract.WritesOnlyDeclaredArtifacts);
+        Assert.Contains(PlanArtifactKind.Openings, openingStage.Contract.DeclaredWrites);
+        Assert.Contains(PlanArtifactKind.Openings, openingStage.Contract.ChangedArtifacts);
+        Assert.Empty(openingStage.Contract.UndeclaredChangedArtifacts);
+        Assert.NotEmpty(benchmark.ArtifactPlans);
+        Assert.Contains(
+            benchmark.ArtifactPlans,
+            plan => plan.Artifact == nameof(PlanArtifactKind.Primitives)
+                && plan.IsSourceArtifact
+                && plan.IsConsumedByStage
+                && plan.DependencyRole == "SourceInput"
+                && plan.ConsumerStages.Contains("layer-analysis"));
+        Assert.Contains(
+            benchmark.ArtifactPlans,
+            plan => plan.Artifact == nameof(PlanArtifactKind.WallGraph)
+                && plan.IsProducedByStage
+                && plan.IsConsumedByStage
+                && plan.DependencyRole == "ProducedAndConsumed"
+                && plan.ProducerStages.Contains("wall-graph")
+                && plan.RequiredConsumerStages.Contains("openings")
+                && plan.Evidence.Count > 0);
+        Assert.NotEmpty(benchmark.ExecutionWaves);
+        Assert.Contains(
+            benchmark.ExecutionWaves,
+            wave => wave.IsParallelCandidate
+                && wave.ParallelReadiness == "Ready"
+                && wave.RecommendedExecutionMode == "Parallel"
+                && wave.SchedulingReasons.Count > 0);
+        Assert.Contains(
+            benchmark.ExecutionWaves,
+            wave => wave.DirectDownstreamStageCount > 0
+                && wave.DirectDownstreamStages.Count == wave.DirectDownstreamStageCount
+                && wave.DownstreamReadArtifacts.Count > 0);
+        Assert.Contains(
+            benchmark.RerunImpacts,
+            impact => impact.Artifact == nameof(PlanArtifactKind.Walls)
+                && impact.HasImpact
+                && impact.ImpactScope == "DerivedArtifact"
+                && impact.DirectConsumerStages.Contains("wall-graph")
+                && impact.AffectedStages.Contains("routing-layer")
+                && impact.AffectedArtifacts.Contains(nameof(PlanArtifactKind.WallGraph)));
+        Assert.Contains(
+            benchmark.RerunPlans,
+            plan => plan.PlanId == "wall-geometry"
+                && plan.HasWork
+                && plan.ChangedArtifacts.Contains(nameof(PlanArtifactKind.Walls))
+                && plan.RerunStages.Contains("routing-layer")
+                && plan.AffectedArtifacts.Contains(nameof(PlanArtifactKind.WallGraph)));
+    }
+
+    [Fact]
+    public async Task Evaluate_AppliesGlobalPipelineHealthExpectations()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "pipeline-health-case",
+            SourcePath = "semantic-smoke.dxf",
+            Expectations = new BenchmarkExpectations
+            {
+                RequirePipelineDependencyReady = true,
+                MaxPipelinePlanIssues = 0,
+                MaxPipelinePlanWarnings = 0,
+                MaxPipelinePlanErrors = 0,
+                RequireAllStagesDependencyReady = true,
+                RequireAllStagesWriteOnlyDeclaredArtifacts = true,
+                MaxTotalUndeclaredChangedArtifacts = 0
+            }
+        };
+
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(12));
+
+        Assert.True(
+            benchmark.Passed,
+            string.Join("; ", benchmark.Assertions.Where(assertion => !assertion.Passed).Select(assertion => $"{assertion.Name}: {assertion.Actual}")));
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.dependency_ready.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.plan_issues.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.plan_warnings.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.plan_errors.max" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.stages.dependency_ready.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.stages.writes_only_declared.required" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.stages.undeclared_changed_artifacts.max" && assertion.Passed);
+        Assert.True(benchmark.PipelineHealth.DependencyReady);
+        Assert.Equal(0, benchmark.PipelineHealth.PlanIssueCount);
+        Assert.Equal(0, benchmark.PipelineHealth.NotDependencyReadyStageCount);
+        Assert.True(benchmark.PipelineHealth.WritesOnlyDeclaredArtifacts);
+        Assert.Equal(0, benchmark.PipelineHealth.UndeclaredChangedArtifactCount);
+        Assert.True(benchmark.PipelineHealth.EmptyRequiredRuntimeReadCount > 0);
+    }
+
+    [Fact]
+    public async Task Evaluate_FailsGlobalPipelineHealthExpectationsWhenStageTelemetryRegresses()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "pipeline-health-fail-case",
+            SourcePath = "semantic-smoke.dxf",
+            Expectations = new BenchmarkExpectations
+            {
+                RequireAllStagesRuntimeRequiredReadsHaveData = true,
+                MaxTotalEmptyRequiredRuntimeReads = 0,
+                MaxTotalEmptyDeclaredOutputs = 0
+            }
+        };
+
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(12));
+
+        Assert.False(benchmark.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.stages.runtime_required_reads_have_data.required" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.stages.runtime_empty_required_reads.max" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "pipeline.stages.empty_declared_outputs.max" && !assertion.Passed);
+    }
+
+    [Fact]
+    public async Task Evaluate_AppliesFinalArtifactInventoryExpectations()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "artifact-inventory-case",
+            SourcePath = "semantic-smoke.dxf",
+            Expectations = new BenchmarkExpectations
+            {
+                ArtifactExpectations = new[]
+                {
+                    new BenchmarkArtifactExpectation
+                    {
+                        Artifact = PlanArtifactKind.Walls,
+                        MinCount = 4,
+                        RequirePresent = true
+                    },
+                    new BenchmarkArtifactExpectation
+                    {
+                        Artifact = PlanArtifactKind.WallGraph,
+                        MinCount = 4,
+                        RequirePresent = true
+                    },
+                    new BenchmarkArtifactExpectation
+                    {
+                        Artifact = PlanArtifactKind.SurfacePatterns,
+                        MaxCount = 0,
+                        RequirePresent = false
+                    }
+                }
+            }
+        };
+
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(12));
+
+        Assert.True(
+            benchmark.Passed,
+            string.Join("; ", benchmark.Assertions.Where(assertion => !assertion.Passed).Select(assertion => $"{assertion.Name}: {assertion.Actual}")));
+        Assert.Contains(
+            benchmark.ArtifactInventory,
+            artifact => artifact.Artifact == PlanArtifactKind.Walls && artifact.Count >= 4);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "artifact_inventory.Walls.visible" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "artifact_inventory.Walls.count.min" && assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "artifact_inventory.SurfacePatterns.present.required" && assertion.Passed);
+    }
+
+    [Fact]
+    public async Task Evaluate_FailsFinalArtifactInventoryExpectations()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "bad-artifact-inventory-case",
+            SourcePath = "semantic-smoke.dxf",
+            Expectations = new BenchmarkExpectations
+            {
+                ArtifactExpectations = new[]
+                {
+                    new BenchmarkArtifactExpectation
+                    {
+                        Artifact = PlanArtifactKind.Walls,
+                        MaxCount = 1
+                    },
+                    new BenchmarkArtifactExpectation
+                    {
+                        Artifact = PlanArtifactKind.SurfacePatterns,
+                        RequirePresent = true
+                    }
+                }
+            }
+        };
+
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(12));
+
+        Assert.False(benchmark.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "artifact_inventory.Walls.count.max" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "artifact_inventory.SurfacePatterns.present.required" && !assertion.Passed);
     }
 
     [Fact]
@@ -172,7 +480,24 @@ public sealed class BenchmarkEvaluatorTests
                     {
                         Stage = "dimensions",
                         MaxDurationMilliseconds = 0.001,
-                        MaxDiagnostics = 0
+                        MaxDiagnostics = 0,
+                        ArtifactExpectations = new[]
+                        {
+                            new BenchmarkStageArtifactExpectation
+                            {
+                                Artifact = PlanArtifactKind.Dimensions,
+                                MaxAfterCount = 0,
+                                MaxDelta = 0,
+                                RequireChanged = false
+                            }
+                        }
+                    },
+                    new BenchmarkStageExpectation
+                    {
+                        Stage = "raster-extraction",
+                        RequireRuntimeRequiredReadsHaveData = true,
+                        MaxEmptyRequiredRuntimeReads = 0,
+                        MaxEmptyDeclaredOutputs = 0
                     }
                 }
             }
@@ -187,6 +512,12 @@ public sealed class BenchmarkEvaluatorTests
         Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.missing-stage.present" && !assertion.Passed);
         Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.dimensions.duration.max" && !assertion.Passed);
         Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.dimensions.diagnostics.max" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.dimensions.artifact.Dimensions.after.max" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.dimensions.artifact.Dimensions.delta.max" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.dimensions.artifact.Dimensions.changed.required" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.raster-extraction.runtime.required_reads_have_data.required" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.raster-extraction.runtime.empty_required_reads.max" && !assertion.Passed);
+        Assert.Contains(benchmark.Assertions, assertion => assertion.Name == "stage.raster-extraction.contract.empty_declared_outputs.max" && !assertion.Passed);
     }
 
     [Fact]
@@ -1111,6 +1442,18 @@ public sealed class BenchmarkEvaluatorTests
                   "skipReason": "Local fixture is optional.",
                   "expectations": {
                     "maxDurationMilliseconds": 2500,
+                    "requirePipelineDependencyReady": true,
+                    "maxPipelinePlanIssues": 0,
+                    "maxPipelinePlanWarnings": 0,
+                    "maxPipelinePlanErrors": 0,
+                    "requireAllStagesDependencyReady": true,
+                    "requireAllStagesRuntimeRequiredReadsHaveData": false,
+                    "requireAllStagesRuntimeOptionalReadsHaveData": false,
+                    "maxTotalEmptyRequiredRuntimeReads": 2,
+                    "maxTotalEmptyOptionalRuntimeReads": 4,
+                    "requireAllStagesWriteOnlyDeclaredArtifacts": true,
+                    "maxTotalUndeclaredChangedArtifacts": 0,
+                    "maxTotalEmptyDeclaredOutputs": 3,
                     "minQualityGrade": "Usable",
                     "minQualityConfidence": 0.7,
                     "maxQualityIssues": 2,
@@ -1149,7 +1492,29 @@ public sealed class BenchmarkEvaluatorTests
                         "maxDurationMilliseconds": 100,
                         "maxDiagnostics": 5,
                         "maxWarnings": 0,
-                        "maxErrors": 0
+                        "maxErrors": 0,
+                        "requireDependencyReady": true,
+                        "maxMissingRequiredReads": 0,
+                        "maxMissingOptionalReads": 0,
+                        "requireRuntimeRequiredReadsHaveData": true,
+                        "requireRuntimeOptionalReadsHaveData": true,
+                        "maxEmptyRequiredRuntimeReads": 0,
+                        "maxEmptyOptionalRuntimeReads": 0,
+                        "requireWritesOnlyDeclaredArtifacts": true,
+                        "maxUndeclaredChangedArtifacts": 0,
+                        "maxEmptyDeclaredOutputs": 0,
+                        "artifactExpectations": [
+                          {
+                            "artifact": "Openings",
+                            "minBeforeCount": 0,
+                            "maxBeforeCount": 0,
+                            "minAfterCount": 1,
+                            "maxAfterCount": 8,
+                            "minDelta": 1,
+                            "maxDelta": 8,
+                            "requireChanged": true
+                          }
+                        ]
                       }
                     ],
                     "roomMetrics": {
@@ -1281,6 +1646,18 @@ public sealed class BenchmarkEvaluatorTests
         Assert.True(fixture.Optional);
         Assert.Equal("Local fixture is optional.", fixture.SkipReason);
         Assert.Equal(2500, fixture.Expectations.MaxDurationMilliseconds);
+        Assert.True(fixture.Expectations.RequirePipelineDependencyReady);
+        Assert.Equal(0, fixture.Expectations.MaxPipelinePlanIssues);
+        Assert.Equal(0, fixture.Expectations.MaxPipelinePlanWarnings);
+        Assert.Equal(0, fixture.Expectations.MaxPipelinePlanErrors);
+        Assert.True(fixture.Expectations.RequireAllStagesDependencyReady);
+        Assert.False(fixture.Expectations.RequireAllStagesRuntimeRequiredReadsHaveData);
+        Assert.False(fixture.Expectations.RequireAllStagesRuntimeOptionalReadsHaveData);
+        Assert.Equal(2, fixture.Expectations.MaxTotalEmptyRequiredRuntimeReads);
+        Assert.Equal(4, fixture.Expectations.MaxTotalEmptyOptionalRuntimeReads);
+        Assert.True(fixture.Expectations.RequireAllStagesWriteOnlyDeclaredArtifacts);
+        Assert.Equal(0, fixture.Expectations.MaxTotalUndeclaredChangedArtifacts);
+        Assert.Equal(3, fixture.Expectations.MaxTotalEmptyDeclaredOutputs);
         Assert.Equal(PlanScanQualityGrade.Usable, fixture.Expectations.MinQualityGrade);
         Assert.Equal(0.7, fixture.Expectations.MinQualityConfidence);
         Assert.Equal(2, fixture.Expectations.MaxQualityIssues);
@@ -1318,6 +1695,25 @@ public sealed class BenchmarkEvaluatorTests
         Assert.Equal(5, stageExpectation.MaxDiagnostics);
         Assert.Equal(0, stageExpectation.MaxWarnings);
         Assert.Equal(0, stageExpectation.MaxErrors);
+        Assert.True(stageExpectation.RequireDependencyReady);
+        Assert.Equal(0, stageExpectation.MaxMissingRequiredReads);
+        Assert.Equal(0, stageExpectation.MaxMissingOptionalReads);
+        Assert.True(stageExpectation.RequireRuntimeRequiredReadsHaveData);
+        Assert.True(stageExpectation.RequireRuntimeOptionalReadsHaveData);
+        Assert.Equal(0, stageExpectation.MaxEmptyRequiredRuntimeReads);
+        Assert.Equal(0, stageExpectation.MaxEmptyOptionalRuntimeReads);
+        Assert.True(stageExpectation.RequireWritesOnlyDeclaredArtifacts);
+        Assert.Equal(0, stageExpectation.MaxUndeclaredChangedArtifacts);
+        Assert.Equal(0, stageExpectation.MaxEmptyDeclaredOutputs);
+        var artifactExpectation = Assert.Single(stageExpectation.ArtifactExpectations);
+        Assert.Equal(PlanArtifactKind.Openings, artifactExpectation.Artifact);
+        Assert.Equal(0, artifactExpectation.MinBeforeCount);
+        Assert.Equal(0, artifactExpectation.MaxBeforeCount);
+        Assert.Equal(1, artifactExpectation.MinAfterCount);
+        Assert.Equal(8, artifactExpectation.MaxAfterCount);
+        Assert.Equal(1, artifactExpectation.MinDelta);
+        Assert.Equal(8, artifactExpectation.MaxDelta);
+        Assert.True(artifactExpectation.RequireChanged);
         Assert.Equal(0.9, fixture.Expectations.RoomMetrics.MinRecall);
         var roomTarget = Assert.Single(fixture.Expectations.RoomMetrics.Targets);
         Assert.Equal("office", roomTarget.Id);
@@ -1403,8 +1799,125 @@ public sealed class BenchmarkEvaluatorTests
         Assert.Contains("architectural", markdown);
         Assert.Contains("Quality:", markdown);
         Assert.Contains("Measurement QA:", markdown);
+        Assert.Contains("Pipeline Health", markdown);
+        Assert.Contains("Pipeline health:", markdown);
+        Assert.Contains("Final artifact inventory:", markdown);
+        Assert.Contains("WallGraph", markdown);
         Assert.Contains("routing suppressed objects", markdown);
         Assert.Contains("No failing benchmark assertions.", markdown);
+    }
+
+    [Fact]
+    public async Task BenchmarkMarkdownReport_IncludesStageTelemetryWhenStageHealthNeedsReview()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "stage-telemetry-case",
+            Name = "Stage Telemetry Case",
+            SourcePath = "semantic-smoke.dxf",
+            Expectations = new BenchmarkExpectations
+            {
+                MinPages = 1
+            }
+        };
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(15));
+        var stage = new BenchmarkStageSummary(
+            "opening-detection",
+            DurationMilliseconds: 2,
+            InputCount: 12,
+            OutputCount: 1,
+            DiagnosticCount: 0,
+            InfoCount: 0,
+            WarningCount: 0,
+            ErrorCount: 0,
+            DisplayName: "Opening detection",
+            Kind: nameof(PipelineStageKind.Topology),
+            DependencyLevel: 2,
+            PreferredDependencyLevel: 2,
+            Reads: new[] { nameof(PlanArtifactKind.WallGraph) },
+            OptionalReads: Array.Empty<string>(),
+            Writes: new[] { nameof(PlanArtifactKind.Openings) },
+            Capabilities: new[] { "stage-telemetry-test" },
+            IsDependencyReady: false,
+            MissingRequiredReads: new[] { nameof(PlanArtifactKind.WallGraph) },
+            MissingOptionalReads: Array.Empty<string>(),
+            InputArtifacts: new[] { new PipelineArtifactSnapshot(PlanArtifactKind.WallGraph, 0) },
+            OutputArtifacts: new[] { new PipelineArtifactSnapshot(PlanArtifactKind.Openings, 0) },
+            ChangedArtifacts: new[] { new PipelineArtifactChange(PlanArtifactKind.Rooms, 0, 1) },
+            ArtifactDeltas: new[]
+            {
+                new PipelineArtifactDelta(PlanArtifactKind.Openings, 0, 0, true),
+                new PipelineArtifactDelta(PlanArtifactKind.Rooms, 0, 1, false)
+            })
+        {
+            RuntimeReadiness = new PipelineStageRuntimeReadiness(
+                RequiredReadsHaveData: false,
+                HasEmptyRequiredReads: true,
+                NonEmptyRequiredReads: Array.Empty<PlanArtifactKind>(),
+                EmptyRequiredReads: new[] { PlanArtifactKind.WallGraph },
+                OptionalReadsHaveData: true,
+                HasEmptyOptionalReads: false,
+                NonEmptyOptionalReads: Array.Empty<PlanArtifactKind>(),
+                EmptyOptionalReads: Array.Empty<PlanArtifactKind>(),
+                Evidence: new[] { "synthetic empty wall graph read" }),
+            Contract = PipelineStageContract.From(
+                new[] { PlanArtifactKind.Openings },
+                new[] { PlanArtifactKind.Rooms })
+        };
+        var run = BenchmarkRunResult.Create(
+            "Stage telemetry suite",
+            new[] { benchmark with { Stages = new[] { stage } } });
+
+        var markdown = BenchmarkMarkdownReport.Create(run);
+
+        Assert.Contains("## Stage Telemetry", markdown);
+        Assert.Contains("opening-detection", markdown);
+        Assert.Contains("empty required reads WallGraph", markdown);
+        Assert.Contains("undeclared changes Rooms", markdown);
+        Assert.Contains("empty declared outputs Openings", markdown);
+        Assert.Contains("missing required deps WallGraph", markdown);
+    }
+
+    [Fact]
+    public async Task BenchmarkMarkdownReport_IncludesPipelinePlanIssueDetails()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(CreateBenchmarkDocument());
+        var fixture = new BenchmarkFixture
+        {
+            Id = "plan-issue-case",
+            Name = "Plan Issue Case",
+            SourcePath = "semantic-smoke.dxf",
+            Expectations = new BenchmarkExpectations
+            {
+                MinPages = 1
+            }
+        };
+        var benchmark = PlanBenchmarkEvaluator.Evaluate(fixture, result, TimeSpan.FromMilliseconds(15));
+        var run = BenchmarkRunResult.Create(
+            "Pipeline issue suite",
+            new[]
+            {
+                benchmark with
+                {
+                    PlanIssues = new[]
+                    {
+                        new BenchmarkPipelinePlanIssueSummary(
+                            "pipeline.artifact.producer_after_required_consumer",
+                            nameof(DiagnosticSeverity.Error),
+                            "wall-consumer",
+                            new[] { nameof(PlanArtifactKind.Walls) },
+                            "Required artifact 'Walls' is consumed before its first planned producer runs.")
+                    }
+                }
+            });
+
+        var markdown = BenchmarkMarkdownReport.Create(run);
+
+        Assert.Contains("## Pipeline Plan Issues", markdown);
+        Assert.Contains("pipeline.artifact.producer_after_required_consumer", markdown);
+        Assert.Contains("wall-consumer", markdown);
+        Assert.Contains("Walls", markdown);
     }
 
     [Fact]
@@ -1453,6 +1966,26 @@ public sealed class BenchmarkEvaluatorTests
                         }
                     })
             });
+
+    private static PlanDocument CreatePdfMetadataBenchmarkDocument() =>
+        CreateBenchmarkDocument() with
+        {
+            Metadata = new PlanMetadata
+            {
+                SourceName = "source-readiness.pdf",
+                SourcePath = @"C:\plans\source-readiness.pdf",
+                Properties = new Dictionary<string, string>
+                {
+                    ["format"] = "pdf",
+                    ["loader"] = "PDF/PdfPig",
+                    ["sourceKind"] = "Pdf",
+                    ["effectiveSourceKind"] = "Pdf",
+                    ["fileExtension"] = ".pdf",
+                    ["contentType"] = "application/pdf",
+                    ["pdf.imageOnlyPageCount"] = "0"
+                }
+            }
+        };
 
     private static PlanDocument CreateObjectGroupBenchmarkDocument() =>
         new(

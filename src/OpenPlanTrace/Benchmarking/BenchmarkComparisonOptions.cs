@@ -33,4 +33,22 @@ public sealed record BenchmarkComparisonOptions
     public int ScanReviewQueueKindRegressionMinimumDelta { get; init; } = 5;
 
     public double ScanReviewQueueKindRegressionRatio { get; init; } = 1.25;
+
+    public int StageArtifactRegressionMinimumDelta { get; init; } = 50;
+
+    public double StageArtifactRegressionRatio { get; init; } = 2.0;
+
+    public int StageRuntimeEmptyRequiredReadRegressionMinimumDelta { get; init; } = 1;
+
+    public int StageRuntimeEmptyOptionalReadRegressionMinimumDelta { get; init; } = 1;
+
+    public int StageContractUndeclaredChangeRegressionMinimumDelta { get; init; } = 1;
+
+    public int StageContractEmptyDeclaredOutputRegressionMinimumDelta { get; init; } = 1;
+
+    public int RerunPlanScopeRegressionMinimumDelta { get; init; } = 1;
+
+    public int FinalArtifactRegressionMinimumDelta { get; init; } = 50;
+
+    public double FinalArtifactRegressionRatio { get; init; } = 2.0;
 }

@@ -50,12 +50,16 @@ internal static class WallTopologyFilter
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
+        var objectLikeCount = excludedComponents.Count(component =>
+            component.Kind == WallGraphComponentKind.ObjectLikeIsland);
+        var isolatedFragmentCount = excludedComponents.Count(component =>
+            component.Kind == WallGraphComponentKind.IsolatedFragment);
 
         context.AddDiagnostic(
-            $"{stage}.object_like_wall_components_excluded",
+            $"{stage}.non_structural_wall_components_excluded",
             DiagnosticSeverity.Info,
             stage,
-            "Object-like wall graph components were excluded from structural topology solving while remaining in wall exports.",
+            "Non-structural wall graph components were excluded from structural topology solving while remaining in wall exports.",
             pageNumber,
             confidence: Confidence.Medium,
             scope: DiagnosticScope.Page,
@@ -64,6 +68,8 @@ internal static class WallTopologyFilter
             {
                 ["excludedComponentCount"] = excludedComponents.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["excludedWallCount"] = excludedWallIds.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["objectLikeIslandCount"] = objectLikeCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["isolatedFragmentCount"] = isolatedFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["componentIds"] = string.Join(",", excludedComponents.Select(component => component.Id).Take(20)),
                 ["wallIds"] = string.Join(",", excludedWallIds.Take(30))
             });

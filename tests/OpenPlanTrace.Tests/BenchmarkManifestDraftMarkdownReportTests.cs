@@ -27,6 +27,38 @@ public sealed class BenchmarkManifestDraftMarkdownReportTests
                         MinRooms = 2,
                         MaxDiagnosticErrors = 0,
                         MinQualityGrade = PlanScanQualityGrade.ReviewRequired,
+                        ArtifactExpectations = new[]
+                        {
+                            new BenchmarkArtifactExpectation
+                            {
+                                Artifact = PlanArtifactKind.Walls,
+                                MinCount = 4,
+                                MaxCount = 12,
+                                RequirePresent = true
+                            },
+                            new BenchmarkArtifactExpectation
+                            {
+                                Artifact = PlanArtifactKind.WallGraph,
+                                MinCount = 4,
+                                MaxCount = 12,
+                                RequirePresent = true
+                            }
+                        },
+                        RequiredSourceFormat = "pdf",
+                        RequiredSourceLoader = "PDF/PdfPig",
+                        RequiredSourceKind = "Pdf",
+                        RequiredEffectiveSourceKind = "Pdf",
+                        RequiredSourceIngestionPath = "pdf-vector",
+                        RequiredSourceReadinessStatus = "VectorGeometryReady",
+                        RequiredSourceGeometryBasis = "pdf-vector-geometry",
+                        RequireSourceVectorGeometryReady = true,
+                        RequireSourceExternalAdapter = false,
+                        RequireSourceOcr = false,
+                        RequireSourceLegalAdapterBacked = true,
+                        RequireDwgDerivedSource = false,
+                        RequireRasterDerivedSource = false,
+                        RequiredSourceEvidenceContains = new[] { "format=pdf", "loader=PDF/PdfPig" },
+                        ForbiddenSourceEvidenceContains = new[] { "dwg.converter", "raster.extractor" },
                         RegionMetrics = new BenchmarkDetectorMetricExpectations
                         {
                             MinRecall = 1.0,
@@ -83,6 +115,17 @@ public sealed class BenchmarkManifestDraftMarkdownReportTests
         Assert.Contains("Provided PDF draft", markdown);
         Assert.Contains("| Sample Plan | %USERPROFILE%\\Downloads\\sample.pdf | 3 | 2 | 1 | 1 |", markdown);
         Assert.Contains("- Count gates: pages >= 1, walls >= 4, rooms >= 2", markdown);
+        Assert.Contains("- Final artifact inventory gates:", markdown);
+        Assert.Contains("  - Walls: >= 4, <= 12, present true", markdown);
+        Assert.Contains("- Source readiness:", markdown);
+        Assert.Contains("  - Format: pdf", markdown);
+        Assert.Contains("  - Loader: PDF/PdfPig", markdown);
+        Assert.Contains("  - Readiness status: VectorGeometryReady", markdown);
+        Assert.Contains("  - Require vector geometry: true", markdown);
+        Assert.Contains("  - Require external adapter: false", markdown);
+        Assert.Contains("  - Require DWG-derived source: false", markdown);
+        Assert.Contains("  - Required evidence contains: format=pdf, loader=PDF/PdfPig", markdown);
+        Assert.Contains("  - Forbidden evidence contains: dwg.converter, raster.extractor", markdown);
         Assert.Contains("| regions | 1 | 1 | - | 1 | 1 | 0 |", markdown);
         Assert.Contains("| rooms | 1 | 1 | - | 0 | 1 | 1 |", markdown);
         Assert.Contains("| objects | 1 | - | - | 0 | 0 | 0 |", markdown);

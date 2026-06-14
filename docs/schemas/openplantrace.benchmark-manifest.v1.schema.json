@@ -445,6 +445,54 @@
         "maxDurationMilliseconds": {
           "$ref": "#/$defs/nonNegativeNumber"
         },
+        "requirePipelineDependencyReady": {
+          "type": "boolean",
+          "description": "When set, requires the complete pipeline execution plan to have no missing required artifact dependencies."
+        },
+        "maxPipelinePlanIssues": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of execution-plan issues across all stages."
+        },
+        "maxPipelinePlanWarnings": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of execution-plan warning issues across all stages."
+        },
+        "maxPipelinePlanErrors": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of execution-plan error issues across all stages."
+        },
+        "requireAllStagesDependencyReady": {
+          "type": "boolean",
+          "description": "When set, requires every planned pipeline stage to have all declared required inputs satisfied before it runs."
+        },
+        "requireAllStagesRuntimeRequiredReadsHaveData": {
+          "type": "boolean",
+          "description": "When set, requires every reported stage to run with data for all declared required input artifacts."
+        },
+        "requireAllStagesRuntimeOptionalReadsHaveData": {
+          "type": "boolean",
+          "description": "When set, requires every reported stage to run with data for all declared optional input artifacts."
+        },
+        "maxTotalEmptyRequiredRuntimeReads": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed total empty required runtime input reads summed across all reported stages."
+        },
+        "maxTotalEmptyOptionalRuntimeReads": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed total empty optional runtime input reads summed across all reported stages."
+        },
+        "requireAllStagesWriteOnlyDeclaredArtifacts": {
+          "type": "boolean",
+          "description": "When set, requires every reported stage to change only artifacts declared in that stage's pipeline metadata writes list."
+        },
+        "maxTotalUndeclaredChangedArtifacts": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed total undeclared changed artifacts summed across all reported stages."
+        },
+        "maxTotalEmptyDeclaredOutputs": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed total declared stage outputs that remained empty after their stages ran."
+        },
         "minQualityGrade": {
           "anyOf": [
             {
@@ -536,6 +584,84 @@
             "null"
           ]
         },
+        "requiredSourceFormat": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected normalized document source format such as pdf, dxf, raster, or extracted-primitives."
+        },
+        "requiredSourceLoader": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected registered loader name, for example PDF/PdfPig or DXF/IxMilia."
+        },
+        "requiredSourceKind": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected original source kind recorded in document metadata, such as Pdf, Dxf, Dwg, RasterImage, Clipboard, or ExtractedPrimitives."
+        },
+        "requiredEffectiveSourceKind": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected effective content kind after wrappers such as clipboard routing."
+        },
+        "requiredSourceIngestionPath": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected ingestion route, such as pdf-vector, dxf-vector, dwg-to-dxf, raster-extraction, or extracted-primitives."
+        },
+        "requiredSourceReadinessStatus": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected source-readiness status, such as VectorGeometryReady, PdfRasterOcrRecommended, DwgAdapterBacked, RasterExtractorBacked, RasterExtractorRequired, NormalizedPrimitives, or Unknown."
+        },
+        "requiredSourceGeometryBasis": {
+          "$ref": "#/$defs/nullableString",
+          "description": "Expected source-readiness geometry basis, such as pdf-vector-geometry or converted-dxf-vector-geometry."
+        },
+        "requireSourceVectorGeometryReady": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "When true, benchmarked source metadata must say vector geometry is usable for deterministic scanning."
+        },
+        "requireSourceExternalAdapter": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Expected source-readiness adapter requirement. DWG and unbacked raster workflows should normally require an external adapter."
+        },
+        "requireSourceOcr": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Expected OCR requirement for this fixture."
+        },
+        "requireSourceLegalAdapterBacked": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "When true, source metadata must indicate the ingestion path is backed by a legal registered adapter/converter rather than a fake parser claim."
+        },
+        "requireDwgDerivedSource": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Expected DWG-derived source flag."
+        },
+        "requireRasterDerivedSource": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Expected raster-derived source flag."
+        },
+        "requiredSourceEvidenceContains": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Substrings that must appear in source-readiness evidence, such as format=pdf, loader=PDF/PdfPig, or dwg.converter=..."
+        },
+        "forbiddenSourceEvidenceContains": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Substrings that must not appear in source-readiness evidence."
+        },
         "minMeasurementCheckedCount": {
           "$ref": "#/$defs/nonNegativeInteger",
           "description": "Minimum number of matched dimensions that must be checked against selected calibration."
@@ -582,6 +708,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/stageExpectation"
+          }
+        },
+        "artifactExpectations": {
+          "type": "array",
+          "description": "Final scan artifact inventory gates. Use these to catch downstream-facing regressions such as missing walls, empty wall graphs, lost room topology, or routing artifact explosions.",
+          "items": {
+            "$ref": "#/$defs/artifactExpectation"
           }
         },
         "requiredRegionKinds": {
@@ -1016,6 +1149,113 @@
         },
         "maxErrors": {
           "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "requireDependencyReady": {
+          "type": "boolean",
+          "description": "When set, requires this pipeline stage to have all declared required inputs satisfied by the execution plan."
+        },
+        "maxMissingRequiredReads": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of missing required input artifacts for this stage in the execution plan."
+        },
+        "maxMissingOptionalReads": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of missing optional input artifacts for this stage in the execution plan."
+        },
+        "requireRuntimeRequiredReadsHaveData": {
+          "type": "boolean",
+          "description": "When set, requires every declared required runtime input artifact to be present with data when the stage ran."
+        },
+        "requireRuntimeOptionalReadsHaveData": {
+          "type": "boolean",
+          "description": "When set, requires every declared optional runtime input artifact to be present with data when the stage ran."
+        },
+        "maxEmptyRequiredRuntimeReads": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of required runtime input artifacts that were missing or empty when the stage ran."
+        },
+        "maxEmptyOptionalRuntimeReads": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of optional runtime input artifacts that were missing or empty when the stage ran."
+        },
+        "requireWritesOnlyDeclaredArtifacts": {
+          "type": "boolean",
+          "description": "When set, requires this stage to change only artifacts declared in its pipeline metadata writes list."
+        },
+        "maxUndeclaredChangedArtifacts": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of changed artifacts that were not declared as stage outputs."
+        },
+        "maxEmptyDeclaredOutputs": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Maximum allowed number of declared stage outputs that remained empty after the stage ran."
+        },
+        "artifactExpectations": {
+          "type": "array",
+          "description": "Per-stage artifact count gates. Use these to catch regressions such as wall graph explosions, missing topology outputs, or object-candidate noise before visual review.",
+          "items": {
+            "$ref": "#/$defs/stageArtifactExpectation"
+          }
+        }
+      }
+    },
+    "artifactExpectation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "description": "Final PlanArtifactKind reported by diagnostics.artifactInventory, for example Walls, WallGraph, Rooms, Openings, RoutingBarriers, RoutingPassages, ObjectAggregates, or Diagnostics."
+        },
+        "minCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "maxCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "requirePresent": {
+          "type": "boolean",
+          "description": "When set, requires the final artifact inventory count to be greater than zero, or zero when false."
+        }
+      }
+    },
+    "stageArtifactExpectation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "description": "Plan artifact kind reported by the pipeline ledger, for example WallGraph, TopologySpans, Openings, ObjectCandidates, SurfacePatterns, RoutingBarriers, RoutingPassages, RoutingObstacles, or RoutingSuppressedObjects."
+        },
+        "minBeforeCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "maxBeforeCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "minAfterCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "maxAfterCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "minDelta": {
+          "type": "integer",
+          "description": "Minimum allowed artifact delta for the stage. Deltas may be negative when a stage removes or suppresses artifacts."
+        },
+        "maxDelta": {
+          "type": "integer",
+          "description": "Maximum allowed artifact delta for the stage. Deltas may be negative when a stage removes or suppresses artifacts."
+        },
+        "requireChanged": {
+          "type": "boolean",
+          "description": "When set, requires the artifact to have a non-zero changedArtifacts entry for this stage, or requires no change when false."
         }
       }
     },

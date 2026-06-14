@@ -62,10 +62,11 @@ public sealed record PlanPlacementExport(
     IReadOnlyList<PlacementOpeningExport> Openings,
     IReadOnlyList<PlacementObjectAggregateExport> ObjectAggregates,
     IReadOnlyList<PlacementWallGraphRepairCandidateExport> WallGraphRepairCandidates,
+    PlacementWallGraphExport WallGraph,
     PlacementRoutingLayerExport RoutingLayer,
     IReadOnlyList<PlacementIssueExport> Issues)
 {
-    public const string CurrentSchemaVersion = "openplantrace.placement.v1";
+    public const string CurrentSchemaVersion = "openplantrace.placement.v4";
 
     public static PlanPlacementExport From(PlanScanResult result)
     {
@@ -78,6 +79,10 @@ public sealed record PlanPlacementExport(
         var wallComponentLookup = BuildWallComponentLookup(result.WallGraph.Components);
         var wallReviewReasons = BuildWallReviewReasons(result.Diagnostics.Messages);
         var routingLayer = result.RoutingLayer;
+        var wallTopologySpans = WallGraphTopologySpanBuilder.Build(result.WallGraph, result.Walls).ToArray();
+        var wallTopologySpansByWallId = wallTopologySpans
+            .GroupBy(span => span.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         var pages = result.Document.Pages.Select(PlacementPageExport.From).ToArray();
         var surfacePatterns = result.SurfacePatterns
             .Select(pattern => PlacementSurfacePatternExport.From(pattern, result.Calibration, sourceLookup))
@@ -88,6 +93,7 @@ public sealed record PlanPlacementExport(
                 result.Calibration,
                 sourceLookup,
                 wallComponentLookup,
+                wallTopologySpansByWallId.TryGetValue(wall.Id, out var spans) ? spans : Array.Empty<WallGraphTopologySpan>(),
                 wallReviewReasons.TryGetValue(wall.Id, out var reasons) ? reasons : Array.Empty<string>()))
             .ToArray();
         var rooms = result.Rooms
@@ -102,6 +108,12 @@ public sealed record PlanPlacementExport(
         var wallGraphRepairCandidates = result.WallGraph.RepairCandidates
             .Select(candidate => PlacementWallGraphRepairCandidateExport.From(candidate, result.Calibration, sourceLookup))
             .ToArray();
+        var placementWallGraph = PlacementWallGraphExport.From(
+            result.WallGraph,
+            wallTopologySpans,
+            result.Calibration,
+            sourceLookup,
+            wallComponentLookup);
         var placementRoutingLayer = PlacementRoutingLayerExport.From(routingLayer, result.Calibration, sourceLookup);
         var issues = PlacementIssueExport.From(result, sourceLookup).ToArray();
 
@@ -131,6 +143,7 @@ public sealed record PlanPlacementExport(
             openings,
             objectAggregates,
             wallGraphRepairCandidates,
+            placementWallGraph,
             placementRoutingLayer,
             issues);
     }
@@ -257,7 +270,7 @@ public sealed record PlacementSummaryExport(
             + openings.Count(item => item.Reliability.ReadyForMetricPlacement)
             + objectAggregates.Count(item => item.Reliability.ReadyForMetricPlacement);
         var reviewRequiredEntityCount =
-            walls.Count(item => item.Reliability.RequiresReview)
+            structuralWalls.Count(item => item.Reliability.RequiresReview)
             + rooms.Count(item => item.Reliability.RequiresReview)
             + openings.Count(item => item.Reliability.RequiresReview)
             + objectAggregates.Count(item => item.Reliability.RequiresReview);
@@ -462,7 +475,10 @@ public sealed record PlacementImportReadinessExport(
             coordinateReadyRatio,
             metricReadyRatio,
             reviewRequiredEntityCount,
-            issues.Select(ToReadinessIssue).ToArray());
+            issues
+                .Where(ShouldIncludePlacementIssueForImportReadiness)
+                .Select(ToReadinessIssue)
+                .ToArray());
 
         return From(readiness);
     }
@@ -480,12 +496,16 @@ public sealed record PlacementImportReadinessExport(
             readiness.RecommendedActions,
             readiness.Evidence);
 
-    private static PlanImportReadinessIssue ToReadinessIssue(PlacementIssueExport issue) =>
-        new(
-            ToImportReadinessIssueCode(issue.Code),
-            Enum.TryParse<DiagnosticSeverity>(issue.Severity, out var severity)
-                ? severity
-                : DiagnosticSeverity.Info);
+    private static PlanImportReadinessIssue ToReadinessIssue(PlacementIssueExport issue)
+    {
+        var severity = ShouldKeepPlacementIssueInformationalForReadiness(issue.Code)
+            ? DiagnosticSeverity.Info
+            : Enum.TryParse<DiagnosticSeverity>(issue.Severity, out var parsedSeverity)
+                ? parsedSeverity
+                : DiagnosticSeverity.Info;
+
+        return new PlanImportReadinessIssue(ToImportReadinessIssueCode(issue.Code), severity);
+    }
 
     private static string ToImportReadinessIssueCode(string code) =>
         string.Equals(code, "placement.review.wall_graph_endpoint_gap", StringComparison.Ordinal)
@@ -493,6 +513,12 @@ public sealed record PlacementImportReadinessExport(
             : string.Equals(code, "placement.review.surface_pattern_wall_overlap", StringComparison.Ordinal)
                 ? "placement.wall_graph.surface_pattern_wall_overlaps.require_review"
             : code;
+
+    private static bool ShouldKeepPlacementIssueInformationalForReadiness(string code) =>
+        string.Equals(code, "placement.review.dense_minor_routing_detail", StringComparison.Ordinal);
+
+    private static bool ShouldIncludePlacementIssueForImportReadiness(PlacementIssueExport issue) =>
+        !string.Equals(issue.Code, "placement.review.dense_minor_routing_detail", StringComparison.Ordinal);
 }
 
 public sealed record PlacementPageSummaryExport(
@@ -532,6 +558,7 @@ public sealed record PlacementPageSummaryExport(
     {
         var pageSurfacePatterns = surfacePatterns.Where(pattern => pattern.PageNumber == page.PageNumber).ToArray();
         var pageWalls = walls.Where(wall => wall.PageNumber == page.PageNumber).ToArray();
+        var pageStructuralWalls = pageWalls.Where(wall => !wall.ExcludedFromStructuralTopology).ToArray();
         var pageRooms = rooms.Where(room => room.PageNumber == page.PageNumber).ToArray();
         var pageOpenings = openings.Where(opening => opening.PageNumber == page.PageNumber).ToArray();
         var pageObjectAggregates = objectAggregates.Where(aggregate => aggregate.PageNumber == page.PageNumber).ToArray();
@@ -571,7 +598,7 @@ public sealed record PlacementPageSummaryExport(
             reliabilityTrackedEntityCount,
             coordinateReadyEntityCount,
             metricReadyEntityCount,
-            pageWalls.Count(item => item.Reliability.RequiresReview)
+            pageStructuralWalls.Count(item => item.Reliability.RequiresReview)
             + pageRooms.Count(item => item.Reliability.RequiresReview)
             + pageOpenings.Count(item => item.Reliability.RequiresReview)
             + pageObjectAggregates.Count(item => item.Reliability.RequiresReview),
@@ -986,6 +1013,7 @@ public sealed record PlacementWallExport(
     int PageNumber,
     LineExport CenterLine,
     LineExport? CenterLineMillimeters,
+    IReadOnlyList<PlacementWallTopologySpanExport> TopologySpans,
     RectExport Bounds,
     RectExport? BoundsMillimeters,
     double DrawingLength,
@@ -1009,6 +1037,7 @@ public sealed record PlacementWallExport(
         PlanCalibration calibration,
         IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup,
         IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup,
+        IReadOnlyList<WallGraphTopologySpan> topologySpans,
         IReadOnlyList<string> reviewReasons)
     {
         wallComponentLookup.TryGetValue(wall.Id, out var component);
@@ -1019,6 +1048,9 @@ public sealed record PlacementWallExport(
             wall.PageNumber,
             LineExport.From(wall.CenterLine),
             ScaleLine(wall.CenterLine, scale),
+            topologySpans
+                .Select(span => PlacementWallTopologySpanExport.From(span, scale, sourceLookup))
+                .ToArray(),
             RectExport.From(wall.Bounds),
             ScaleRect(wall.Bounds, scale),
             wall.DrawingLength,
@@ -1037,6 +1069,91 @@ public sealed record PlacementWallExport(
             ExportSourceHelpers.SourceLayers(wall.SourcePrimitiveIds, sourceLookup),
             wall.Evidence);
     }
+}
+
+public sealed record PlacementWallTopologySpanExport(
+    string Id,
+    string WallGraphEdgeId,
+    int PageNumber,
+    string WallId,
+    string FromNodeId,
+    string ToNodeId,
+    LineExport CenterLine,
+    LineExport? CenterLineMillimeters,
+    RectExport Bounds,
+    RectExport? BoundsMillimeters,
+    double DrawingLength,
+    double? LengthMeters,
+    double? SourceWallStartOffsetDrawingUnits,
+    double? SourceWallEndOffsetDrawingUnits,
+    double? SourceWallProjectedLengthDrawingUnits,
+    double? SourceWallStartOffsetMillimeters,
+    double? SourceWallEndOffsetMillimeters,
+    double? SourceWallProjectedLengthMillimeters,
+    double? SourceWallStartParameter,
+    double? SourceWallEndParameter,
+    double? SourceWallCenterParameter,
+    double? SourceWallStartProjectionDistanceDrawingUnits,
+    double? SourceWallEndProjectionDistanceDrawingUnits,
+    double? SourceWallStartProjectionDistanceMillimeters,
+    double? SourceWallEndProjectionDistanceMillimeters,
+    double ThicknessDrawingUnits,
+    double? ThicknessMillimeters,
+    double Confidence,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> Evidence)
+{
+    public static PlacementWallTopologySpanExport From(
+        WallGraphTopologySpan span,
+        double? millimetersPerDrawingUnit,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup)
+    {
+        var lengthMeters = millimetersPerDrawingUnit is > 0
+            ? span.DrawingLength * millimetersPerDrawingUnit.Value / 1000.0
+            : (double?)null;
+        var thicknessMillimeters = millimetersPerDrawingUnit is > 0
+            ? span.Thickness * millimetersPerDrawingUnit.Value
+            : (double?)null;
+
+        return new PlacementWallTopologySpanExport(
+            span.Id,
+            span.Id,
+            span.PageNumber,
+            span.WallId,
+            span.FromNodeId,
+            span.ToNodeId,
+            LineExport.From(span.CenterLine),
+            ScaleLine(span.CenterLine, millimetersPerDrawingUnit),
+            RectExport.From(span.Bounds),
+            ScaleRect(span.Bounds, millimetersPerDrawingUnit),
+            span.DrawingLength,
+            lengthMeters,
+            span.SourceWallStartOffsetDrawingUnits,
+            span.SourceWallEndOffsetDrawingUnits,
+            span.SourceWallProjectedLengthDrawingUnits,
+            ScaleNullable(span.SourceWallStartOffsetDrawingUnits, millimetersPerDrawingUnit),
+            ScaleNullable(span.SourceWallEndOffsetDrawingUnits, millimetersPerDrawingUnit),
+            ScaleNullable(span.SourceWallProjectedLengthDrawingUnits, millimetersPerDrawingUnit),
+            span.SourceWallStartParameter,
+            span.SourceWallEndParameter,
+            span.SourceWallCenterParameter,
+            span.SourceWallStartProjectionDistanceDrawingUnits,
+            span.SourceWallEndProjectionDistanceDrawingUnits,
+            ScaleNullable(span.SourceWallStartProjectionDistanceDrawingUnits, millimetersPerDrawingUnit),
+            ScaleNullable(span.SourceWallEndProjectionDistanceDrawingUnits, millimetersPerDrawingUnit),
+            span.Thickness,
+            thicknessMillimeters,
+            span.Confidence.Value,
+            span.SourcePrimitiveIds,
+            ExportSourceHelpers.SourceLayers(span.SourcePrimitiveIds, sourceLookup),
+            span.Evidence);
+    }
+
+    private static double? ScaleNullable(double? value, double? millimetersPerDrawingUnit) =>
+        value is not null && millimetersPerDrawingUnit is > 0
+            ? value.Value * millimetersPerDrawingUnit.Value
+            : null;
 }
 
 public sealed record PlacementRoomExport(
@@ -1110,6 +1227,8 @@ public sealed record PlacementOpeningExport(
     IReadOnlyList<string> HostWallIds,
     IReadOnlyList<string> ConnectedRoomIds,
     IReadOnlyList<string> ConnectedRoomLabels,
+    IReadOnlyList<OpeningRoomConnectionExport> ConnectedRoomLinks,
+    IReadOnlyList<string> RoomAdjacencyIds,
     double Confidence,
     PlacementReliabilityExport Reliability,
     IReadOnlyList<string> SourcePrimitiveIds,
@@ -1137,7 +1256,7 @@ public sealed record PlacementOpeningExport(
             opening.MeasurementScaleGroupId,
             scale,
             opening.Placement is null ? "Unanchored" : "Anchored",
-            opening.Placement is null ? null : OpeningPlacementExport.From(opening.Placement),
+            opening.Placement is null ? null : OpeningPlacementExport.From(opening.Placement, scale),
             opening.HingeSide.ToString(),
             opening.SwingSide.ToString(),
             opening.SwingDirection.ToString(),
@@ -1146,6 +1265,8 @@ public sealed record PlacementOpeningExport(
             opening.HostWallIds,
             opening.ConnectedRoomIds,
             opening.ConnectedRoomLabels,
+            opening.ConnectedRoomLinks.Select(OpeningRoomConnectionExport.From).ToArray(),
+            opening.RoomAdjacencyIds,
             opening.Confidence.Value,
             PlacementReliability.ForOpening(opening, calibration),
             opening.SourcePrimitiveIds,
@@ -1281,6 +1402,9 @@ public sealed record PlacementWallGraphRepairCandidateExport(
     int PageNumber,
     string Kind,
     string SuggestedAction,
+    string Severity,
+    string ImportImpact,
+    string Applicability,
     string SourceNodeId,
     PointExport SourcePoint,
     PointExport? SourcePointMillimeters,
@@ -1290,6 +1414,12 @@ public sealed record PlacementWallGraphRepairCandidateExport(
     string? HostWallId,
     double GapDistanceDrawingUnits,
     double? GapDistanceMillimeters,
+    double SafeSnapDistanceDrawingUnits,
+    double? SafeSnapDistanceMillimeters,
+    double ReviewDistanceLimitDrawingUnits,
+    double? ReviewDistanceLimitMillimeters,
+    double ExcessDistanceBeyondSafeSnapDrawingUnits,
+    double? ExcessDistanceBeyondSafeSnapMillimeters,
     LineExport RepairLine,
     LineExport? RepairLineMillimeters,
     RectExport Bounds,
@@ -1313,6 +1443,9 @@ public sealed record PlacementWallGraphRepairCandidateExport(
             candidate.PageNumber,
             candidate.Kind.ToString(),
             candidate.SuggestedAction.ToString(),
+            candidate.Severity.ToString(),
+            candidate.ImportImpact.ToString(),
+            candidate.Applicability.ToString(),
             candidate.SourceNodeId,
             PointExport.From(candidate.SourcePoint),
             ScalePoint(candidate.SourcePoint, scale),
@@ -1322,6 +1455,12 @@ public sealed record PlacementWallGraphRepairCandidateExport(
             candidate.HostWallId,
             candidate.GapDistance,
             scale is > 0 ? candidate.GapDistance * scale.Value : null,
+            candidate.SafeSnapDistance,
+            scale is > 0 ? candidate.SafeSnapDistance * scale.Value : null,
+            candidate.ReviewDistanceLimit,
+            scale is > 0 ? candidate.ReviewDistanceLimit * scale.Value : null,
+            candidate.ExcessDistanceBeyondSafeSnap,
+            scale is > 0 ? candidate.ExcessDistanceBeyondSafeSnap * scale.Value : null,
             LineExport.From(candidate.RepairLine),
             ScaleLine(candidate.RepairLine, scale),
             RectExport.From(candidate.Bounds),
@@ -1336,9 +1475,233 @@ public sealed record PlacementWallGraphRepairCandidateExport(
     }
 
     private static string RecommendedRepairAction(WallGraphRepairCandidate candidate) =>
-        candidate.SuggestedAction == WallGraphRepairAction.SnapEndpointToWall
-            ? "Review this endpoint-to-wall snap candidate before repairing the wall graph topology."
+        candidate.Applicability == WallGraphRepairApplicability.ManualCorrectionRecommended
+            ? "Manually review and correct this wall graph gap before using topology for downstream placement."
+            : candidate.SuggestedAction == WallGraphRepairAction.SnapEndpointToWall
+                ? "Review this endpoint-to-wall snap candidate before repairing the wall graph topology."
             : "Review this endpoint-to-endpoint snap candidate before repairing the wall graph topology.";
+}
+
+public sealed record PlacementWallGraphExport(
+    PlacementWallGraphSummaryExport Summary,
+    IReadOnlyList<PlacementWallGraphNodeExport> Nodes,
+    IReadOnlyList<PlacementWallGraphEdgeExport> Edges,
+    IReadOnlyList<PlacementWallGraphComponentExport> Components,
+    IReadOnlyList<string> RepairCandidateIds,
+    IReadOnlyList<string> Evidence)
+{
+    public static PlacementWallGraphExport From(
+        WallGraph graph,
+        IReadOnlyList<WallGraphTopologySpan> topologySpans,
+        PlanCalibration calibration,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup,
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup)
+    {
+        var spansByEdgeId = topologySpans
+            .GroupBy(span => span.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var nodes = graph.Nodes
+            .Select(node => PlacementWallGraphNodeExport.From(node, calibration))
+            .ToArray();
+        var edges = graph.Edges
+            .Select(edge => PlacementWallGraphEdgeExport.From(
+                edge,
+                spansByEdgeId.TryGetValue(edge.Id, out var span) ? span : null,
+                calibration,
+                sourceLookup,
+                wallComponentLookup))
+            .ToArray();
+        var components = graph.Components
+            .Select(component => PlacementWallGraphComponentExport.From(component, calibration, sourceLookup))
+            .ToArray();
+        var repairCandidateIds = graph.RepairCandidates.Select(candidate => candidate.Id).ToArray();
+        var summary = PlacementWallGraphSummaryExport.From(graph, edges);
+        var evidence = new[]
+        {
+            $"placement wall graph exports {nodes.Length} node(s), {edges.Length} edge(s), and {components.Length} component(s)",
+            $"repair candidate ids exported: {repairCandidateIds.Length}"
+        };
+
+        return new PlacementWallGraphExport(
+            summary,
+            nodes,
+            edges,
+            components,
+            repairCandidateIds,
+            evidence);
+    }
+}
+
+public sealed record PlacementWallGraphSummaryExport(
+    int NodeCount,
+    int EdgeCount,
+    int ComponentCount,
+    int MainStructuralComponentCount,
+    int SecondaryStructuralComponentCount,
+    int ObjectLikeComponentCount,
+    int IsolatedFragmentComponentCount,
+    int StructuralEdgeCount,
+    int ExcludedEdgeCount,
+    int RepairCandidateCount,
+    int HighSeverityRepairCandidateCount,
+    int ReviewRepairCandidateCount,
+    int BlockingRepairCandidateCount)
+{
+    public static PlacementWallGraphSummaryExport From(
+        WallGraph graph,
+        IReadOnlyList<PlacementWallGraphEdgeExport> edges) =>
+        new(
+            graph.Nodes.Count,
+            graph.Edges.Count,
+            graph.Components.Count,
+            graph.Components.Count(component => component.Kind == WallGraphComponentKind.MainStructural),
+            graph.Components.Count(component => component.Kind == WallGraphComponentKind.SecondaryStructural),
+            graph.Components.Count(component => component.Kind == WallGraphComponentKind.ObjectLikeIsland),
+            graph.Components.Count(component => component.Kind == WallGraphComponentKind.IsolatedFragment),
+            edges.Count(edge => !edge.ExcludedFromStructuralTopology),
+            edges.Count(edge => edge.ExcludedFromStructuralTopology),
+            graph.RepairCandidates.Count,
+            graph.RepairCandidates.Count(candidate => candidate.Severity == WallGraphRepairSeverity.High),
+            graph.RepairCandidates.Count(candidate => candidate.ImportImpact == WallGraphRepairImportImpact.TopologyReviewRequired),
+            graph.RepairCandidates.Count(candidate => candidate.ImportImpact == WallGraphRepairImportImpact.TopologyImportBlocked));
+}
+
+public sealed record PlacementWallGraphNodeExport(
+    string Id,
+    int PageNumber,
+    PointExport Position,
+    PointExport? PositionMillimeters,
+    string Kind,
+    int Degree,
+    IReadOnlyList<string> Directions,
+    double Confidence,
+    IReadOnlyList<string> Evidence)
+{
+    public static PlacementWallGraphNodeExport From(
+        WallNode node,
+        PlanCalibration calibration)
+    {
+        var scale = ResolveMillimetersPerDrawingUnit(calibration, scaleGroupId: null);
+        return new PlacementWallGraphNodeExport(
+            node.Id,
+            node.PageNumber,
+            PointExport.From(node.Position),
+            ScalePoint(node.Position, scale),
+            node.Kind.ToString(),
+            node.Degree,
+            node.Directions,
+            node.Confidence.Value,
+            node.Evidence);
+    }
+}
+
+public sealed record PlacementWallGraphEdgeExport(
+    string Id,
+    int PageNumber,
+    string FromNodeId,
+    string ToNodeId,
+    string WallId,
+    string? WallComponentId,
+    string? WallComponentKind,
+    bool ExcludedFromStructuralTopology,
+    LineExport? CenterLine,
+    LineExport? CenterLineMillimeters,
+    RectExport? Bounds,
+    RectExport? BoundsMillimeters,
+    double DrawingLength,
+    double? LengthMeters,
+    double ThicknessDrawingUnits,
+    double? ThicknessMillimeters,
+    double? MillimetersPerDrawingUnit,
+    double Confidence,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> Evidence)
+{
+    public static PlacementWallGraphEdgeExport From(
+        WallEdge edge,
+        WallGraphTopologySpan? topologySpan,
+        PlanCalibration calibration,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup,
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup)
+    {
+        wallComponentLookup.TryGetValue(edge.WallId, out var component);
+        var scale = ResolveMillimetersPerDrawingUnit(calibration, topologySpan?.SourceWall?.MeasurementScaleGroupId);
+        var drawingLength = topologySpan?.DrawingLength ?? 0;
+        var thickness = topologySpan?.Thickness ?? 0;
+        return new PlacementWallGraphEdgeExport(
+            edge.Id,
+            edge.PageNumber,
+            edge.FromNodeId,
+            edge.ToNodeId,
+            edge.WallId,
+            component?.Id,
+            component?.Kind.ToString(),
+            component?.ExcludedFromStructuralTopology ?? false,
+            topologySpan is null ? null : LineExport.From(topologySpan.CenterLine),
+            topologySpan is null ? null : ScaleLine(topologySpan.CenterLine, scale),
+            topologySpan is null ? null : RectExport.From(topologySpan.Bounds),
+            topologySpan is null ? null : ScaleRect(topologySpan.Bounds, scale),
+            drawingLength,
+            scale is > 0 && drawingLength > 0 ? drawingLength * scale.Value / 1000.0 : null,
+            thickness,
+            scale is > 0 && thickness > 0 ? thickness * scale.Value : null,
+            scale,
+            edge.Confidence.Value,
+            topologySpan?.SourcePrimitiveIds ?? Array.Empty<string>(),
+            topologySpan is null
+                ? Array.Empty<string>()
+                : ExportSourceHelpers.SourceLayers(topologySpan.SourcePrimitiveIds, sourceLookup),
+            topologySpan?.Evidence ?? Array.Empty<string>());
+    }
+}
+
+public sealed record PlacementWallGraphComponentExport(
+    string Id,
+    int PageNumber,
+    string Kind,
+    RectExport Bounds,
+    RectExport? BoundsMillimeters,
+    IReadOnlyList<string> WallIds,
+    IReadOnlyList<string> NodeIds,
+    IReadOnlyList<string> EdgeIds,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    int WallCount,
+    int NodeCount,
+    int EdgeCount,
+    double DrawingLength,
+    double? LengthMeters,
+    double Confidence,
+    bool ExcludedFromStructuralTopology,
+    IReadOnlyList<string> Evidence)
+{
+    public static PlacementWallGraphComponentExport From(
+        WallGraphComponent component,
+        PlanCalibration calibration,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup)
+    {
+        var scale = ResolveMillimetersPerDrawingUnit(calibration, scaleGroupId: null);
+        return new PlacementWallGraphComponentExport(
+            component.Id,
+            component.PageNumber,
+            component.Kind.ToString(),
+            RectExport.From(component.Bounds),
+            ScaleRect(component.Bounds, scale),
+            component.WallIds,
+            component.NodeIds,
+            component.EdgeIds,
+            component.SourcePrimitiveIds,
+            ExportSourceHelpers.SourceLayers(component.SourcePrimitiveIds, sourceLookup),
+            component.WallCount,
+            component.NodeCount,
+            component.EdgeCount,
+            component.DrawingLength,
+            scale is > 0 ? component.DrawingLength * scale.Value / 1000.0 : null,
+            component.Confidence.Value,
+            component.ExcludedFromStructuralTopology,
+            component.Evidence);
+    }
 }
 
 public sealed record PlacementRoutingLayerExport(
@@ -1441,7 +1804,13 @@ public sealed record PlacementRoutingPassageExport(
     IReadOnlyList<string> HostWallIds,
     IReadOnlyList<string> ConnectedRoomIds,
     IReadOnlyList<string> ConnectedRoomLabels,
+    IReadOnlyList<OpeningRoomConnectionExport> ConnectedRoomLinks,
+    IReadOnlyList<string> RoomAdjacencyIds,
     OpeningPlacementExport? Placement,
+    string PlacementStatus,
+    bool ReadyForCoordinatePlacement,
+    bool RequiresReview,
+    IReadOnlyList<string> ReviewReasons,
     double Confidence,
     IReadOnlyList<string> SourcePrimitiveIds,
     IReadOnlyList<string> SourceLayers,
@@ -1472,7 +1841,13 @@ public sealed record PlacementRoutingPassageExport(
             passage.HostWallIds,
             passage.ConnectedRoomIds,
             passage.ConnectedRoomLabels,
-            passage.Placement is null ? null : OpeningPlacementExport.From(passage.Placement),
+            passage.ConnectedRoomLinks.Select(OpeningRoomConnectionExport.From).ToArray(),
+            passage.RoomAdjacencyIds,
+            passage.Placement is null ? null : OpeningPlacementExport.From(passage.Placement, scale),
+            passage.Placement is null ? "Unanchored" : "Anchored",
+            passage.ReadyForCoordinatePlacement,
+            passage.RequiresReview,
+            passage.ReviewReasons,
             passage.Confidence.Value,
             passage.SourcePrimitiveIds,
             ExportSourceHelpers.SourceLayers(passage.SourcePrimitiveIds, sourceLookup),
@@ -1728,6 +2103,7 @@ public sealed record PlacementIssueExport(
     private const string PdfRasterOcrRequiredIssueCode = "quality.pdf_raster_ocr_required";
     private const string RasterNoExtractedPrimitivesIssueCode = "quality.raster_no_extracted_primitives";
     private const string RasterLowExtractionConfidenceIssueCode = "quality.raster_low_extraction_confidence";
+    private const string OpeningPlacementInconsistentIssueCode = "placement.opening.placement_inconsistent";
 
     public static IEnumerable<PlacementIssueExport> From(
         PlanScanResult result,
@@ -1858,6 +2234,41 @@ public sealed record PlacementIssueExport(
                 properties);
         }
 
+        foreach (var pattern in PlanRoutingLayerBuilder.DetectDenseMinorRoutingDetailPatterns(result)
+                     .OrderBy(pattern => pattern.PageNumber)
+                     .ThenBy(pattern => pattern.Id, StringComparer.Ordinal))
+        {
+            var scale = ResolveMillimetersPerDrawingUnit(result.Calibration, scaleGroupId: null);
+            var properties = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["detector"] = nameof(PlanRoutingLayerBuilder),
+                ["patternKind"] = "DenseMinorSecondaryRoutingDetail",
+                ["hostWallId"] = pattern.HostWallId,
+                ["hostWallComponentId"] = pattern.HostWallComponentId ?? string.Empty,
+                ["hostWallComponentKind"] = pattern.HostWallComponentKind?.ToString() ?? string.Empty,
+                ["minorJunctionCount"] = pattern.MinorJunctionCount.ToString(CultureInfo.InvariantCulture),
+                ["minorDetailWallCount"] = pattern.MinorDetailWallCount.ToString(CultureInfo.InvariantCulture),
+                ["wallIds"] = string.Join(",", pattern.WallIds),
+                ["incidentWallIds"] = string.Join(",", pattern.IncidentWallIds)
+            };
+
+            yield return new PlacementIssueExport(
+                "placement.review.dense_minor_routing_detail",
+                DiagnosticSeverity.Info.ToString(),
+                "Dense secondary detail linework was kept out of trusted routing barriers.",
+                pattern.PageNumber,
+                new[] { pattern.PageNumber },
+                pattern.Id,
+                RectExport.From(pattern.Bounds),
+                ScaleRect(pattern.Bounds, scale),
+                ClampRatio(pattern.Confidence.Value),
+                "Treat this pattern as non-structural routing detail unless visual review confirms it is a real wall system.",
+                pattern.SourcePrimitiveIds,
+                ExportSourceHelpers.SourceLayers(pattern.SourcePrimitiveIds, sourceLookup),
+                BuildIssueEvidence(pattern.Evidence),
+                properties);
+        }
+
         foreach (var entry in result.Diagnostics.Messages
                      .Where(diagnostic => string.Equals(
                          diagnostic.Code,
@@ -1984,6 +2395,49 @@ public sealed record PlacementIssueExport(
                     ["operation"] = opening.Operation.ToString()
                 });
         }
+
+        foreach (var opening in result.Openings
+                     .Where(opening => opening.Placement is not null)
+                     .Where(opening => !ScanReviewQueueSummary.OpeningPlacementIsCoordinateReady(opening)))
+        {
+            var scale = ResolveMillimetersPerDrawingUnit(result.Calibration, opening.MeasurementScaleGroupId);
+            var reasons = ScanReviewQueueSummary.OpeningReviewReasons(opening).ToArray();
+            var sourcePrimitiveIds = opening.SourcePrimitiveIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var placement = opening.Placement!;
+            yield return new PlacementIssueExport(
+                OpeningPlacementInconsistentIssueCode,
+                DiagnosticSeverity.Warning.ToString(),
+                "Opening is anchored to a host wall, but its placement offsets or wall parameters are internally inconsistent.",
+                opening.PageNumber,
+                new[] { opening.PageNumber },
+                opening.Id,
+                RectExport.From(opening.Bounds),
+                ScaleRect(opening.Bounds, scale),
+                ClampRatio(opening.Confidence.Value),
+                "Review or correct the anchored opening placement before using it to cut walls, connect rooms, or route through the opening.",
+                sourcePrimitiveIds,
+                ExportSourceHelpers.SourceLayers(sourcePrimitiveIds, sourceLookup),
+                BuildIssueEvidence(opening.Evidence.Concat(reasons).DefaultIfEmpty("Opening placement failed coordinate-readiness checks.")),
+                new Dictionary<string, string>
+                {
+                    ["type"] = opening.Type.ToString(),
+                    ["operation"] = opening.Operation.ToString(),
+                    ["placementStatus"] = "Anchored",
+                    ["hostWallId"] = placement.HostWallId ?? string.Empty,
+                    ["hostWallIds"] = string.Join(",", opening.HostWallIds),
+                    ["startOffsetDrawingUnits"] = placement.StartOffsetDrawingUnits.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["endOffsetDrawingUnits"] = placement.EndOffsetDrawingUnits.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["centerOffsetDrawingUnits"] = placement.CenterOffsetDrawingUnits.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["lengthDrawingUnits"] = placement.LengthDrawingUnits.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["hostWallStartParameter"] = placement.HostWallStartParameter.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["hostWallEndParameter"] = placement.HostWallEndParameter.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["hostWallCenterParameter"] = placement.HostWallCenterParameter.ToString("0.######", CultureInfo.InvariantCulture),
+                    ["reasons"] = string.Join("; ", reasons)
+                });
+        }
     }
 
     private static IReadOnlyList<string> BuildIssueEvidence(params string[] evidence) =>
@@ -2043,6 +2497,23 @@ internal static class PlacementReliability
             reasons.Add("metric scale unavailable");
         }
 
+        if (component is not null)
+        {
+            if (component.ExcludedFromStructuralTopology)
+            {
+                reasons.Add("wall component excluded from structural topology");
+            }
+
+            if (component.Kind == WallGraphComponentKind.ObjectLikeIsland)
+            {
+                reasons.Add("wall belongs to compact object-like linework component");
+            }
+            else if (component.Kind == WallGraphComponentKind.IsolatedFragment)
+            {
+                reasons.Add("wall belongs to isolated wall graph fragment");
+            }
+        }
+
         reasons.AddRange(reviewReasons);
 
         return Create(
@@ -2076,32 +2547,19 @@ internal static class PlacementReliability
 
     public static PlacementReliabilityExport ForOpening(OpeningCandidate opening, PlanCalibration calibration)
     {
-        var reasons = new List<string>();
-        if (opening.Confidence.Value < 0.5)
-        {
-            reasons.Add("opening confidence below 0.5");
-        }
-
-        if (opening.Placement is null)
-        {
-            reasons.Add("opening is not anchored to a host-wall placement reference");
-        }
+        var placementReady = ScanReviewQueueSummary.OpeningPlacementIsCoordinateReady(opening);
+        var reasons = ScanReviewQueueSummary.OpeningReviewReasons(opening).ToList();
 
         if (!calibration.HasReliableMeasurementScale)
         {
             reasons.Add("metric scale unavailable");
         }
 
-        if (opening.Operation == OpeningOperation.Unknown)
-        {
-            reasons.Add("opening operation unknown");
-        }
-
         return Create(
             opening.Confidence.Value,
-            opening.Confidence.Value >= 0.5 && opening.Placement is not null,
+            opening.Confidence.Value >= 0.5 && placementReady,
             calibration.HasReliableMeasurementScale,
-            opening.Placement is null || opening.Operation == OpeningOperation.Unknown,
+            !placementReady || opening.Operation == OpeningOperation.Unknown,
             reasons);
     }
 

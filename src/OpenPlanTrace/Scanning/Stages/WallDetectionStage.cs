@@ -50,6 +50,10 @@ internal sealed class WallDetectionStage : IPipelineStage
                 .SelectMany(cluster => cluster.SourcePrimitiveIds)
                 .ToHashSet(StringComparer.Ordinal);
             var densePatternClusters = DetectDenseOrthogonalPatternWallNoise(classifiedCandidates, mainRegion.Bounds, context.Options);
+            densePatternClusters = ExpandDenseOrthogonalPatternCandidateClusterPerimeters(
+                densePatternClusters,
+                classifiedCandidates,
+                context.Options);
             var densePatternSourceIds = densePatternClusters
                 .SelectMany(cluster => cluster.SourcePrimitiveIds)
                 .ToHashSet(StringComparer.Ordinal);
@@ -93,6 +97,10 @@ internal sealed class WallDetectionStage : IPipelineStage
             var denseParallelRunClusters = DetectDenseParallelPatternWallRunNoise(
                 horizontalRuns.Concat(verticalRuns).ToArray(),
                 mainRegion.Bounds,
+                context.Options);
+            densePatternRunClusters = ExpandDenseOrthogonalPatternRunClusterPerimeters(
+                densePatternRunClusters,
+                horizontalRuns.Concat(verticalRuns).ToArray(),
                 context.Options);
             var densePatternRuns = densePatternRunClusters
                 .SelectMany(cluster => cluster.Runs)
@@ -147,11 +155,15 @@ internal sealed class WallDetectionStage : IPipelineStage
                 .Where(run => run.DuplicatePrimitiveCount > 0)
                 .ToArray();
 
+            var axisPairSeparationProfile = context.Options.EnableWallPairReconstruction
+                ? WallPairSeparationProfile.FromAxisRuns(horizontalRuns.Concat(verticalRuns).ToArray(), context.Options)
+                : WallPairSeparationProfile.Empty;
             var axisPairCount =
-                AddAxisWalls(page.Number, mainRegion.Id, horizontalRuns, context)
-                + AddAxisWalls(page.Number, mainRegion.Id, verticalRuns, context);
+                AddAxisWalls(page.Number, mainRegion.Id, horizontalRuns, axisPairSeparationProfile, context)
+                + AddAxisWalls(page.Number, mainRegion.Id, verticalRuns, axisPairSeparationProfile, context);
             var nonAxisPairCount = AddNonAxisWalls(page.Number, mainRegion.Id, nonAxisRuns, context);
             var reconstructedPairs = axisPairCount + nonAxisPairCount;
+            AddWallPairSeparationProfileDiagnostic(page.Number, mainRegion.Id, "axis", axisPairSeparationProfile, axisPairCount, context);
 
             if (layerFilteredCandidates.Length > 0)
             {
@@ -513,8 +525,7 @@ internal sealed class WallDetectionStage : IPipelineStage
         ScannerOptions options)
     {
         if (!candidate.UseForWallDetection
-            || candidate.LayerCategory != LayerCategory.Unknown
-            || candidate.LayerConfidence.Value >= 0.45)
+            || !HasWeakOrAmbiguousLayerForWallNoise(candidate))
         {
             return false;
         }
@@ -522,6 +533,22 @@ internal sealed class WallDetectionStage : IPipelineStage
         var length = candidate.Line.Segment.Length;
         return length >= Math.Max(1, options.MinWallFragmentLength)
             && length <= Math.Max(options.MinWallLength, options.MaxCompositeObjectPrimitiveLength);
+    }
+
+    private static bool HasWeakOrAmbiguousLayerForWallNoise(WallLineCandidate candidate)
+    {
+        if (candidate.LayerCategory == LayerCategory.Unknown)
+        {
+            return true;
+        }
+
+        if (candidate.LayerConfidence.Value >= 0.45)
+        {
+            return false;
+        }
+
+        return candidate.LayerCategory is not LayerCategory.Wall
+            and not LayerCategory.Structural;
     }
 
     private static IReadOnlyList<IReadOnlyList<CompactLineworkWallNoiseItem>> BuildCompactLineworkClusters(
@@ -632,7 +659,7 @@ internal sealed class WallDetectionStage : IPipelineStage
             return Array.Empty<DenseOrthogonalPatternWallNoiseCluster>();
         }
 
-        return BuildDenseOrthogonalPatternClusters(items, Math.Max(2.5, options.WallSnapTolerance * 2.25))
+        return BuildDenseOrthogonalPatternClusters(items, DenseOrthogonalPatternClusterTolerance(options))
             .Select(cluster => TryCreateDenseOrthogonalPatternCluster(cluster, mainRegionBounds, options))
             .Where(cluster => cluster is not null)
             .Select(cluster => cluster!)
@@ -765,7 +792,7 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         var intersectionCount = CountAxisIntersections(horizontal, vertical, Math.Max(1.5, options.WallSnapTolerance));
-        var potentialIntersectionCount = horizontal.Length * vertical.Length;
+        var potentialIntersectionCount = horizontalCoordinates.Count * verticalCoordinates.Count;
         var minimumIntersections = Math.Max(16, (int)Math.Ceiling(potentialIntersectionCount * 0.32));
         if (intersectionCount < minimumIntersections)
         {
@@ -789,6 +816,87 @@ internal sealed class WallDetectionStage : IPipelineStage
             Math.Round(verticalMedianSpacing, 3));
     }
 
+    private static IReadOnlyList<DenseOrthogonalPatternWallNoiseCluster> ExpandDenseOrthogonalPatternCandidateClusterPerimeters(
+        IReadOnlyList<DenseOrthogonalPatternWallNoiseCluster> clusters,
+        IReadOnlyList<WallLineCandidate> candidates,
+        ScannerOptions options)
+    {
+        if (clusters.Count == 0 || candidates.Count == 0)
+        {
+            return clusters;
+        }
+
+        return clusters
+            .Select(cluster => ExpandDenseOrthogonalPatternCandidateClusterPerimeter(cluster, candidates, options))
+            .ToArray();
+    }
+
+    private static DenseOrthogonalPatternWallNoiseCluster ExpandDenseOrthogonalPatternCandidateClusterPerimeter(
+        DenseOrthogonalPatternWallNoiseCluster cluster,
+        IReadOnlyList<WallLineCandidate> candidates,
+        ScannerOptions options)
+    {
+        var existingSourceIds = cluster.SourcePrimitiveIds.ToHashSet(StringComparer.Ordinal);
+        var perimeterItems = candidates
+            .Where(candidate => !existingSourceIds.Contains(candidate.PrimitiveId))
+            .Select(candidate => TryCreateWeakSurfacePatternPerimeterItem(candidate, cluster, options))
+            .Where(item => item is not null)
+            .Select(item => item!)
+            .ToArray();
+        if (perimeterItems.Length == 0)
+        {
+            return cluster;
+        }
+
+        var sourcePrimitiveIds = cluster.SourcePrimitiveIds
+            .Concat(perimeterItems.Select(item => item.PrimitiveId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var bounds = PlanRect.Union(
+            new[] { cluster.Bounds }.Concat(perimeterItems.Select(item => item.Bounds)));
+
+        return cluster with
+        {
+            Bounds = bounds,
+            SourcePrimitiveIds = sourcePrimitiveIds,
+            HorizontalLineCount = cluster.HorizontalLineCount + perimeterItems.Count(item => item.Orientation == WallOrientation.Horizontal),
+            VerticalLineCount = cluster.VerticalLineCount + perimeterItems.Count(item => item.Orientation == WallOrientation.Vertical)
+        };
+    }
+
+    private static DenseOrthogonalPatternWallNoiseItem? TryCreateWeakSurfacePatternPerimeterItem(
+        WallLineCandidate candidate,
+        DenseOrthogonalPatternWallNoiseCluster cluster,
+        ScannerOptions options)
+    {
+        if (!candidate.UseForWallDetection
+            || HasStrongWallLayerEvidence(candidate.LayerEvidence)
+            || ((candidate.LayerCategory is LayerCategory.Wall or LayerCategory.Structural)
+                && candidate.LayerConfidence.Value >= 0.35))
+        {
+            return null;
+        }
+
+        var orientation = ResolveWallOrientation(candidate.Line.Segment, options);
+        if (orientation is not (WallOrientation.Horizontal or WallOrientation.Vertical))
+        {
+            return null;
+        }
+
+        var item = DenseOrthogonalPatternWallNoiseItem.From(candidate, options);
+        return IsSurfacePatternPerimeterGeometry(
+            item.Orientation,
+            item.Coordinate,
+            item.Start,
+            item.End,
+            cluster.Bounds,
+            cluster.HorizontalMedianSpacing,
+            cluster.VerticalMedianSpacing,
+            options)
+            ? item
+            : null;
+    }
+
     private static IReadOnlyList<DenseOrthogonalPatternWallRunNoiseCluster> DetectDenseOrthogonalPatternWallRunNoise(
         IReadOnlyList<AxisRun> runs,
         PlanRect mainRegionBounds,
@@ -808,7 +916,7 @@ internal sealed class WallDetectionStage : IPipelineStage
             return Array.Empty<DenseOrthogonalPatternWallRunNoiseCluster>();
         }
 
-        return BuildDenseOrthogonalPatternRunClusters(items, Math.Max(2.5, options.WallSnapTolerance * 2.25))
+        return BuildDenseOrthogonalPatternRunClusters(items, DenseOrthogonalPatternClusterTolerance(options))
             .Select(cluster => TryCreateDenseOrthogonalPatternRunCluster(cluster, mainRegionBounds, options))
             .Where(cluster => cluster is not null)
             .Select(cluster => cluster!)
@@ -920,7 +1028,7 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         var intersectionCount = CountAxisRunIntersections(horizontal, vertical, Math.Max(1.5, options.WallSnapTolerance));
-        var potentialIntersectionCount = horizontal.Length * vertical.Length;
+        var potentialIntersectionCount = horizontalCoordinates.Count * verticalCoordinates.Count;
         var minimumIntersections = Math.Max(16, (int)Math.Ceiling(potentialIntersectionCount * 0.28));
         if (intersectionCount < minimumIntersections)
         {
@@ -945,8 +1053,150 @@ internal sealed class WallDetectionStage : IPipelineStage
             Math.Round(verticalMedianSpacing, 3));
     }
 
+    private static IReadOnlyList<DenseOrthogonalPatternWallRunNoiseCluster> ExpandDenseOrthogonalPatternRunClusterPerimeters(
+        IReadOnlyList<DenseOrthogonalPatternWallRunNoiseCluster> clusters,
+        IReadOnlyList<AxisRun> allRuns,
+        ScannerOptions options)
+    {
+        if (clusters.Count == 0 || allRuns.Count == 0)
+        {
+            return clusters;
+        }
+
+        return clusters
+            .Select(cluster => ExpandDenseOrthogonalPatternRunClusterPerimeter(cluster, allRuns, options))
+            .ToArray();
+    }
+
+    private static DenseOrthogonalPatternWallRunNoiseCluster ExpandDenseOrthogonalPatternRunClusterPerimeter(
+        DenseOrthogonalPatternWallRunNoiseCluster cluster,
+        IReadOnlyList<AxisRun> allRuns,
+        ScannerOptions options)
+    {
+        var existing = cluster.Runs.ToHashSet();
+        var perimeterRuns = allRuns
+            .Where(run => !existing.Contains(run))
+            .Where(run => IsWeakSurfacePatternPerimeterRun(run, cluster, options))
+            .ToArray();
+        if (perimeterRuns.Length == 0)
+        {
+            return cluster;
+        }
+
+        var runs = cluster.Runs
+            .Concat(perimeterRuns)
+            .Distinct()
+            .ToArray();
+        var bounds = PlanRect.Union(runs.Select(run => DenseOrthogonalPatternWallRunNoiseItem.From(run).Bounds));
+        var sourcePrimitiveIds = runs
+            .SelectMany(run => run.SourcePrimitiveIds)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        return cluster with
+        {
+            Bounds = bounds,
+            SourcePrimitiveIds = sourcePrimitiveIds,
+            Runs = runs,
+            HorizontalLineCount = runs.Count(run => run.Orientation == WallOrientation.Horizontal),
+            VerticalLineCount = runs.Count(run => run.Orientation == WallOrientation.Vertical)
+        };
+    }
+
+    private static bool IsWeakSurfacePatternPerimeterRun(
+        AxisRun run,
+        DenseOrthogonalPatternWallRunNoiseCluster cluster,
+        ScannerOptions options)
+    {
+        if (run.Orientation is not (WallOrientation.Horizontal or WallOrientation.Vertical)
+            || HasStrongWallLayerEvidence(run.LayerEvidence))
+        {
+            return false;
+        }
+
+        var bounds = cluster.Bounds;
+        if (bounds.IsEmpty)
+        {
+            return false;
+        }
+
+        return IsSurfacePatternPerimeterGeometry(
+            run.Orientation,
+            run.Coordinate,
+            run.Start,
+            run.End,
+            bounds,
+            cluster.HorizontalMedianSpacing,
+            cluster.VerticalMedianSpacing,
+            options);
+    }
+
+    private static bool IsSurfacePatternPerimeterGeometry(
+        WallOrientation orientation,
+        double coordinate,
+        double start,
+        double end,
+        PlanRect bounds,
+        double horizontalMedianSpacing,
+        double verticalMedianSpacing,
+        ScannerOptions options)
+    {
+        var medianSpacing = Math.Max(horizontalMedianSpacing, verticalMedianSpacing);
+        var edgeTolerance = Math.Max(options.WallSnapTolerance * 2.0, medianSpacing * 1.35);
+        var overhangTolerance = Math.Max(options.MinWallLength, medianSpacing * 2.5);
+
+        if (orientation == WallOrientation.Horizontal)
+        {
+            var distanceToEdge = Math.Min(
+                Math.Abs(coordinate - bounds.Top),
+                Math.Abs(coordinate - bounds.Bottom));
+            return distanceToEdge <= edgeTolerance
+                && HasSurfacePatternPerimeterSpan(
+                    start,
+                    end,
+                    bounds.Left,
+                    bounds.Right,
+                    overhangTolerance);
+        }
+
+        var verticalDistanceToEdge = Math.Min(
+            Math.Abs(coordinate - bounds.Left),
+            Math.Abs(coordinate - bounds.Right));
+        return verticalDistanceToEdge <= edgeTolerance
+            && HasSurfacePatternPerimeterSpan(
+                start,
+                end,
+                bounds.Top,
+                bounds.Bottom,
+                overhangTolerance);
+    }
+
+    private static bool HasSurfacePatternPerimeterSpan(
+        double runStart,
+        double runEnd,
+        double patternStart,
+        double patternEnd,
+        double overhangTolerance)
+    {
+        var patternLength = Math.Max(1, patternEnd - patternStart);
+        var runLength = Math.Max(1, runEnd - runStart);
+        var overlap = OverlapLength(runStart, runEnd, patternStart, patternEnd);
+        if (overlap < patternLength * 0.70 || overlap < runLength * 0.65)
+        {
+            return false;
+        }
+
+        return runStart >= patternStart - overhangTolerance
+            && runEnd <= patternEnd + overhangTolerance;
+    }
+
     private static double MaxDenseOrthogonalPatternSpacing(ScannerOptions options) =>
         Math.Max(options.MinWallLength * 1.25, options.DefaultWallThickness * 8.0);
+
+    private static double DenseOrthogonalPatternClusterTolerance(ScannerOptions options) =>
+        Math.Max(
+            Math.Max(2.5, options.WallSnapTolerance * 2.25),
+            MaxDenseOrthogonalPatternSpacing(options) * 0.7);
 
     private static IReadOnlyList<DenseParallelPatternWallRunNoiseCluster> DetectDenseParallelPatternWallRunNoise(
         IReadOnlyList<AxisRun> runs,
@@ -1736,12 +1986,10 @@ internal sealed class WallDetectionStage : IPipelineStage
         int pageNumber,
         string sourceRegionId,
         IReadOnlyList<AxisRun> runs,
+        WallPairSeparationProfile profile,
         ScanContext context)
     {
         var consumed = new HashSet<AxisRun>();
-        var profile = context.Options.EnableWallPairReconstruction
-            ? WallPairSeparationProfile.FromAxisRuns(runs, context.Options)
-            : WallPairSeparationProfile.Empty;
         var pairs = context.Options.EnableWallPairReconstruction
             ? ReconstructWallPairs(runs, context.Options, consumed, profile).ToArray()
             : Array.Empty<WallPairRun>();
@@ -1763,7 +2011,6 @@ internal sealed class WallDetectionStage : IPipelineStage
             context.Walls.Add(CreateAxisWall(pageNumber, sourceRegionId, run, context.Walls.Count + 1, context.Options, context.Calibration));
         }
 
-        AddWallPairSeparationProfileDiagnostic(pageNumber, sourceRegionId, "axis", profile, pairs.Length, context);
         return pairs.Length;
     }
 

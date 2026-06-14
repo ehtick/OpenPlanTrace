@@ -716,6 +716,18 @@ internal sealed class OpeningDetectionStage : IPipelineStage
             referenceLine.DistanceToPoint(openingLine.End));
         var along = referenceLine.Vector.Normalize();
         var normal = new PlanVector(-along.Y, along.X).Normalize();
+        var depth = PlacementDepth(hostWalls, openingLine);
+        var halfDepth = depth / 2.0;
+        var footprintCorners = new[]
+        {
+            projectedStart + (normal * -halfDepth),
+            projectedEnd + (normal * -halfDepth),
+            projectedEnd + (normal * halfDepth),
+            projectedStart + (normal * halfDepth)
+        };
+        var footprintBounds = BoundsForPoints(footprintCorners);
+        var startJambLine = new PlanLineSegment(footprintCorners[0], footprintCorners[3]);
+        var endJambLine = new PlanLineSegment(footprintCorners[1], footprintCorners[2]);
         var crossPenalty = Math.Min(0.25, crossOffset / Math.Max(1, openingLine.Length) * 0.25);
         var placementConfidence = new Confidence(Math.Clamp(
             Math.Min(0.95, openingConfidence.Value + 0.08)
@@ -734,6 +746,7 @@ internal sealed class OpeningDetectionStage : IPipelineStage
                 ? "placement reference line fell back to opening centerline"
                 : $"placement reference line derived from {anchorWallIds.Length} host wall segment(s)",
             $"opening projected to reference offsets {Format(startOffset)} -> {Format(endOffset)} drawing units",
+            $"opening footprint uses {Format(depth)} drawing unit wall-normal depth",
             $"placement cross-wall offset {Format(crossOffset)} drawing units"
         };
 
@@ -760,6 +773,12 @@ internal sealed class OpeningDetectionStage : IPipelineStage
             endOffset,
             centerOffset,
             length,
+            footprintBounds,
+            footprintCorners,
+            startJambLine,
+            endJambLine,
+            depth,
+            calibration.ToMillimeters(depth, scaleGroup),
             calibration.ToMillimeters(startOffset, scaleGroup),
             calibration.ToMillimeters(endOffset, scaleGroup),
             calibration.ToMillimeters(centerOffset, scaleGroup),
@@ -772,6 +791,37 @@ internal sealed class OpeningDetectionStage : IPipelineStage
             crossOffset,
             placementConfidence,
             evidence);
+    }
+
+    private static double PlacementDepth(
+        IReadOnlyList<WallSegment> hostWalls,
+        PlanLineSegment openingLine)
+    {
+        var hostDepth = hostWalls
+            .Select(wall => wall.Thickness)
+            .Where(thickness => thickness > 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        if (hostDepth > 0)
+        {
+            return hostDepth;
+        }
+
+        return Math.Max(1, openingLine.Length * 0.08);
+    }
+
+    private static PlanRect BoundsForPoints(IReadOnlyList<PlanPoint> points)
+    {
+        if (points.Count == 0)
+        {
+            return PlanRect.Empty;
+        }
+
+        return PlanRect.FromEdges(
+            points.Min(point => point.X),
+            points.Min(point => point.Y),
+            points.Max(point => point.X),
+            points.Max(point => point.Y));
     }
 
     private static PlanLineSegment CreatePlacementReferenceLine(

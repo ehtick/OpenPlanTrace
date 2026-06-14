@@ -98,6 +98,12 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
             return null;
         }
 
+        if (TitleBlockTextHintCount(page, best.Bounds) == 0
+            && !ContainsTitleBlockGeometry(page, best.Bounds))
+        {
+            return null;
+        }
+
         var regionBounds = best.Bounds.ClampTo(page.Bounds);
         var hintBounds = TitleBlockHintBounds(page, best.Bounds);
         if (hintBounds is not null && ShouldRefineTitleBlockBounds(page, best))
@@ -688,6 +694,11 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
 
     private static double TitleBlockTextBonus(PlanPage page, PlanRect region)
     {
+        return TitleBlockTextHintCount(page, region) * 1.35;
+    }
+
+    private static int TitleBlockTextHintCount(PlanPage page, PlanRect region)
+    {
         var titleHints = page.Primitives
             .OfType<TextPrimitive>()
             .Where(text => region.Contains(text.Bounds.Center) || text.Bounds.Intersects(region))
@@ -697,7 +708,7 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
             .Take(3)
             .Count();
 
-        return titleHints * 1.35;
+        return titleHints;
     }
 
     private static bool ContainsTitleBlockGeometry(PlanPage page, PlanRect region) =>

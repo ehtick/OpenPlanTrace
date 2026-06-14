@@ -31,5 +31,7 @@ public sealed record PlanScanResult(
         SheetRegions.Where(region => region.Kind == RegionKind.TitleBlock);
 
     public PlanRoutingLayer RoutingLayer =>
-        PlanRoutingLayerBuilder.FromScanResult(this);
+        RoutingLayerSnapshot ?? PlanRoutingLayerBuilder.FromScanResult(this);
+
+    internal PlanRoutingLayer? RoutingLayerSnapshot { get; init; }
 }

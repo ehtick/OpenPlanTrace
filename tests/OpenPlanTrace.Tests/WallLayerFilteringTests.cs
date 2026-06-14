@@ -114,6 +114,49 @@ public sealed class WallLayerFilteringTests
     }
 
     [Fact]
+    public async Task ScanAsync_FiltersCompactObjectLineworkDespiteWeakUnlayeredDimensionHint()
+    {
+        var document = new PlanDocument(
+            "compact-object-linework-weak-dimension-layer-not-walls",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        UnlayeredLine("wall-top", new PlanPoint(100, 100), new PlanPoint(560, 100)),
+                        UnlayeredLine("wall-right", new PlanPoint(560, 100), new PlanPoint(560, 360)),
+                        UnlayeredLine("wall-bottom", new PlanPoint(560, 360), new PlanPoint(100, 360)),
+                        UnlayeredLine("wall-left", new PlanPoint(100, 360), new PlanPoint(100, 100)),
+                        UnlayeredLine("cabinet-top", new PlanPoint(240, 190), new PlanPoint(340, 190)),
+                        UnlayeredLine("cabinet-right", new PlanPoint(340, 190), new PlanPoint(340, 250)),
+                        UnlayeredLine("cabinet-bottom", new PlanPoint(340, 250), new PlanPoint(240, 250)),
+                        UnlayeredLine("cabinet-left", new PlanPoint(240, 250), new PlanPoint(240, 190)),
+                        UnlayeredLine("cabinet-shelf", new PlanPoint(252, 220), new PlanPoint(328, 220)),
+                        UnlayeredLine("cabinet-divider", new PlanPoint(290, 198), new PlanPoint(290, 242)),
+                        UnlayeredText("dim-text-a", "4000 mm", new PlanRect(210, 410, 72, 16)),
+                        UnlayeredText("dim-text-b", "2600 mm", new PlanRect(410, 255, 72, 16))
+                    })
+            });
+
+        var layer = Assert.Single(LayerAnalyzer.Analyze(document).Layers);
+        Assert.Equal(LayerCategory.Dimension, layer.LikelyCategory);
+        Assert.True(layer.Confidence.Value < 0.45);
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.Equal(4, result.Walls.Count);
+        Assert.All(result.Walls, wall => Assert.DoesNotContain(
+            wall.SourcePrimitiveIds,
+            sourceId => sourceId.StartsWith("cabinet-", StringComparison.Ordinal)));
+
+        var diagnostic = Assert.Single(result.Diagnostics.Messages.Where(message => message.Code == "walls.compact_linework_filtered"));
+        Assert.Contains("cabinet-top", diagnostic.SourcePrimitiveIds);
+        Assert.Contains("cabinet-divider", diagnostic.SourcePrimitiveIds);
+    }
+
+    [Fact]
     public async Task ScanAsync_FiltersDenseOrthogonalSurfacePatternsFromWalls()
     {
         var primitives = new List<PlanPrimitive>
@@ -202,6 +245,73 @@ public sealed class WallLayerFilteringTests
         var placementPattern = Assert.Single(placementJson.RootElement.GetProperty("surfacePatterns").EnumerateArray());
         Assert.Equal("DenseOrthogonalGrid", placementPattern.GetProperty("kind").GetString());
         Assert.Contains("non-structural detail", placementPattern.GetProperty("recommendedAction").GetString());
+    }
+
+    [Fact]
+    public async Task ScanAsync_FiltersWeakPerimeterFrameAroundDenseSurfaceGridFromWalls()
+    {
+        var primitives = new List<PlanPrimitive>
+        {
+            UnlayeredLine("wall-top", new PlanPoint(80, 80), new PlanPoint(340, 80)),
+            UnlayeredLine("wall-right", new PlanPoint(340, 80), new PlanPoint(340, 320)),
+            UnlayeredLine("wall-bottom", new PlanPoint(340, 320), new PlanPoint(80, 320)),
+            UnlayeredLine("wall-left", new PlanPoint(80, 320), new PlanPoint(80, 80)),
+            UnlayeredLine("terrace-frame-top", new PlanPoint(404, 104), new PlanPoint(596, 104)),
+            UnlayeredLine("terrace-frame-right", new PlanPoint(596, 104), new PlanPoint(596, 296)),
+            UnlayeredLine("terrace-frame-bottom", new PlanPoint(596, 296), new PlanPoint(404, 296)),
+            UnlayeredLine("terrace-frame-left", new PlanPoint(404, 296), new PlanPoint(404, 104))
+        };
+
+        for (var index = 0; index < 8; index++)
+        {
+            var coordinate = 430 + (index * 20);
+            primitives.Add(UnlayeredLine(
+                $"terrace-grid-v-{index}",
+                new PlanPoint(coordinate, 130),
+                new PlanPoint(coordinate, 270)));
+            primitives.Add(UnlayeredLine(
+                $"terrace-grid-h-{index}",
+                new PlanPoint(430, coordinate - 300),
+                new PlanPoint(570, coordinate - 300)));
+        }
+
+        var document = new PlanDocument(
+            "dense-surface-grid-frame-not-walls",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 440),
+                    primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.True(
+            result.Walls.Count == 4,
+            DumpWallFilteringResult(result));
+        Assert.All(result.Walls, wall =>
+        {
+            Assert.DoesNotContain(
+                wall.SourcePrimitiveIds,
+                sourceId => sourceId.StartsWith("terrace-grid-", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                wall.SourcePrimitiveIds,
+                sourceId => sourceId.StartsWith("terrace-frame-", StringComparison.Ordinal));
+        });
+
+        var pattern = Assert.Single(result.SurfacePatterns);
+        Assert.Equal(SurfacePatternKind.DenseOrthogonalGrid, pattern.Kind);
+        Assert.True(pattern.ExcludedFromWallDetection);
+        Assert.Contains("terrace-frame-top", pattern.SourcePrimitiveIds);
+        Assert.Contains("terrace-frame-right", pattern.SourcePrimitiveIds);
+        Assert.Contains("terrace-frame-bottom", pattern.SourcePrimitiveIds);
+        Assert.Contains("terrace-frame-left", pattern.SourcePrimitiveIds);
+        Assert.True(pattern.LineCount >= 20);
+
+        var diagnostic = Assert.Single(result.Diagnostics.Messages.Where(message => message.Code == "walls.dense_orthogonal_pattern_filtered"));
+        Assert.Contains("terrace-frame-top", diagnostic.SourcePrimitiveIds);
+        Assert.Contains("terrace-frame-left", diagnostic.SourcePrimitiveIds);
     }
 
     [Fact]
@@ -498,6 +608,139 @@ public sealed class WallLayerFilteringTests
     }
 
     [Fact]
+    public async Task ScanAsync_FiltersGappedSurfaceLatticeFragmentsFromWalls()
+    {
+        var primitives = new List<PlanPrimitive>
+        {
+            UnlayeredLine("wall-top", new PlanPoint(80, 80), new PlanPoint(340, 80)),
+            UnlayeredLine("wall-right", new PlanPoint(340, 80), new PlanPoint(340, 320)),
+            UnlayeredLine("wall-bottom", new PlanPoint(340, 320), new PlanPoint(80, 320)),
+            UnlayeredLine("wall-left", new PlanPoint(80, 320), new PlanPoint(80, 80))
+        };
+
+        for (var row = 0; row < 8; row++)
+        {
+            var y = 110 + (row * 16);
+            for (var span = 0; span < 3; span++)
+            {
+                var x = 400 + (span * 52);
+                primitives.Add(UnlayeredLine(
+                    $"gapped-lattice-h-{row}-{span}",
+                    new PlanPoint(x, y),
+                    new PlanPoint(x + 34, y)));
+            }
+        }
+
+        for (var column = 0; column < 8; column++)
+        {
+            var x = 410 + (column * 16);
+            for (var span = 0; span < 3; span++)
+            {
+                var y = 100 + (span * 52);
+                primitives.Add(UnlayeredLine(
+                    $"gapped-lattice-v-{column}-{span}",
+                    new PlanPoint(x, y),
+                    new PlanPoint(x, y + 34)));
+            }
+        }
+
+        var document = new PlanDocument(
+            "gapped-surface-lattice-not-walls",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 440),
+                    primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.True(
+            result.Walls.Count == 4,
+            DumpWallFilteringResult(result));
+        Assert.All(result.Walls, wall => Assert.DoesNotContain(
+            wall.SourcePrimitiveIds,
+            sourceId => sourceId.StartsWith("gapped-lattice-", StringComparison.Ordinal)));
+
+        var pattern = Assert.Single(result.SurfacePatterns, pattern => pattern.SourcePrimitiveIds.Any(sourceId => sourceId.StartsWith("gapped-lattice-", StringComparison.Ordinal)));
+        Assert.Equal(SurfacePatternKind.DenseOrthogonalGrid, pattern.Kind);
+        Assert.Equal(SurfacePatternOrientation.Orthogonal, pattern.Orientation);
+        Assert.True(pattern.ExcludedFromWallDetection);
+        Assert.True(pattern.ExcludedFromStructuralTopology);
+        Assert.True(pattern.RequiresReview);
+        Assert.True(pattern.LineCount >= 40);
+        Assert.True(pattern.HorizontalLineCount >= 8);
+        Assert.True(pattern.VerticalLineCount >= 8);
+
+        var diagnostic = Assert.Single(result.Diagnostics.Messages.Where(message => message.Code == "walls.dense_orthogonal_pattern_filtered"));
+        Assert.Contains("gapped-lattice-h-0-0", diagnostic.SourcePrimitiveIds);
+        Assert.Contains("gapped-lattice-v-7-2", diagnostic.SourcePrimitiveIds);
+    }
+
+    [Fact]
+    public async Task ScanAsync_DoesNotClassifyLineOnlySurfaceLatticeAsTitleBlock()
+    {
+        var primitives = new List<PlanPrimitive>
+        {
+            UnlayeredLine("room-wall-top", new PlanPoint(18, 18), new PlanPoint(282, 18)),
+            UnlayeredLine("room-wall-right", new PlanPoint(282, 18), new PlanPoint(282, 262)),
+            UnlayeredLine("room-wall-bottom", new PlanPoint(282, 262), new PlanPoint(18, 262)),
+            UnlayeredLine("room-wall-left", new PlanPoint(18, 262), new PlanPoint(18, 18))
+        };
+
+        for (var row = 0; row < 8; row++)
+        {
+            var y = 58 + (row * 16);
+            for (var span = 0; span < 3; span++)
+            {
+                var x = 332 + (span * 52);
+                primitives.Add(UnlayeredLine(
+                    $"side-lattice-h-{row}-{span}",
+                    new PlanPoint(x, y),
+                    new PlanPoint(x + 34, y)));
+            }
+        }
+
+        for (var column = 0; column < 8; column++)
+        {
+            var x = 342 + (column * 16);
+            for (var span = 0; span < 3; span++)
+            {
+                var y = 48 + (span * 52);
+                primitives.Add(UnlayeredLine(
+                    $"side-lattice-v-{column}-{span}",
+                    new PlanPoint(x, y),
+                    new PlanPoint(x, y + 34)));
+            }
+        }
+
+        var document = new PlanDocument(
+            "line-only-side-lattice-is-not-title-block",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(498, 280),
+                    primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.DoesNotContain(result.SheetRegions, region => region.Kind == RegionKind.TitleBlock);
+        Assert.True(
+            result.Walls.Count == 4,
+            DumpWallFilteringResult(result));
+        Assert.All(result.Walls, wall => Assert.DoesNotContain(
+            wall.SourcePrimitiveIds,
+            sourceId => sourceId.StartsWith("side-lattice-", StringComparison.Ordinal)));
+        Assert.Contains(
+            result.SurfacePatterns,
+            pattern => pattern.Kind == SurfacePatternKind.DenseOrthogonalGrid
+                && pattern.SourcePrimitiveIds.Any(sourceId => sourceId.StartsWith("side-lattice-", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task ScanAsync_FiltersShortDenseFragmentRunsFromWalls()
     {
         var fixtureFragments = Enumerable.Range(0, 8)
@@ -594,6 +837,19 @@ public sealed class WallLayerFilteringTests
                 SourceFormat = "test",
                 SourceId = sourceId,
                 EntityType = "LINE",
+                DrawingSpace = SourceDrawingSpace.Model
+            }
+        };
+
+    private static TextPrimitive UnlayeredText(string sourceId, string text, PlanRect bounds) =>
+        new(text, bounds)
+        {
+            SourceId = sourceId,
+            Source = new PrimitiveSourceMetadata
+            {
+                SourceFormat = "test",
+                SourceId = sourceId,
+                EntityType = "TEXT",
                 DrawingSpace = SourceDrawingSpace.Model
             }
         };

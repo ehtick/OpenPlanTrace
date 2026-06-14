@@ -15,6 +15,22 @@ public sealed class ExportTests
         Assert.Equal(
             PlanTraceExport.CurrentSchemaVersion,
             document.RootElement.GetProperty("schemaVersion").GetString());
+        var documentExport = document.RootElement.GetProperty("document");
+        Assert.Equal("pdf", documentExport.GetProperty("sourceFormat").GetString());
+        Assert.Equal("PDF/PdfPig", documentExport.GetProperty("loader").GetString());
+        Assert.Equal("Pdf", documentExport.GetProperty("sourceKind").GetString());
+        Assert.Equal("Pdf", documentExport.GetProperty("effectiveSourceKind").GetString());
+        Assert.False(documentExport.GetProperty("isDwgDerived").GetBoolean());
+        Assert.False(documentExport.GetProperty("isRasterDerived").GetBoolean());
+        Assert.Equal("pdf-vector", documentExport.GetProperty("ingestionPath").GetString());
+        var sourceReadiness = documentExport.GetProperty("sourceReadiness");
+        Assert.Equal("VectorGeometryReady", sourceReadiness.GetProperty("status").GetString());
+        Assert.True(sourceReadiness.GetProperty("canUseVectorGeometry").GetBoolean());
+        Assert.False(sourceReadiness.GetProperty("requiresExternalAdapter").GetBoolean());
+        Assert.False(sourceReadiness.GetProperty("requiresOcr").GetBoolean());
+        Assert.Contains(
+            "format=pdf",
+            sourceReadiness.GetProperty("evidence").EnumerateArray().Select(item => item.GetString()));
         var coordinateSystem = document.RootElement.GetProperty("coordinateSystem");
         Assert.Equal("OpenPlanTracePageCoordinates", coordinateSystem.GetProperty("coordinateSpace").GetString());
         Assert.Equal("TopLeft", coordinateSystem.GetProperty("origin").GetString());
@@ -26,6 +42,67 @@ public sealed class ExportTests
         Assert.True(document.RootElement.GetProperty("primitiveSources").GetArrayLength() >= 5);
         Assert.True(document.RootElement.GetProperty("layerAnalysis").GetProperty("layers").GetArrayLength() >= 1);
         Assert.True(document.RootElement.TryGetProperty("calibration", out _));
+        var diagnostics = document.RootElement.GetProperty("diagnostics");
+        var artifactPlans = diagnostics.GetProperty("artifactPlans").EnumerateArray().ToArray();
+        Assert.Equal(artifactPlans.Length, diagnostics.GetProperty("artifactPlanCount").GetInt32());
+        Assert.Contains(
+            artifactPlans,
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls)
+                && item.GetProperty("isProducedByStage").GetBoolean()
+                && item.GetProperty("isConsumedByStage").GetBoolean()
+                && item.GetProperty("producerCount").GetInt32() == item.GetProperty("producerStages").GetArrayLength()
+                && item.GetProperty("consumerCount").GetInt32() == item.GetProperty("consumerStages").GetArrayLength()
+                && item.GetProperty("firstProducerWave").GetInt32() > 0
+                && item.GetProperty("lastConsumerWave").GetInt32() >= item.GetProperty("firstProducerWave").GetInt32()
+                && item.GetProperty("dependencyRole").GetString() == "ProducedAndConsumed"
+                && item.GetProperty("evidence").GetArrayLength() > 0);
+        var artifactInventory = diagnostics.GetProperty("artifactInventory").EnumerateArray().ToArray();
+        Assert.Equal(
+            artifactInventory.Count(item => item.GetProperty("isPresent").GetBoolean()),
+            diagnostics.GetProperty("availableArtifactCount").GetInt32());
+        Assert.Contains(
+            artifactInventory,
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls)
+                && item.GetProperty("count").GetInt32() >= 4
+                && !string.IsNullOrWhiteSpace(item.GetProperty("stateKey").GetString())
+                && item.GetProperty("revision").GetInt32() > 0
+                && item.GetProperty("isImportCritical").GetBoolean()
+                && item.GetProperty("readinessImpact").GetString() == "GeometryImport");
+        var wallGraphStage = diagnostics.GetProperty("stages")
+            .EnumerateArray()
+            .First(stage => stage.GetProperty("stage").GetString() == "wall-graph");
+        var wallGraphRuntimeReadiness = wallGraphStage.GetProperty("runtimeReadiness");
+        Assert.True(wallGraphRuntimeReadiness.GetProperty("requiredReadsHaveData").GetBoolean());
+        Assert.False(wallGraphRuntimeReadiness.GetProperty("hasEmptyRequiredReads").GetBoolean());
+        Assert.Contains(
+            nameof(PlanArtifactKind.Walls),
+            wallGraphRuntimeReadiness.GetProperty("nonEmptyRequiredReads").EnumerateArray().Select(item => item.GetString()));
+        Assert.Empty(wallGraphRuntimeReadiness.GetProperty("emptyRequiredReads").EnumerateArray());
+        var wallGraphOutputReadiness = wallGraphStage.GetProperty("outputReadiness");
+        Assert.True(wallGraphOutputReadiness.GetProperty("declaredOutputsHaveData").GetBoolean());
+        Assert.False(wallGraphOutputReadiness.GetProperty("hasEmptyDeclaredOutputs").GetBoolean());
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            wallGraphOutputReadiness.GetProperty("nonEmptyDeclaredOutputs").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            nameof(PlanArtifactKind.WallGraph),
+            wallGraphOutputReadiness.GetProperty("changedDeclaredOutputs").EnumerateArray().Select(item => item.GetString()));
+        Assert.Empty(wallGraphOutputReadiness.GetProperty("undeclaredChangedArtifacts").EnumerateArray());
+        Assert.True(wallGraphOutputReadiness.GetProperty("evidence").GetArrayLength() > 0);
+        Assert.Contains(
+            wallGraphStage.GetProperty("inputArtifacts").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls)
+                && !string.IsNullOrWhiteSpace(item.GetProperty("stateKey").GetString())
+                && item.GetProperty("revision").GetInt32() > 0
+                && item.GetProperty("evidence").GetArrayLength() > 0);
+        Assert.True(wallGraphRuntimeReadiness.GetProperty("evidence").GetArrayLength() > 0);
+        Assert.Contains(
+            wallGraphStage.GetProperty("artifactDeltas").EnumerateArray(),
+            item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.WallGraph)
+                && item.GetProperty("changeKind").GetString() == nameof(PipelineArtifactDeltaKind.Created)
+                && item.GetProperty("isDeclaredWrite").GetBoolean()
+                && item.GetProperty("changed").GetBoolean()
+                && item.GetProperty("evidence").GetArrayLength() > 0);
         var measurementConsistency = document.RootElement.GetProperty("measurementConsistency");
         Assert.True(measurementConsistency.GetProperty("outlierRatio").GetDouble() >= 0);
         Assert.True(measurementConsistency.GetProperty("hasBlockingOutliers").ValueKind is JsonValueKind.True or JsonValueKind.False);
@@ -74,9 +151,73 @@ public sealed class ExportTests
         Assert.False(firstWall.GetProperty("wallComponentId").ValueKind == JsonValueKind.Null);
         Assert.Equal("MainStructural", firstWall.GetProperty("wallComponentKind").GetString());
         Assert.False(firstWall.GetProperty("excludedFromStructuralTopology").GetBoolean());
+        var firstWallTopologySpan = Assert.Single(firstWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(firstWall.GetProperty("id").GetString(), firstWallTopologySpan.GetProperty("wallId").GetString());
+        Assert.Equal(JsonValueKind.Object, firstWallTopologySpan.GetProperty("centerLine").ValueKind);
+        Assert.True(firstWallTopologySpan.GetProperty("sourceWallStartOffsetDrawingUnits").GetDouble() >= 0);
+        Assert.True(firstWallTopologySpan.GetProperty("sourceWallEndOffsetDrawingUnits").GetDouble() >= 0);
+        Assert.Equal(
+            firstWallTopologySpan.GetProperty("drawingLength").GetDouble(),
+            firstWallTopologySpan.GetProperty("sourceWallProjectedLengthDrawingUnits").GetDouble(),
+            precision: 3);
+        Assert.InRange(firstWallTopologySpan.GetProperty("sourceWallStartParameter").GetDouble(), -0.001, 1.001);
+        Assert.InRange(firstWallTopologySpan.GetProperty("sourceWallEndParameter").GetDouble(), -0.001, 1.001);
+        Assert.True(firstWallTopologySpan.GetProperty("sourceWallStartProjectionDistanceDrawingUnits").GetDouble() <= 0.001);
+        Assert.True(firstWallTopologySpan.GetProperty("sourceWallEndProjectionDistanceDrawingUnits").GetDouble() <= 0.001);
         Assert.True(firstWall.GetProperty("sourcePrimitiveIds").GetArrayLength() > 0);
         Assert.True(firstWall.GetProperty("evidence").GetArrayLength() > 0);
         Assert.Contains("Wall", firstWall.GetProperty("sourceLayers").EnumerateArray().Select(layer => layer.GetString()));
+
+        var firstWallEdge = document.RootElement.GetProperty("wallGraph").GetProperty("edges")[0];
+        Assert.Equal(JsonValueKind.Object, firstWallEdge.GetProperty("line").ValueKind);
+        Assert.Equal(JsonValueKind.Object, firstWallEdge.GetProperty("bounds").ValueKind);
+        Assert.True(firstWallEdge.GetProperty("drawingLength").GetDouble() > 0);
+        Assert.Contains("Wall", firstWallEdge.GetProperty("sourceLayers").EnumerateArray().Select(layer => layer.GetString()));
+    }
+
+    [Fact]
+    public async Task JsonExporter_ReportsDwgAdapterBackedSourceReadiness()
+    {
+        var result = await CreateScanResultAsync();
+        result = result with
+        {
+            Document = result.Document with
+            {
+                Metadata = result.Document.Metadata with
+                {
+                    Properties = new Dictionary<string, string>
+                    {
+                        ["format"] = "dwg",
+                        ["loader"] = "DWG-to-DXF/TestConverter",
+                        ["sourceKind"] = PlanSourceKind.Dwg.ToString(),
+                        ["effectiveSourceKind"] = PlanSourceKind.Dwg.ToString(),
+                        ["dwg.conversion"] = "dwg-to-dxf",
+                        ["dwg.converter"] = "TestConverter",
+                        ["dwg.intermediateFormat"] = "dxf",
+                        ["dwg.intermediateLoader"] = "DXF/IxMilia"
+                    }
+                }
+            }
+        };
+
+        using var document = JsonDocument.Parse(PlanTraceJsonExporter.Serialize(result));
+        var source = document.RootElement.GetProperty("document");
+        var readiness = source.GetProperty("sourceReadiness");
+
+        Assert.True(source.GetProperty("isDwgDerived").GetBoolean());
+        Assert.Equal("dwg-to-dxf", source.GetProperty("ingestionPath").GetString());
+        Assert.Equal("DwgAdapterBacked", readiness.GetProperty("status").GetString());
+        Assert.Equal("converted-dxf-vector-geometry", readiness.GetProperty("geometryBasis").GetString());
+        Assert.True(readiness.GetProperty("canUseVectorGeometry").GetBoolean());
+        Assert.True(readiness.GetProperty("requiresExternalAdapter").GetBoolean());
+        Assert.False(readiness.GetProperty("requiresOcr").GetBoolean());
+        Assert.True(readiness.GetProperty("isLegalAdapterBacked").GetBoolean());
+        Assert.Contains(
+            "dwg.converter=TestConverter",
+            readiness.GetProperty("evidence").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            readiness.GetProperty("messages").EnumerateArray().Select(item => item.GetString()),
+            message => message is not null && message.Contains("did not parse DWG natively", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -90,13 +231,46 @@ public sealed class ExportTests
         Assert.Contains("id=\"walls\"", svg);
         Assert.Contains("wall-main", svg);
         Assert.Contains("vector-effect: non-scaling-stroke", svg);
-        Assert.Contains("r=\"2\"", svg);
+        Assert.Contains("r=\"0.95\"", svg);
         Assert.Contains("diagnostic-bg", svg);
         Assert.Contains("id=\"rooms\"", svg);
         Assert.Contains("id=\"room-adjacency\"", svg);
         Assert.Contains("id=\"annotation-references\"", svg);
         Assert.Contains("annotation-reference", svg);
         Assert.Contains("page:1:wall:", svg);
+    }
+
+    [Fact]
+    public async Task SvgRenderer_StructuralReviewProfileSuppressesNoisyDetailLayers()
+    {
+        var result = await CreateScanResultAsync();
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.StructuralReview));
+
+        Assert.Contains("data-profile=\"structural-review\"", svg);
+        Assert.Contains("id=\"walls\"", svg);
+        Assert.Contains("id=\"rooms\"", svg);
+        Assert.Contains("id=\"openings\"", svg);
+        Assert.DoesNotContain("id=\"objects\"", svg);
+        Assert.DoesNotContain("id=\"object-aggregates\"", svg);
+        Assert.DoesNotContain("id=\"wall-components\"", svg);
+        Assert.DoesNotContain("id=\"wall-nodes\"", svg);
+        Assert.DoesNotContain("id=\"room-adjacency\"", svg);
+    }
+
+    [Fact]
+    public void SvgRenderer_DrawsWallGraphTopologySpansInsteadOfWholeRawWallLines()
+    {
+        var result = CreateDenseMinorRoutingDetailResult();
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(result, 1);
+
+        Assert.Contains("detail-host span edge-host-1", svg);
+        Assert.Contains("x1=\"100\" y1=\"100\" x2=\"140\" y2=\"100\"", svg);
+        Assert.DoesNotContain("x1=\"100\" y1=\"100\" x2=\"300\" y2=\"100\"", svg);
     }
 
     [Fact]
@@ -128,7 +302,11 @@ public sealed class ExportTests
         Assert.Equal(0, page.PageBounds.X);
         Assert.Equal(500, page.PageBounds.Right);
         Assert.Equal("overlays/page-1.svg", page.SvgPath);
+        Assert.Equal("full", page.SvgProfile);
         Assert.True(page.DrawableItemCount > 0);
+        Assert.True(page.VisibleDrawableItemCount > 0);
+        Assert.True(page.HiddenDrawableItemCount >= 0);
+        Assert.Contains("walls", page.VisibleLayerNames);
         Assert.True(page.PrimitiveCount >= 5);
         Assert.InRange(page.DetectionCoverage, 0, 1);
         Assert.True(page.ReviewQueueCount >= 0);
@@ -139,6 +317,10 @@ public sealed class ExportTests
         var walls = page.Layers.Single(layer => layer.Name == "walls");
         Assert.True(walls.Count >= 4);
         Assert.False(walls.Bounds.IsEmpty);
+        Assert.False(walls.NormalizedBounds.IsEmpty);
+        Assert.InRange(walls.NormalizedBounds.Left, 0, 1);
+        Assert.InRange(walls.NormalizedBounds.Right, 0, 1);
+        Assert.True(walls.NormalizedDensity > 0);
         Assert.True(walls.AverageConfidence is > 0);
 
         var wallComponents = page.Layers.Single(layer => layer.Name == "wallComponents");
@@ -159,13 +341,105 @@ public sealed class ExportTests
         Assert.Equal(
             "overlays/page-1.svg",
             document.RootElement.GetProperty("pages")[0].GetProperty("svgPath").GetString());
+        Assert.Equal(
+            "full",
+            document.RootElement.GetProperty("pages")[0].GetProperty("svgProfile").GetString());
         Assert.Contains(
             document.RootElement.GetProperty("pages")[0].GetProperty("layers").EnumerateArray(),
             layer => layer.GetProperty("name").GetString() == "walls"
                 && layer.GetProperty("count").GetInt32() >= 4);
+        var jsonWallLayer = document.RootElement
+            .GetProperty("pages")[0]
+            .GetProperty("layers")
+            .EnumerateArray()
+            .Single(layer => layer.GetProperty("name").GetString() == "walls");
+        Assert.Equal(JsonValueKind.Object, jsonWallLayer.GetProperty("normalizedBounds").ValueKind);
+        Assert.True(jsonWallLayer.GetProperty("normalizedDensity").GetDouble() > 0);
         Assert.Equal(
             snapshot.ReviewQueueCount,
             document.RootElement.GetProperty("reviewQueueCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task VisualSnapshotExporter_RecordsStructuralReviewOverlayVisibility()
+    {
+        var result = await CreateScanResultAsync();
+        var svgPaths = new Dictionary<int, string>
+        {
+            [1] = "overlays/page-1.svg"
+        };
+
+        var snapshot = PlanOverlaySnapshot.From(
+            result,
+            svgPaths,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.StructuralReview));
+
+        var page = Assert.Single(snapshot.Pages);
+
+        Assert.Equal("structural-review", page.SvgProfile);
+        Assert.Contains("walls", page.VisibleLayerNames);
+        Assert.Contains("rooms", page.VisibleLayerNames);
+        Assert.Contains("openings", page.VisibleLayerNames);
+        Assert.Contains("objects", page.HiddenLayerNames);
+        Assert.Contains("objectAggregates", page.HiddenLayerNames);
+        Assert.Contains("wallNodes", page.HiddenLayerNames);
+        Assert.Contains("wallComponents", page.HiddenLayerNames);
+        Assert.Contains("routingBarriers", page.HiddenLayerNames);
+        Assert.True(page.VisibleDrawableItemCount > 0);
+        Assert.True(page.HiddenDrawableItemCount > 0);
+        Assert.Equal(
+            page.DrawableItemCount,
+            page.VisibleDrawableItemCount + page.HiddenDrawableItemCount);
+
+        var json = PlanOverlaySnapshotJsonExporter.Serialize(
+            snapshot,
+            new PlanOverlaySnapshotJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(json);
+        var jsonPage = document.RootElement.GetProperty("pages")[0];
+
+        Assert.Equal("structural-review", jsonPage.GetProperty("svgProfile").GetString());
+        Assert.Contains(
+            jsonPage.GetProperty("hiddenLayerNames").EnumerateArray(),
+            item => item.GetString() == "objects");
+        Assert.Equal(
+            page.VisibleDrawableItemCount,
+            jsonPage.GetProperty("visibleDrawableItemCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task VisualSnapshotExporter_FlagsHighDensityLayerForVisualReview()
+    {
+        var result = await CreateScanResultAsync();
+        var denseObjects = Enumerable.Range(0, 24)
+            .Select(index => new ObjectCandidate(
+                $"dense-symbol-{index}",
+                1,
+                ObjectCandidateKind.Symbol,
+                new PlanRect(220 + (index % 6), 120 + (index / 6), 1, 1),
+                Confidence.Medium)
+            {
+                Category = ObjectCategory.Unknown,
+                SourceKind = ObjectCandidateSourceKind.CompositeLinework,
+                Evidence = new[] { "synthetic dense visual QA cluster" }
+            })
+            .ToArray();
+
+        result = result with
+        {
+            ObjectCandidates = result.ObjectCandidates.Concat(denseObjects).ToArray()
+        };
+
+        var snapshot = PlanOverlaySnapshot.From(result);
+        var page = Assert.Single(snapshot.Pages);
+        var objectLayer = page.Layers.Single(layer => layer.Name == "objects");
+
+        Assert.False(objectLayer.NormalizedBounds.IsEmpty);
+        Assert.True(objectLayer.NormalizedDensity >= 1000);
+        Assert.Contains(page.Issues, issue =>
+            issue.Code == "visual.layer_density_high"
+            && issue.Severity == "warning"
+            && issue.PageNumber == 1
+            && issue.Message.Contains("objects", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -369,8 +643,41 @@ public sealed class ExportTests
         Assert.Equal("Wall", wall.GetProperty("sourceLayers")[0].GetString());
         Assert.Equal("MainStructural", wall.GetProperty("wallComponentKind").GetString());
         Assert.True(wall.GetProperty("centerLine").GetProperty("start").GetProperty("x").GetDouble() > 0);
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(wall.GetProperty("id").GetString(), topologySpan.GetProperty("wallId").GetString());
+        Assert.True(topologySpan.GetProperty("drawingLength").GetDouble() > 0);
+        Assert.Equal(JsonValueKind.Object, topologySpan.GetProperty("centerLine").ValueKind);
         Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
         Assert.True(wall.GetProperty("reliability").GetProperty("reasons").ValueKind == JsonValueKind.Array);
+
+        var wallGraph = root.GetProperty("wallGraph");
+        Assert.Equal(
+            wallGraph.GetProperty("nodes").GetArrayLength(),
+            wallGraph.GetProperty("summary").GetProperty("nodeCount").GetInt32());
+        Assert.Equal(
+            wallGraph.GetProperty("edges").GetArrayLength(),
+            wallGraph.GetProperty("summary").GetProperty("edgeCount").GetInt32());
+        Assert.Equal(
+            wallGraph.GetProperty("components").GetArrayLength(),
+            wallGraph.GetProperty("summary").GetProperty("componentCount").GetInt32());
+        Assert.Equal(
+            root.GetProperty("wallGraphRepairCandidates").GetArrayLength(),
+            wallGraph.GetProperty("summary").GetProperty("repairCandidateCount").GetInt32());
+        var graphNode = Assert.Single(wallGraph.GetProperty("nodes").EnumerateArray(), node =>
+            node.GetProperty("id").GetString() == topologySpan.GetProperty("fromNodeId").GetString());
+        Assert.Equal(JsonValueKind.Object, graphNode.GetProperty("position").ValueKind);
+        Assert.True(graphNode.GetProperty("degree").GetInt32() > 0);
+        var graphEdge = Assert.Single(wallGraph.GetProperty("edges").EnumerateArray(), edge =>
+            edge.GetProperty("id").GetString() == topologySpan.GetProperty("wallGraphEdgeId").GetString());
+        Assert.Equal(topologySpan.GetProperty("fromNodeId").GetString(), graphEdge.GetProperty("fromNodeId").GetString());
+        Assert.Equal(topologySpan.GetProperty("toNodeId").GetString(), graphEdge.GetProperty("toNodeId").GetString());
+        Assert.Equal(topologySpan.GetProperty("wallId").GetString(), graphEdge.GetProperty("wallId").GetString());
+        Assert.Equal("MainStructural", graphEdge.GetProperty("wallComponentKind").GetString());
+        Assert.Equal(JsonValueKind.Object, graphEdge.GetProperty("centerLine").ValueKind);
+        Assert.True(graphEdge.GetProperty("drawingLength").GetDouble() > 0);
+        Assert.Contains(wallGraph.GetProperty("components").EnumerateArray(), component =>
+            component.GetProperty("kind").GetString() == "MainStructural"
+            && component.GetProperty("edgeCount").GetInt32() > 0);
 
         var room = root.GetProperty("rooms")[0];
         Assert.Equal("ROOM", room.GetProperty("label").GetString());
@@ -552,6 +859,69 @@ public sealed class ExportTests
             Assert.True(issue.GetProperty("evidence").ValueKind == JsonValueKind.Array);
             Assert.True(issue.GetProperty("properties").ValueKind == JsonValueKind.Object);
         });
+    }
+
+    [Fact]
+    public void PlacementExporter_WritesDenseMinorRoutingDetailIssues()
+    {
+        var result = WithReliableCalibrationAndMeasurement(
+            CreateDenseMinorRoutingDetailResult(),
+            CreateMeasurementReport(consistentCount: 1, outlierCount: 0, spreadRatio: 1.0));
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var issues = document.RootElement.GetProperty("issues").EnumerateArray().ToArray();
+        var issue = Assert.Single(issues, item =>
+            item.GetProperty("code").GetString() == "placement.review.dense_minor_routing_detail");
+
+        Assert.Equal("Info", issue.GetProperty("severity").GetString());
+        Assert.Equal(1, issue.GetProperty("pageNumber").GetInt32());
+        Assert.Equal("routing-dense-minor-detail:p1:1", issue.GetProperty("itemId").GetString());
+        Assert.Equal(98, issue.GetProperty("bounds").GetProperty("x").GetDouble());
+        Assert.Equal(980, issue.GetProperty("boundsMillimeters").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Contains("detail-host", JsonStrings(issue.GetProperty("sourcePrimitiveIds")));
+        Assert.Contains("detail-tooth-4", JsonStrings(issue.GetProperty("sourcePrimitiveIds")));
+        Assert.Contains("Wall", JsonStrings(issue.GetProperty("sourceLayers")));
+        Assert.Equal("detail-host", issue.GetProperty("properties").GetProperty("hostWallId").GetString());
+        Assert.Equal("4", issue.GetProperty("properties").GetProperty("minorDetailWallCount").GetString());
+        Assert.Contains("detail-tooth-1", issue.GetProperty("properties").GetProperty("incidentWallIds").GetString());
+        Assert.Contains("non-structural routing detail", issue.GetProperty("recommendedAction").GetString());
+        Assert.Contains(
+            issue.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("suppressed from trusted routing barriers", StringComparison.Ordinal) == true);
+
+        var routingBarriers = document.RootElement
+            .GetProperty("routingLayer")
+            .GetProperty("barriers")
+            .EnumerateArray()
+            .ToArray();
+        Assert.DoesNotContain(routingBarriers, barrier =>
+            barrier.GetProperty("sourceId").GetString()?.StartsWith("detail-", StringComparison.Ordinal) == true);
+        Assert.Contains(
+            document.RootElement.GetProperty("summary").GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("placement issue", StringComparison.Ordinal) == true);
+        Assert.DoesNotContain(
+            document.RootElement.GetProperty("summary").GetProperty("importReadiness").GetProperty("reviewIssueCodes").EnumerateArray(),
+            item => item.GetString() == "placement.review.dense_minor_routing_detail");
+
+        var hostWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "detail-host");
+        var hostTopologySpans = hostWall.GetProperty("topologySpans").EnumerateArray().ToArray();
+        Assert.Equal(5, hostTopologySpans.Length);
+        Assert.Equal("edge-host-1", hostTopologySpans[0].GetProperty("wallGraphEdgeId").GetString());
+        Assert.Equal(100, hostTopologySpans[0].GetProperty("centerLine").GetProperty("start").GetProperty("x").GetDouble());
+        Assert.Equal(140, hostTopologySpans[0].GetProperty("centerLine").GetProperty("end").GetProperty("x").GetDouble());
+        Assert.Equal(1000, hostTopologySpans[0].GetProperty("centerLineMillimeters").GetProperty("start").GetProperty("x").GetDouble());
+        Assert.Equal(0, hostTopologySpans[0].GetProperty("sourceWallStartOffsetDrawingUnits").GetDouble(), precision: 3);
+        Assert.Equal(40, hostTopologySpans[0].GetProperty("sourceWallEndOffsetDrawingUnits").GetDouble(), precision: 3);
+        Assert.Equal(400, hostTopologySpans[0].GetProperty("sourceWallEndOffsetMillimeters").GetDouble(), precision: 3);
+        Assert.Equal(0.2, hostTopologySpans[0].GetProperty("sourceWallEndParameter").GetDouble(), precision: 3);
+        Assert.Equal(0, hostTopologySpans[0].GetProperty("sourceWallStartProjectionDistanceDrawingUnits").GetDouble(), precision: 3);
+        Assert.Equal(0, hostTopologySpans[0].GetProperty("sourceWallEndProjectionDistanceDrawingUnits").GetDouble(), precision: 3);
     }
 
     [Fact]
@@ -838,6 +1208,107 @@ public sealed class ExportTests
         return await new OpenPlanTraceScanner().ScanAsync(document);
     }
 
+    private static PlanScanResult CreateDenseMinorRoutingDetailResult()
+    {
+        var host = SyntheticWall("detail-host", 100, 100, 300, 100);
+        var teeth = new[]
+        {
+            SyntheticWall("detail-tooth-1", 140, 100, 140, 124),
+            SyntheticWall("detail-tooth-2", 180, 100, 180, 124),
+            SyntheticWall("detail-tooth-3", 220, 100, 220, 124),
+            SyntheticWall("detail-tooth-4", 260, 100, 260, 124)
+        };
+        var walls = new[] { host }.Concat(teeth).ToArray();
+        var component = new WallGraphComponent(
+            "component-secondary",
+            1,
+            WallGraphComponentKind.SecondaryStructural,
+            new PlanRect(100, 100, 200, 24),
+            walls.Select(wall => wall.Id).ToArray(),
+            ["node-left", "node-t1", "node-t2", "node-t3", "node-t4", "node-right", "node-t1-end", "node-t2-end", "node-t3-end", "node-t4-end"],
+            ["edge-host-1", "edge-host-2", "edge-host-3", "edge-host-4", "edge-host-5", "edge-tooth-1", "edge-tooth-2", "edge-tooth-3", "edge-tooth-4"],
+            walls.SelectMany(wall => wall.SourcePrimitiveIds).ToArray(),
+            walls.Sum(wall => wall.DrawingLength),
+            Confidence.Medium,
+            ["synthetic secondary detail component"]);
+        var now = DateTimeOffset.UtcNow;
+        return new PlanScanResult(
+            new PlanDocument(
+                "dense-minor-routing-detail",
+                [
+                    new PlanPage(
+                        1,
+                        new PlanSize(500, 400),
+                        walls.Select(wall => WallLine(
+                                wall.Id,
+                                wall.CenterLine.Start,
+                                wall.CenterLine.End))
+                            .Cast<PlanPrimitive>()
+                            .ToArray())
+                ])
+            {
+                Metadata = new PlanMetadata
+                {
+                    SourceName = "dense-minor-routing-detail.pdf",
+                    SourcePath = @"C:\plans\dense-minor-routing-detail.pdf",
+                    Properties = new Dictionary<string, string>
+                    {
+                        ["format"] = "pdf",
+                        ["loader"] = "synthetic",
+                        ["sourceKind"] = PlanSourceKind.Pdf.ToString(),
+                        ["effectiveSourceKind"] = PlanSourceKind.Pdf.ToString()
+                    }
+                }
+            },
+            PlanLayerAnalysis.Empty,
+            PlanCalibration.Empty,
+            MeasurementConsistencyReport.Empty,
+            Array.Empty<TitleBlockAnalysis>(),
+            Array.Empty<DimensionAnnotation>(),
+            Array.Empty<PlanAnnotationBlock>(),
+            Array.Empty<GridAxis>(),
+            Array.Empty<GridBaySpacing>(),
+            Array.Empty<SheetRegion>(),
+            Array.Empty<SurfacePatternCandidate>(),
+            walls,
+            new WallGraph(
+                [
+                    SyntheticNode("node-left", 100, 100, WallNodeKind.Endpoint),
+                    SyntheticNode("node-t1", 140, 100, WallNodeKind.TJunction),
+                    SyntheticNode("node-t2", 180, 100, WallNodeKind.TJunction),
+                    SyntheticNode("node-t3", 220, 100, WallNodeKind.TJunction),
+                    SyntheticNode("node-t4", 260, 100, WallNodeKind.TJunction),
+                    SyntheticNode("node-right", 300, 100, WallNodeKind.Endpoint),
+                    SyntheticNode("node-t1-end", 140, 124, WallNodeKind.Endpoint),
+                    SyntheticNode("node-t2-end", 180, 124, WallNodeKind.Endpoint),
+                    SyntheticNode("node-t3-end", 220, 124, WallNodeKind.Endpoint),
+                    SyntheticNode("node-t4-end", 260, 124, WallNodeKind.Endpoint)
+                ],
+                [
+                    new WallEdge("edge-host-1", 1, "node-left", "node-t1", host.Id, Confidence.High),
+                    new WallEdge("edge-host-2", 1, "node-t1", "node-t2", host.Id, Confidence.High),
+                    new WallEdge("edge-host-3", 1, "node-t2", "node-t3", host.Id, Confidence.High),
+                    new WallEdge("edge-host-4", 1, "node-t3", "node-t4", host.Id, Confidence.High),
+                    new WallEdge("edge-host-5", 1, "node-t4", "node-right", host.Id, Confidence.High),
+                    new WallEdge("edge-tooth-1", 1, "node-t1", "node-t1-end", teeth[0].Id, Confidence.High),
+                    new WallEdge("edge-tooth-2", 1, "node-t2", "node-t2-end", teeth[1].Id, Confidence.High),
+                    new WallEdge("edge-tooth-3", 1, "node-t3", "node-t3-end", teeth[2].Id, Confidence.High),
+                    new WallEdge("edge-tooth-4", 1, "node-t4", "node-t4-end", teeth[3].Id, Confidence.High)
+                ],
+                [component]),
+            Array.Empty<RoomRegion>(),
+            RoomAdjacencyGraph.Empty,
+            Array.Empty<OpeningCandidate>(),
+            Array.Empty<ObjectCandidate>(),
+            Array.Empty<ObjectCandidateGroup>(),
+            Array.Empty<ObjectAggregate>(),
+            new PipelineDiagnostics(
+                now,
+                now,
+                Array.Empty<PipelineStageReport>(),
+                Array.Empty<PlanDiagnostic>()));
+    }
+
     private static LinePrimitive WallLine(string sourceId, PlanPoint start, PlanPoint end) =>
         new(new PlanLineSegment(start, end))
         {
@@ -853,6 +1324,21 @@ public sealed class ExportTests
                 DrawingSpace = SourceDrawingSpace.Model
             }
         };
+
+    private static WallSegment SyntheticWall(string id, double x1, double y1, double x2, double y2) =>
+        new(
+            id,
+            1,
+            new PlanLineSegment(new PlanPoint(x1, y1), new PlanPoint(x2, y2)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = [id],
+            Evidence = ["synthetic wall"]
+        };
+
+    private static WallNode SyntheticNode(string id, double x, double y, WallNodeKind kind) =>
+        new(id, 1, new PlanPoint(x, y), kind, 2, Array.Empty<string>(), Confidence.High, ["synthetic wall node"]);
 
     private static PlanScanResult WithReliableCalibrationAndMeasurement(
         PlanScanResult result,

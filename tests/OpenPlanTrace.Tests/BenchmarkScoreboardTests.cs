@@ -27,11 +27,47 @@ public sealed class BenchmarkScoreboardTests
         Assert.Equal(BenchmarkScoreGrade.Strong, run.Scoreboard.Grade);
         Assert.True(run.Scoreboard.ReadyForDownstreamUse);
         Assert.True(run.Scoreboard.ConsumerReadinessScore >= 0.95);
+        Assert.Equal(1.0, run.Scoreboard.PipelineHealthScore);
         Assert.Equal(7, run.Scoreboard.ExpectedTargetCount);
         Assert.Equal(7, run.Scoreboard.MatchedTargetCount);
         Assert.Equal(0, run.Scoreboard.MissedTargetCount);
         Assert.Equal(0, run.Scoreboard.ExtraDetectionCount);
         Assert.Contains(run.Scoreboard.Detectors, detector => detector.Detector == "walls" && detector.Grade == BenchmarkScoreGrade.Strong);
+    }
+
+    [Fact]
+    public void Create_BlocksDownstreamReadinessForPipelineHealthFailures()
+    {
+        var run = BenchmarkRunResult.Create(
+            "pipeline truth loop",
+            new[]
+            {
+                Case(
+                    "contract-regression",
+                    passed: true,
+                    failedAssertions: 0,
+                    qualityGrade: PlanScanQualityGrade.Strong,
+                    qualityConfidence: 0.94,
+                    pipelineHealth: BrokenPipelineHealth(),
+                    metrics: new[]
+                    {
+                        Metric("walls", expected: 4, detected: 4, matched: 4),
+                        Metric("rooms", expected: 2, detected: 2, matched: 2),
+                        Metric("openings", expected: 1, detected: 1, matched: 1)
+                    })
+            });
+
+        Assert.Equal(BenchmarkScoreGrade.Blocked, run.Scoreboard.Grade);
+        Assert.False(run.Scoreboard.ReadyForDownstreamUse);
+        Assert.True(run.Scoreboard.PipelineHealthScore < 0.5);
+        var caseScore = Assert.Single(run.Scoreboard.Cases);
+        Assert.False(caseScore.PipelineHealthReady);
+        Assert.True(caseScore.PipelineHealthIssueCount > 0);
+        Assert.Contains(caseScore.BlockingReasons, reason => reason.Contains("pipeline dependencies", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(caseScore.BlockingReasons, reason => reason.Contains("contract", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(run.Scoreboard.FailureBuckets, bucket => bucket.Code == "pipeline_health.dependency_blocked" && bucket.Severity == BenchmarkFailureSeverity.Critical);
+        Assert.Contains(run.Scoreboard.FailureBuckets, bucket => bucket.Code == "pipeline_health.contract_violation" && bucket.Severity == BenchmarkFailureSeverity.Critical);
+        Assert.Contains(run.Scoreboard.RecommendedNextActions, action => action.Contains("stage-contract", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -159,6 +195,9 @@ public sealed class BenchmarkScoreboardTests
                     "case-1",
                     passed: false,
                     failedAssertions: 1,
+                    executionWaves: new[] { SyntheticWave() },
+                    rerunImpacts: new[] { SyntheticRerunImpact() },
+                    rerunPlans: new[] { SyntheticRerunPlan() },
                     metrics: new[] { Metric("rooms", expected: 2, detected: 1, matched: 1) })
             });
 
@@ -166,7 +205,11 @@ public sealed class BenchmarkScoreboardTests
 
         Assert.Contains("## Readiness Scoreboard", markdown);
         Assert.Contains("Consumer readiness score", markdown);
+        Assert.Contains("Pipeline health score", markdown);
         Assert.Contains("Import readiness", markdown);
+        Assert.Contains("## Execution Waves", markdown);
+        Assert.Contains("## Rerun Impact", markdown);
+        Assert.Contains("## Rerun Plans", markdown);
         Assert.Contains("### Detector Grades", markdown);
         Assert.Contains("detector.rooms.missed_targets", markdown);
         Assert.Contains("### Next Actions", markdown);
@@ -184,7 +227,11 @@ public sealed class BenchmarkScoreboardTests
         int measurementChecked = 2,
         int measurementOutliers = 0,
         IReadOnlyList<BenchmarkDetectorMetrics>? metrics = null,
-        ScanReviewQueueSummary? scanReviewQueue = null)
+        ScanReviewQueueSummary? scanReviewQueue = null,
+        BenchmarkPipelineHealthSummary? pipelineHealth = null,
+        IReadOnlyList<BenchmarkExecutionWaveSummary>? executionWaves = null,
+        IReadOnlyList<BenchmarkRerunImpactSummary>? rerunImpacts = null,
+        IReadOnlyList<BenchmarkRerunPlanSummary>? rerunPlans = null)
     {
         var assertions = new List<BenchmarkAssertionResult>
         {
@@ -220,9 +267,86 @@ public sealed class BenchmarkScoreboardTests
         {
             Metrics = metrics ?? Array.Empty<BenchmarkDetectorMetrics>(),
             ImportReadiness = Readiness(hasReliableCalibration, measurementOutliers),
-            ScanReviewQueue = scanReviewQueue ?? ScanReviewQueueSummary.Empty
+            ScanReviewQueue = scanReviewQueue ?? ScanReviewQueueSummary.Empty,
+            ExecutionWaves = executionWaves ?? Array.Empty<BenchmarkExecutionWaveSummary>(),
+            RerunImpacts = rerunImpacts ?? Array.Empty<BenchmarkRerunImpactSummary>(),
+            RerunPlans = rerunPlans ?? Array.Empty<BenchmarkRerunPlanSummary>(),
+            PipelineHealth = pipelineHealth ?? BenchmarkPipelineHealthSummary.Empty
         };
     }
+
+    private static BenchmarkRerunPlanSummary SyntheticRerunPlan() =>
+        new(
+            PlanId: "wall-geometry",
+            DisplayName: "Wall geometry correction",
+            ChangedArtifacts: new[] { nameof(PlanArtifactKind.Walls) },
+            ChangedSourceArtifacts: Array.Empty<string>(),
+            DirectConsumerStages: new[] { "wall-graph" },
+            RerunStages: new[] { "wall-graph", "rooms", "routing-layer" },
+            RerunWaves: new[] { 2, 3, 4 },
+            AffectedArtifacts: new[] { nameof(PlanArtifactKind.WallGraph), nameof(PlanArtifactKind.Rooms), nameof(PlanArtifactKind.RoutingBarriers) },
+            FirstRerunWave: 2,
+            LastRerunWave: 4,
+            RerunStageCount: 3,
+            AffectedArtifactCount: 3,
+            HasWork: true,
+            RecommendedExecutionMode: "WaveOrderedSequential",
+            Evidence: new[] { "changed artifacts: Walls", "rerun stages: 3" });
+
+    private static BenchmarkRerunImpactSummary SyntheticRerunImpact() =>
+        new(
+            Artifact: nameof(PlanArtifactKind.Walls),
+            IsSourceArtifact: false,
+            ImpactScope: "DerivedArtifact",
+            ProducerStages: new[] { "walls" },
+            DirectConsumerStages: new[] { "wall-graph" },
+            AffectedStages: new[] { "wall-graph", "rooms", "routing-layer" },
+            AffectedArtifacts: new[] { nameof(PlanArtifactKind.WallGraph), nameof(PlanArtifactKind.Rooms), nameof(PlanArtifactKind.RoutingBarriers) },
+            FirstAffectedWave: 2,
+            AffectedStageCount: 3,
+            HasImpact: true,
+            Evidence: new[] { "direct consumers: wall-graph", "transitive affected stages: 3" });
+
+    private static BenchmarkExecutionWaveSummary SyntheticWave() =>
+        new(
+            Level: 1,
+            StageCount: 2,
+            Stages: new[] { "rooms", "openings" },
+            Reads: new[] { nameof(PlanArtifactKind.WallGraph) },
+            Writes: new[] { nameof(PlanArtifactKind.Rooms), nameof(PlanArtifactKind.Openings) },
+            DirectDownstreamStages: new[] { "routing-layer" },
+            DirectDownstreamStageCount: 1,
+            DownstreamReadArtifacts: new[] { nameof(PlanArtifactKind.Rooms), nameof(PlanArtifactKind.Openings) },
+            WriteConflictArtifacts: Array.Empty<string>(),
+            IntraWaveDependencyCount: 0,
+            HasWriteConflicts: false,
+            HasIntraWaveDependencies: false,
+            IsParallelCandidate: true,
+            ParallelReadiness: "Ready",
+            SchedulingReasons: new[] { "Wave has multiple stages, no write conflicts, and no intra-wave dependencies." },
+            RecommendedExecutionMode: "Parallel");
+
+    private static BenchmarkPipelineHealthSummary BrokenPipelineHealth() =>
+        new(
+            DependencyReady: false,
+            PlanIssueCount: 2,
+            PlanWarningCount: 1,
+            PlanErrorCount: 1,
+            StageCount: 3,
+            DependencyReadyStageCount: 2,
+            NotDependencyReadyStageCount: 1,
+            MissingRequiredReadCount: 1,
+            MissingOptionalReadCount: 0,
+            RuntimeRequiredReadsHaveData: false,
+            RuntimeOptionalReadsHaveData: true,
+            EmptyRequiredRuntimeReadCount: 1,
+            EmptyOptionalRuntimeReadCount: 0,
+            WritesOnlyDeclaredArtifacts: false,
+            ContractViolationStageCount: 1,
+            UndeclaredChangedArtifactCount: 2,
+            EmptyDeclaredOutputCount: 0,
+            ReviewStageNames: new[] { "walls" },
+            Evidence: new[] { "walls dependency unavailable", "walls wrote undeclared RoomGraph artifact" });
 
     private static ScanReviewQueueSummary ReviewQueue(params (string Kind, int Count)[] counts)
     {

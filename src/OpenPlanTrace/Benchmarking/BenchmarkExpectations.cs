@@ -80,6 +80,30 @@ public sealed record BenchmarkExpectations
 
     public double? MaxDurationMilliseconds { get; init; }
 
+    public bool? RequirePipelineDependencyReady { get; init; }
+
+    public int? MaxPipelinePlanIssues { get; init; }
+
+    public int? MaxPipelinePlanWarnings { get; init; }
+
+    public int? MaxPipelinePlanErrors { get; init; }
+
+    public bool? RequireAllStagesDependencyReady { get; init; }
+
+    public bool? RequireAllStagesRuntimeRequiredReadsHaveData { get; init; }
+
+    public bool? RequireAllStagesRuntimeOptionalReadsHaveData { get; init; }
+
+    public int? MaxTotalEmptyRequiredRuntimeReads { get; init; }
+
+    public int? MaxTotalEmptyOptionalRuntimeReads { get; init; }
+
+    public bool? RequireAllStagesWriteOnlyDeclaredArtifacts { get; init; }
+
+    public int? MaxTotalUndeclaredChangedArtifacts { get; init; }
+
+    public int? MaxTotalEmptyDeclaredOutputs { get; init; }
+
     public PlanScanQualityGrade? MinQualityGrade { get; init; }
 
     public double? MinQualityConfidence { get; init; }
@@ -111,6 +135,36 @@ public sealed record BenchmarkExpectations
 
     public bool? RequiresReliableCalibration { get; init; }
 
+    public string? RequiredSourceFormat { get; init; }
+
+    public string? RequiredSourceLoader { get; init; }
+
+    public string? RequiredSourceKind { get; init; }
+
+    public string? RequiredEffectiveSourceKind { get; init; }
+
+    public string? RequiredSourceIngestionPath { get; init; }
+
+    public string? RequiredSourceReadinessStatus { get; init; }
+
+    public string? RequiredSourceGeometryBasis { get; init; }
+
+    public bool? RequireSourceVectorGeometryReady { get; init; }
+
+    public bool? RequireSourceExternalAdapter { get; init; }
+
+    public bool? RequireSourceOcr { get; init; }
+
+    public bool? RequireSourceLegalAdapterBacked { get; init; }
+
+    public bool? RequireDwgDerivedSource { get; init; }
+
+    public bool? RequireRasterDerivedSource { get; init; }
+
+    public IReadOnlyList<string> RequiredSourceEvidenceContains { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> ForbiddenSourceEvidenceContains { get; init; } = Array.Empty<string>();
+
     public int? MinMeasurementCheckedCount { get; init; }
 
     public int? MinMeasurementConsistentCount { get; init; }
@@ -134,6 +188,9 @@ public sealed record BenchmarkExpectations
     public IReadOnlyList<string> ForbiddenImportIssueCodes { get; init; } = Array.Empty<string>();
 
     public IReadOnlyList<BenchmarkStageExpectation> StageExpectations { get; init; } = Array.Empty<BenchmarkStageExpectation>();
+
+    public IReadOnlyList<BenchmarkArtifactExpectation> ArtifactExpectations { get; init; } =
+        Array.Empty<BenchmarkArtifactExpectation>();
 
     public IReadOnlyList<RegionKind> RequiredRegionKinds { get; init; } = Array.Empty<RegionKind>();
 
@@ -186,4 +243,15 @@ public sealed record BenchmarkExpectations
     public BenchmarkDetectorMetricExpectations RoutingSuppressedObjectMetrics { get; init; } = new();
 
     public BenchmarkDetectorMetricExpectations LayerMetrics { get; init; } = new();
+}
+
+public sealed record BenchmarkArtifactExpectation
+{
+    public PlanArtifactKind Artifact { get; init; } = PlanArtifactKind.Unknown;
+
+    public int? MinCount { get; init; }
+
+    public int? MaxCount { get; init; }
+
+    public bool? RequirePresent { get; init; }
 }

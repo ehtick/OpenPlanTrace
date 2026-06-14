@@ -25,6 +25,7 @@ public sealed record BenchmarkScoreboard(
     BenchmarkScoreGrade Grade,
     double OverallScore,
     double ConsumerReadinessScore,
+    double PipelineHealthScore,
     bool ReadyForDownstreamUse,
     int CaseCount,
     int ScoredCaseCount,
@@ -48,6 +49,7 @@ public sealed record BenchmarkScoreboard(
             CurrentSchemaVersion,
             DateTimeOffset.UnixEpoch,
             BenchmarkScoreGrade.Unknown,
+            0,
             0,
             0,
             false,
@@ -77,7 +79,10 @@ public sealed record BenchmarkScoreboard(
         var overallScore = scoredCases.Length == 0
             ? 0
             : scoredCases.Average(item => item.OverallScore);
-        var consumerReadinessScore = CalculateConsumerReadinessScore(scoredCases, detectorScores, overallScore);
+        var pipelineHealthScore = scoredCases.Length == 0
+            ? 0
+            : scoredCases.Average(item => item.PipelineHealthScore);
+        var consumerReadinessScore = CalculateConsumerReadinessScore(scoredCases, detectorScores, overallScore, pipelineHealthScore);
         var failedAssertionCount = caseArray.Sum(item => item.FailedAssertionCount);
         var failedScanCount = caseArray.Count(item => !item.ScanSucceeded && !item.Skipped);
         var grade = GradeForScore(Math.Min(overallScore, consumerReadinessScore));
@@ -99,7 +104,8 @@ public sealed record BenchmarkScoreboard(
             && scoredCases.All(item =>
                 item.ReadyForGeometryImport
                 && item.ReadyForMetricImport
-                && item.ReadyForRoutingImport)
+                && item.ReadyForRoutingImport
+                && item.PipelineHealthReady)
             && detectorScores.All(item => item.Grade >= BenchmarkScoreGrade.Usable)
             && failures.All(item => item.Severity != BenchmarkFailureSeverity.Critical);
 
@@ -109,6 +115,7 @@ public sealed record BenchmarkScoreboard(
             grade,
             Round(overallScore),
             Round(consumerReadinessScore),
+            Round(pipelineHealthScore),
             ready,
             caseArray.Length,
             scoredCases.Length,
@@ -140,9 +147,12 @@ public sealed record BenchmarkScoreboard(
                 0,
                 0,
                 0,
+                0,
                 false,
                 false,
                 false,
+                false,
+                0,
                 0,
                 0,
                 0,
@@ -168,9 +178,12 @@ public sealed record BenchmarkScoreboard(
                 0,
                 0,
                 0,
+                0,
                 false,
                 false,
                 false,
+                false,
+                0,
                 0,
                 0,
                 0,
@@ -204,9 +217,13 @@ public sealed record BenchmarkScoreboard(
         var measurement = MeasurementScore(item.Counts);
         var importReadiness = item.ImportReadiness;
         var importReadinessScore = Math.Clamp(importReadiness.Score, 0, 1);
+        var pipelineHealth = item.PipelineHealth;
+        var pipelineHealthScore = CalculatePipelineHealthScore(pipelineHealth);
+        var pipelineHealthReady = PipelineHealthReady(pipelineHealth);
+        var pipelineHealthIssueCount = PipelineHealthIssueCount(pipelineHealth);
         var score = item.Metrics.Count > 0
-            ? (f1 * 0.35) + (recall * 0.18) + (precision * 0.12) + (reliability * 0.13) + (quality * 0.07) + (measurement * 0.05) + (importReadinessScore * 0.10)
-            : (reliability * 0.45) + (quality * 0.20) + (measurement * 0.10) + (importReadinessScore * 0.25);
+            ? (f1 * 0.32) + (recall * 0.16) + (precision * 0.11) + (reliability * 0.13) + (quality * 0.06) + (measurement * 0.05) + (importReadinessScore * 0.10) + (pipelineHealthScore * 0.07)
+            : (reliability * 0.40) + (quality * 0.18) + (measurement * 0.10) + (importReadinessScore * 0.22) + (pipelineHealthScore * 0.10);
 
         if (!item.Passed)
         {
@@ -220,6 +237,11 @@ public sealed record BenchmarkScoreboard(
         }
 
         if (!importReadiness.ReadyForGeometryImport)
+        {
+            grade = CapGrade(grade, BenchmarkScoreGrade.Blocked);
+        }
+
+        if (!pipelineHealthReady)
         {
             grade = CapGrade(grade, BenchmarkScoreGrade.Blocked);
         }
@@ -277,6 +299,41 @@ public sealed record BenchmarkScoreboard(
             reasons.Add($"import readiness requires review ({importReadiness.Grade})");
         }
 
+        if (!pipelineHealth.DependencyReady)
+        {
+            reasons.Add("pipeline dependencies are not ready");
+        }
+
+        if (pipelineHealth.PlanErrorCount > 0)
+        {
+            reasons.Add($"{pipelineHealth.PlanErrorCount} pipeline plan error(s)");
+        }
+
+        if (pipelineHealth.PlanWarningCount > 0)
+        {
+            reasons.Add($"{pipelineHealth.PlanWarningCount} pipeline plan warning(s)");
+        }
+
+        if (pipelineHealth.EmptyRequiredRuntimeReadCount > 0)
+        {
+            reasons.Add($"{pipelineHealth.EmptyRequiredRuntimeReadCount} empty required pipeline runtime read(s)");
+        }
+
+        if (pipelineHealth.EmptyOptionalRuntimeReadCount > 0)
+        {
+            reasons.Add($"{pipelineHealth.EmptyOptionalRuntimeReadCount} empty optional pipeline runtime read(s)");
+        }
+
+        if (!pipelineHealth.WritesOnlyDeclaredArtifacts)
+        {
+            reasons.Add("pipeline stage contract writes are not declared");
+        }
+
+        if (pipelineHealth.EmptyDeclaredOutputCount > 0)
+        {
+            reasons.Add($"{pipelineHealth.EmptyDeclaredOutputCount} empty declared pipeline output(s)");
+        }
+
         if (item.ScanReviewQueue.Count >= HeavyScanReviewQueueThreshold)
         {
             reasons.Add($"{item.ScanReviewQueue.Count} scanner review item(s)");
@@ -293,9 +350,12 @@ public sealed record BenchmarkScoreboard(
             Round(quality),
             Round(measurement),
             Round(importReadinessScore),
+            Round(pipelineHealthScore),
             importReadiness.ReadyForGeometryImport,
             importReadiness.ReadyForMetricImport,
             importReadiness.ReadyForRoutingImport,
+            pipelineHealthReady,
+            pipelineHealthIssueCount,
             expected,
             matched,
             missed,
@@ -456,6 +516,72 @@ public sealed record BenchmarkScoreboard(
                         .Take(10)
                         .Select(pair => pair.Key)
                         .ToArray());
+            }
+
+            var pipelineHealth = item.PipelineHealth;
+            if (!pipelineHealth.DependencyReady || pipelineHealth.PlanErrorCount > 0)
+            {
+                yield return new BenchmarkFailureBucket(
+                    "pipeline_health.dependency_blocked",
+                    BenchmarkFailureSeverity.Critical,
+                    item.FixtureId,
+                    null,
+                    Math.Max(1, pipelineHealth.NotDependencyReadyStageCount + pipelineHealth.PlanErrorCount),
+                    "Pipeline dependencies or execution-plan errors block trustworthy downstream readiness.",
+                    pipelineHealth.Evidence.Take(8).ToArray(),
+                    pipelineHealth.ReviewStageNames.Take(20).ToArray());
+            }
+
+            if (!pipelineHealth.WritesOnlyDeclaredArtifacts)
+            {
+                yield return new BenchmarkFailureBucket(
+                    "pipeline_health.contract_violation",
+                    BenchmarkFailureSeverity.Critical,
+                    item.FixtureId,
+                    null,
+                    Math.Max(1, pipelineHealth.ContractViolationStageCount + pipelineHealth.UndeclaredChangedArtifactCount),
+                    "One or more pipeline stages changed artifacts outside their declared outputs.",
+                    pipelineHealth.Evidence.Take(8).ToArray(),
+                    pipelineHealth.ReviewStageNames.Take(20).ToArray());
+            }
+
+            if (pipelineHealth.EmptyRequiredRuntimeReadCount > 0)
+            {
+                yield return new BenchmarkFailureBucket(
+                    "pipeline_health.empty_required_runtime_reads",
+                    BenchmarkFailureSeverity.Warning,
+                    item.FixtureId,
+                    null,
+                    pipelineHealth.EmptyRequiredRuntimeReadCount,
+                    "Pipeline stages had required runtime inputs with no data for this source.",
+                    pipelineHealth.Evidence.Take(8).ToArray(),
+                    pipelineHealth.ReviewStageNames.Take(20).ToArray());
+            }
+
+            if (pipelineHealth.EmptyOptionalRuntimeReadCount > 0)
+            {
+                yield return new BenchmarkFailureBucket(
+                    "pipeline_health.empty_optional_runtime_reads",
+                    BenchmarkFailureSeverity.Info,
+                    item.FixtureId,
+                    null,
+                    pipelineHealth.EmptyOptionalRuntimeReadCount,
+                    "Pipeline stages had optional runtime inputs with no data for this source.",
+                    pipelineHealth.Evidence.Take(8).ToArray(),
+                    pipelineHealth.ReviewStageNames.Take(20).ToArray());
+            }
+
+            if (pipelineHealth.EmptyDeclaredOutputCount > 0)
+            {
+                yield return new BenchmarkFailureBucket(
+                    "pipeline_health.empty_declared_outputs",
+                    BenchmarkFailureSeverity.Info,
+                    item.FixtureId,
+                    null,
+                    pipelineHealth.EmptyDeclaredOutputCount,
+                    "Pipeline stages declared outputs that stayed empty; verify whether this is valid for the source type.",
+                    pipelineHealth.Evidence.Take(8).ToArray(),
+                    pipelineHealth.ReviewStageNames.Take(20).ToArray());
             }
 
             if (!item.ImportReadiness.ReadyForGeometryImport)
@@ -653,6 +779,16 @@ public sealed record BenchmarkScoreboard(
             actions.Add("Inspect placement import readiness before downstream integration; resolve geometry blockers first, then metric and routing warnings.");
         }
 
+        if (failures.Any(item => item.Code is "pipeline_health.dependency_blocked" or "pipeline_health.contract_violation"))
+        {
+            actions.Add("Fix pipeline dependency and stage-contract blockers before treating benchmark scores as downstream-ready.");
+        }
+
+        if (failures.Any(item => item.Code is "pipeline_health.empty_required_runtime_reads" or "pipeline_health.empty_declared_outputs"))
+        {
+            actions.Add("Inspect pipeline health evidence for empty reads/outputs; make source-specific branches optional or feed the missing artifacts intentionally.");
+        }
+
         if (failures.Any(item => item.Code == "scan_quality.requires_review"))
         {
             actions.Add("Use the saved scan screenshots to classify quality issues as detector bugs, benchmark-truth gaps, or source-plan ambiguity.");
@@ -679,7 +815,8 @@ public sealed record BenchmarkScoreboard(
     private static double CalculateConsumerReadinessScore(
         IReadOnlyList<BenchmarkCaseScore> cases,
         IReadOnlyList<BenchmarkDetectorScore> detectors,
-        double overallScore)
+        double overallScore,
+        double pipelineHealthScore)
     {
         if (cases.Count == 0)
         {
@@ -694,7 +831,58 @@ public sealed record BenchmarkScoreboard(
 
         var calibrationScore = cases.Average(item => item.MeasurementScore);
         var importReadinessScore = cases.Average(item => item.ImportReadinessScore);
-        return Round((overallScore * 0.40) + (detectorScore.Value * 0.25) + (calibrationScore * 0.15) + (importReadinessScore * 0.20));
+        return Round((overallScore * 0.35) + (detectorScore.Value * 0.22) + (calibrationScore * 0.14) + (importReadinessScore * 0.19) + (pipelineHealthScore * 0.10));
+    }
+
+    private static bool PipelineHealthReady(BenchmarkPipelineHealthSummary health) =>
+        health.DependencyReady
+        && health.PlanErrorCount == 0
+        && health.WritesOnlyDeclaredArtifacts;
+
+    private static int PipelineHealthIssueCount(BenchmarkPipelineHealthSummary health) =>
+        health.PlanIssueCount
+        + health.NotDependencyReadyStageCount
+        + health.MissingRequiredReadCount
+        + health.MissingOptionalReadCount
+        + health.EmptyRequiredRuntimeReadCount
+        + health.EmptyOptionalRuntimeReadCount
+        + health.ContractViolationStageCount
+        + health.UndeclaredChangedArtifactCount
+        + health.EmptyDeclaredOutputCount;
+
+    private static double CalculatePipelineHealthScore(BenchmarkPipelineHealthSummary health)
+    {
+        if (health.StageCount == 0
+            && health.DependencyReady
+            && health.PlanIssueCount == 0
+            && health.WritesOnlyDeclaredArtifacts
+            && health.EmptyRequiredRuntimeReadCount == 0
+            && health.EmptyOptionalRuntimeReadCount == 0
+            && health.EmptyDeclaredOutputCount == 0)
+        {
+            return 1.0;
+        }
+
+        var penalty = 0.0;
+        if (!health.DependencyReady)
+        {
+            penalty += 0.35;
+        }
+
+        if (!health.WritesOnlyDeclaredArtifacts)
+        {
+            penalty += 0.30;
+        }
+
+        penalty += Math.Min(0.20, health.PlanErrorCount * 0.08);
+        penalty += Math.Min(0.08, health.PlanWarningCount * 0.03);
+        penalty += Math.Min(0.10, health.MissingRequiredReadCount * 0.03);
+        penalty += Math.Min(0.05, health.MissingOptionalReadCount * 0.01);
+        penalty += Math.Min(0.16, health.EmptyRequiredRuntimeReadCount * 0.025);
+        penalty += Math.Min(0.06, health.EmptyOptionalRuntimeReadCount * 0.01);
+        penalty += Math.Min(0.10, health.EmptyDeclaredOutputCount * 0.008);
+
+        return Clamp01(1.0 - penalty);
     }
 
     private static double? WeightedDetectorScore(IReadOnlyList<BenchmarkDetectorScore> detectors)
@@ -844,9 +1032,12 @@ public sealed record BenchmarkCaseScore(
     double ScanQualityScore,
     double MeasurementScore,
     double ImportReadinessScore,
+    double PipelineHealthScore,
     bool ReadyForGeometryImport,
     bool ReadyForMetricImport,
     bool ReadyForRoutingImport,
+    bool PipelineHealthReady,
+    int PipelineHealthIssueCount,
     int ExpectedTargetCount,
     int MatchedTargetCount,
     int MissedTargetCount,

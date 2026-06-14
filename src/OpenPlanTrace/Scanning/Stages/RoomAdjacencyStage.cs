@@ -490,6 +490,7 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
             var adjacencyLinkedOpeningCount = openings.Count(opening => opening.RoomAdjacencyIds.Count > 0);
             var connectionLinkCount = openings.Sum(opening => opening.ConnectedRoomLinks.Count);
             var hostWallLinkCount = openings.Sum(opening => opening.ConnectedRoomLinks.Count(link => link.SharesHostWall));
+            var sideAwareLinkCount = openings.Sum(opening => opening.ConnectedRoomLinks.Count(link => link.Side != OpeningRoomSide.Unknown));
 
             context.AddDiagnostic(
                 "openings.room_connectivity.detected",
@@ -507,7 +508,8 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
                     ["multiRoomOpeningCount"] = multiRoomOpeningCount.ToString(),
                     ["adjacencyLinkedOpeningCount"] = adjacencyLinkedOpeningCount.ToString(),
                     ["connectionLinkCount"] = connectionLinkCount.ToString(),
-                    ["hostWallConnectionLinkCount"] = hostWallLinkCount.ToString()
+                    ["hostWallConnectionLinkCount"] = hostWallLinkCount.ToString(),
+                    ["sideAwareConnectionLinkCount"] = sideAwareLinkCount.ToString()
                 });
         }
     }
@@ -520,6 +522,105 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
             .ToArray();
         return Math.Round(distances.Length == 0 ? midpoint.DistanceTo(room.Bounds.Center) : distances.Min(), 3);
     }
+
+    private static OpeningRoomConnectionGeometry AnalyzeOpeningRoomConnection(
+        OpeningCandidate opening,
+        RoomRegion room,
+        double tolerance)
+    {
+        var midpoint = opening.CenterLine.Midpoint;
+        var normal = ResolveOpeningNormal(opening);
+        var nearestBoundaryPoint = ClosestRoomBoundaryPoint(room, midpoint);
+        var evidence = new List<string>();
+
+        if (normal.Length <= double.Epsilon)
+        {
+            evidence.Add("opening normal unavailable; room side could not be classified");
+            return new OpeningRoomConnectionGeometry(
+                OpeningRoomSide.Unknown,
+                room.Bounds.Center,
+                nearestBoundaryPoint,
+                0,
+                evidence);
+        }
+
+        var signedDistance = (room.Bounds.Center - midpoint).Dot(normal);
+        var sideTolerance = Math.Max(1, tolerance);
+        var side = signedDistance switch
+        {
+            > 0 when signedDistance > sideTolerance => OpeningRoomSide.PositiveNormalSide,
+            < 0 when signedDistance < -sideTolerance => OpeningRoomSide.NegativeNormalSide,
+            _ => OpeningRoomSide.OnOpeningLine
+        };
+
+        var sideSign = side switch
+        {
+            OpeningRoomSide.PositiveNormalSide => 1.0,
+            OpeningRoomSide.NegativeNormalSide => -1.0,
+            _ => signedDistance < 0 ? -1.0 : 1.0
+        };
+        var sampleDistance = Math.Max(2, tolerance * 3);
+        var roomSidePoint = midpoint + (normal * (sideSign * sampleDistance));
+        if (!room.Bounds.Contains(roomSidePoint, sampleDistance))
+        {
+            roomSidePoint = ClampPointToRect(nearestBoundaryPoint + (normal * (sideSign * sampleDistance)), room.Bounds);
+        }
+
+        evidence.Add($"room is {side} of opening normal");
+        evidence.Add($"signed normal offset {Math.Round(signedDistance, 3)} drawing units");
+
+        return new OpeningRoomConnectionGeometry(
+            side,
+            roomSidePoint,
+            nearestBoundaryPoint,
+            Math.Round(signedDistance, 3),
+            evidence);
+    }
+
+    private static PlanVector ResolveOpeningNormal(OpeningCandidate opening)
+    {
+        if (opening.Placement?.NormalVector is { } placementNormal
+            && placementNormal.Length > double.Epsilon)
+        {
+            return placementNormal.Normalize();
+        }
+
+        var along = opening.CenterLine.Vector.Normalize();
+        return along.Length <= double.Epsilon
+            ? new PlanVector(0, 0)
+            : new PlanVector(-along.Y, along.X).Normalize();
+    }
+
+    private static PlanPoint ClosestRoomBoundaryPoint(RoomRegion room, PlanPoint point)
+    {
+        var closest = room.Bounds.Center;
+        var bestDistance = double.PositiveInfinity;
+        foreach (var edge in BoundaryEdges(room))
+        {
+            var candidate = ClosestPointOnSegment(edge, point);
+            var distance = candidate.DistanceTo(point);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                closest = candidate;
+            }
+        }
+
+        return closest;
+    }
+
+    private static PlanPoint ClosestPointOnSegment(PlanLineSegment segment, PlanPoint point)
+    {
+        var t = Math.Clamp(segment.ProjectParameter(point), 0, 1);
+        return segment.PointAt(t);
+    }
+
+    private static PlanPoint ClampPointToRect(PlanPoint point, PlanRect rect) =>
+        rect.IsEmpty
+            ? point
+            : new PlanPoint(
+                Math.Clamp(point.X, rect.Left, rect.Right),
+                Math.Clamp(point.Y, rect.Top, rect.Bottom));
 
     private static bool SharesHostWall(OpeningCandidate opening, RoomRegion room) =>
         opening.HostWallIds.Count > 0
@@ -989,10 +1090,15 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
 
             var distanceToOpening = DistanceToRoomBoundary(opening, room);
             var sharesHostWall = SharesHostWall(opening, room);
+            var geometry = AnalyzeOpeningRoomConnection(opening, room, tolerance);
             builder.RoomLabel ??= room.Label;
             builder.RoomUseKind = room.UseKind;
             builder.DistanceToOpening = Math.Min(builder.DistanceToOpening, distanceToOpening);
             builder.SharesHostWall |= sharesHostWall;
+            builder.Side = MergeRoomSide(builder.Side, geometry.Side);
+            builder.RoomSidePoint = geometry.RoomSidePoint;
+            builder.NearestBoundaryPoint = geometry.NearestBoundaryPoint;
+            builder.SignedDistanceFromOpening = geometry.SignedDistanceFromOpening;
             builder.Confidence = RoomConnectionConfidence(
                 builder.DistanceToOpening,
                 builder.SharesHostWall,
@@ -1000,6 +1106,11 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
                 tolerance);
             builder.AddAdjacency(adjacencyId);
             builder.AddEvidence($"{evidenceValue}; distance {distanceToOpening:0.###} drawing units");
+            foreach (var item in geometry.Evidence)
+            {
+                builder.AddEvidence(item);
+            }
+
             if (sharesHostWall)
             {
                 builder.AddEvidence("room shares opening host wall");
@@ -1042,6 +1153,14 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
 
         public IReadOnlyList<string> RoomAdjacencyIds => roomAdjacencyIds;
 
+        public OpeningRoomSide Side { get; set; } = OpeningRoomSide.Unknown;
+
+        public PlanPoint? RoomSidePoint { get; set; }
+
+        public PlanPoint? NearestBoundaryPoint { get; set; }
+
+        public double SignedDistanceFromOpening { get; set; }
+
         public static OpeningRoomConnectionBuilder From(OpeningRoomConnection connection)
         {
             var builder = new OpeningRoomConnectionBuilder(
@@ -1049,6 +1168,10 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
                 connection.RoomLabel,
                 connection.RoomUseKind)
             {
+                Side = connection.Side,
+                RoomSidePoint = connection.RoomSidePoint,
+                NearestBoundaryPoint = connection.NearestBoundaryPoint,
+                SignedDistanceFromOpening = connection.SignedDistanceFromOpening,
                 DistanceToOpening = connection.DistanceToOpening,
                 SharesHostWall = connection.SharesHostWall,
                 Confidence = connection.Confidence
@@ -1082,11 +1205,34 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
                 RoomLabel,
                 RoomUseKind,
                 roomAdjacencyIds.ToArray(),
+                Side,
+                RoomSidePoint,
+                NearestBoundaryPoint,
+                SignedDistanceFromOpening,
                 double.IsFinite(DistanceToOpening) ? DistanceToOpening : 0,
                 SharesHostWall,
                 Confidence,
                 evidence.ToArray());
     }
+
+    private static OpeningRoomSide MergeRoomSide(OpeningRoomSide current, OpeningRoomSide next)
+    {
+        if (current is OpeningRoomSide.Unknown or OpeningRoomSide.OnOpeningLine)
+        {
+            return next;
+        }
+
+        return next == OpeningRoomSide.Unknown || next == current
+            ? current
+            : next;
+    }
+
+    private sealed record OpeningRoomConnectionGeometry(
+        OpeningRoomSide Side,
+        PlanPoint RoomSidePoint,
+        PlanPoint NearestBoundaryPoint,
+        double SignedDistanceFromOpening,
+        IReadOnlyList<string> Evidence);
 
     private sealed record RoomClusterClassification(
         RoomClusterKind Kind,

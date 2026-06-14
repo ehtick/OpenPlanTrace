@@ -207,8 +207,8 @@ internal sealed class ObjectAggregationStage : IPipelineStage
         var text = TextEvidence(ordered, room, sourceLayers);
         var category = ClassifyCategory(ordered, text, room);
         var kind = VisualAiCategoryMapper.KindFor(category);
-        var routing = RoutingInfluenceFor(category);
-        var structural = StructuralInfluenceFor(category);
+        var routing = RoutingInfluenceFor(category, text);
+        var structural = StructuralInfluenceFor(category, text);
         var roomUseEvidence = RoomUseEvidenceFor(category, room, text);
         var requiresReview = category is ObjectCategory.Unknown or ObjectCategory.GenericSymbol
             || routing == ObjectRoutingInfluence.Unknown;
@@ -396,10 +396,11 @@ internal sealed class ObjectAggregationStage : IPipelineStage
             || (1 / aspect) is >= 1.35 and <= 3.8;
     }
 
-    private static ObjectRoutingInfluence RoutingInfluenceFor(ObjectCategory category) =>
+    private static ObjectRoutingInfluence RoutingInfluenceFor(ObjectCategory category, string text) =>
         category switch
         {
             ObjectCategory.Vehicle => ObjectRoutingInfluence.RoomUseEvidenceOnly,
+            ObjectCategory.Furniture when LooksMovableFurniture(text) => ObjectRoutingInfluence.RoomUseEvidenceOnly,
             ObjectCategory.Furniture => ObjectRoutingInfluence.SoftObstacle,
             ObjectCategory.Fixture
                 or ObjectCategory.PlumbingFixture
@@ -416,10 +417,11 @@ internal sealed class ObjectAggregationStage : IPipelineStage
             _ => ObjectRoutingInfluence.Unknown
         };
 
-    private static ObjectStructuralInfluence StructuralInfluenceFor(ObjectCategory category) =>
+    private static ObjectStructuralInfluence StructuralInfluenceFor(ObjectCategory category, string text) =>
         category switch
         {
             ObjectCategory.Vehicle => ObjectStructuralInfluence.None,
+            ObjectCategory.Furniture when LooksMovableFurniture(text) => ObjectStructuralInfluence.None,
             ObjectCategory.Furniture => ObjectStructuralInfluence.NonStructural,
             ObjectCategory.Fixture
                 or ObjectCategory.PlumbingFixture
@@ -443,12 +445,84 @@ internal sealed class ObjectAggregationStage : IPipelineStage
             return RoomUseKind.Parking;
         }
 
+        if (category == ObjectCategory.Furniture && LooksMovableFurniture(text))
+        {
+            return FurnitureRoomUseEvidenceFor(room, text);
+        }
+
         if (category is ObjectCategory.Equipment or ObjectCategory.HVACEquipment && ContainsAny(text, "pump", "machine", "mechanical", "teknisk"))
         {
             return RoomUseKind.Mechanical;
         }
 
         return room?.UseKind ?? RoomUseKind.Unknown;
+    }
+
+    private static bool LooksMovableFurniture(string text)
+    {
+        if (ContainsAny(
+                text,
+                "cabinet",
+                "cabinets",
+                "casework",
+                "millwork",
+                "kitchen island",
+                "island",
+                "counter",
+                "worktop",
+                "wardrobe",
+                "closet",
+                "skap",
+                "kjokken",
+                "kjøkken",
+                "benk"))
+        {
+            return false;
+        }
+
+        return ContainsAny(
+            text,
+            "sofa",
+            "couch",
+            "chair",
+            "chairs",
+            "table",
+            "desk",
+            "bed",
+            "stol",
+            "stoler",
+            "bord",
+            "seng");
+    }
+
+    private static RoomUseKind FurnitureRoomUseEvidenceFor(RoomRegion? room, string text)
+    {
+        if (room?.UseKind is not null and not RoomUseKind.Unknown)
+        {
+            return room.UseKind;
+        }
+
+        if (ContainsAny(text, "bed", "seng"))
+        {
+            return RoomUseKind.Bedroom;
+        }
+
+        if (ContainsAny(text, "sofa", "couch"))
+        {
+            return RoomUseKind.Living;
+        }
+
+        if (ContainsAny(text, "desk"))
+        {
+            return RoomUseKind.Office;
+        }
+
+        if (ContainsAny(text, "table", "chair", "chairs", "stol", "stoler", "bord"))
+        {
+            return RoomUseKind.CommonArea;
+        }
+
+        return RoomUseKind.Unknown;
     }
 
     private static string? LabelFor(

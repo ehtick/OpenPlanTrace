@@ -40,6 +40,15 @@ public sealed class OpeningSemanticsTests
         Assert.Equal(150, opening.Placement.EndOffsetDrawingUnits, 3);
         Assert.Equal(135, opening.Placement.CenterOffsetDrawingUnits, 3);
         Assert.Equal(30, opening.Placement.LengthDrawingUnits, 3);
+        Assert.Equal(4, opening.Placement.DepthDrawingUnits, 3);
+        Assert.Equal(new PlanRect(220, 98, 30, 4), opening.Placement.FootprintBounds);
+        Assert.Equal(4, opening.Placement.FootprintCorners.Count);
+        Assert.Equal(new PlanPoint(220, 98), opening.Placement.FootprintCorners[0]);
+        Assert.Equal(new PlanPoint(250, 98), opening.Placement.FootprintCorners[1]);
+        Assert.Equal(new PlanPoint(250, 102), opening.Placement.FootprintCorners[2]);
+        Assert.Equal(new PlanPoint(220, 102), opening.Placement.FootprintCorners[3]);
+        Assert.Equal(new PlanLineSegment(new PlanPoint(220, 98), new PlanPoint(220, 102)), opening.Placement.StartJambLine);
+        Assert.Equal(new PlanLineSegment(new PlanPoint(250, 98), new PlanPoint(250, 102)), opening.Placement.EndJambLine);
         Assert.Equal(new PlanPoint(100, 100), opening.Placement.ReferenceLine.Start);
         Assert.Equal(new PlanPoint(400, 100), opening.Placement.ReferenceLine.End);
         Assert.Equal(1, opening.Placement.AlongVector.X, 3);
@@ -47,6 +56,7 @@ public sealed class OpeningSemanticsTests
         Assert.Equal(0, opening.Placement.NormalVector.X, 3);
         Assert.Equal(1, opening.Placement.NormalVector.Y, 3);
         Assert.Contains(opening.Placement.Evidence, item => item.Contains("projected", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(opening.Placement.Evidence, item => item.Contains("footprint", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(opening.Evidence, item => item.Contains("door swing arc", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -333,6 +343,16 @@ public sealed class OpeningSemanticsTests
         Assert.Equal(120, placement.GetProperty("startOffsetDrawingUnits").GetDouble(), 3);
         Assert.Equal(150, placement.GetProperty("endOffsetDrawingUnits").GetDouble(), 3);
         Assert.Equal(30, placement.GetProperty("lengthDrawingUnits").GetDouble(), 3);
+        Assert.Equal(4, placement.GetProperty("depthDrawingUnits").GetDouble(), 3);
+        Assert.Equal(4, placement.GetProperty("footprintCorners").GetArrayLength());
+        Assert.Equal(220, placement.GetProperty("footprintBounds").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(98, placement.GetProperty("footprintBounds").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(30, placement.GetProperty("footprintBounds").GetProperty("width").GetDouble(), 3);
+        Assert.Equal(4, placement.GetProperty("footprintBounds").GetProperty("height").GetDouble(), 3);
+        Assert.Equal(220, placement.GetProperty("startJambLine").GetProperty("start").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(102, placement.GetProperty("startJambLine").GetProperty("end").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(250, placement.GetProperty("endJambLine").GetProperty("start").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(102, placement.GetProperty("endJambLine").GetProperty("end").GetProperty("y").GetDouble(), 3);
         Assert.Equal(1, placement.GetProperty("alongVector").GetProperty("x").GetDouble(), 3);
         Assert.Equal(1, placement.GetProperty("normalVector").GetProperty("y").GetDouble(), 3);
         Assert.True(placement.GetProperty("confidence").GetDouble() > 0.5);
@@ -357,6 +377,18 @@ public sealed class OpeningSemanticsTests
             });
 
         var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        result = result with
+        {
+            Calibration = new PlanCalibration(
+                PlanMeasurementUnit.DrawingUnit,
+                PlanMeasurementUnit.Millimeter,
+                null,
+                10,
+                Confidence.High,
+                Array.Empty<CalibrationEvidence>(),
+                Array.Empty<CalibrationScaleGroup>())
+        };
+
         var json = PlanPlacementJsonExporter.Serialize(
             result,
             new PlanPlacementJsonExportOptions { WriteIndented = false });
@@ -367,11 +399,173 @@ public sealed class OpeningSemanticsTests
         Assert.Equal("Anchored", opening.GetProperty("placementStatus").GetString());
         Assert.True(opening.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
         var placement = opening.GetProperty("placement");
+        Assert.Equal(220, placement.GetProperty("startPoint").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(100, placement.GetProperty("startPoint").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(250, placement.GetProperty("endPoint").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(100, placement.GetProperty("endPoint").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(2200, placement.GetProperty("startPointMillimeters").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(2500, placement.GetProperty("endPointMillimeters").GetProperty("x").GetDouble(), 3);
         Assert.Equal(120, placement.GetProperty("startOffsetDrawingUnits").GetDouble(), 3);
         Assert.Equal(150, placement.GetProperty("endOffsetDrawingUnits").GetDouble(), 3);
         Assert.Equal(30, placement.GetProperty("lengthDrawingUnits").GetDouble(), 3);
+        Assert.Equal(4, placement.GetProperty("depthDrawingUnits").GetDouble(), 3);
+        Assert.Equal(1200, placement.GetProperty("startOffsetMillimeters").GetDouble(), 3);
+        Assert.Equal(1500, placement.GetProperty("endOffsetMillimeters").GetDouble(), 3);
+        Assert.Equal(300, placement.GetProperty("lengthMillimeters").GetDouble(), 3);
+        Assert.Equal(40, placement.GetProperty("depthMillimeters").GetDouble(), 3);
+        Assert.Equal(4, placement.GetProperty("footprintCorners").GetArrayLength());
+        Assert.Equal(4, placement.GetProperty("footprintCornersMillimeters").GetArrayLength());
+        Assert.Equal(30, placement.GetProperty("footprintBounds").GetProperty("width").GetDouble(), 3);
+        Assert.Equal(4, placement.GetProperty("footprintBounds").GetProperty("height").GetDouble(), 3);
+        Assert.Equal(300, placement.GetProperty("footprintBoundsMillimeters").GetProperty("width").GetDouble(), 3);
+        Assert.Equal(40, placement.GetProperty("footprintBoundsMillimeters").GetProperty("height").GetDouble(), 3);
+        Assert.Equal(220, placement.GetProperty("startJambLine").GetProperty("start").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(250, placement.GetProperty("endJambLine").GetProperty("start").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(2200, placement.GetProperty("startJambLineMillimeters").GetProperty("start").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(2500, placement.GetProperty("endJambLineMillimeters").GetProperty("start").GetProperty("x").GetDouble(), 3);
         Assert.Equal(100, placement.GetProperty("referenceLine").GetProperty("start").GetProperty("x").GetDouble(), 3);
         Assert.Equal(400, placement.GetProperty("referenceLine").GetProperty("end").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(1000, placement.GetProperty("referenceLineMillimeters").GetProperty("start").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(4000, placement.GetProperty("referenceLineMillimeters").GetProperty("end").GetProperty("x").GetDouble(), 3);
+        Assert.Equal(0, placement.GetProperty("crossWallOffsetMillimeters").GetDouble(), 3);
+
+        var geoJson = PlanTraceGeoJsonExporter.Serialize(
+            result,
+            new PlanTraceGeoJsonExportOptions { WriteIndented = false });
+        using var geoParsed = JsonDocument.Parse(geoJson);
+        var openingFeature = Assert.Single(
+            geoParsed.RootElement.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("properties").GetProperty("featureType").GetString() == "opening");
+        var geoProperties = openingFeature.GetProperty("properties");
+        Assert.Equal(220, geoProperties.GetProperty("placementStartPoint")[0].GetDouble(), 3);
+        Assert.Equal(100, geoProperties.GetProperty("placementStartPoint")[1].GetDouble(), 3);
+        Assert.Equal(250, geoProperties.GetProperty("placementEndPoint")[0].GetDouble(), 3);
+        Assert.Equal(100, geoProperties.GetProperty("placementEndPoint")[1].GetDouble(), 3);
+        Assert.Equal(2, geoProperties.GetProperty("placementReferenceLine").GetArrayLength());
+        Assert.Equal(4, geoProperties.GetProperty("placementFootprintCorners").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task PlacementExporter_FlagsIncoherentOpeningPlacementAsNotCoordinateReady()
+    {
+        var document = new PlanDocument(
+            "opening-placement-incoherent-export",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(600, 400),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-left-run", new PlanPoint(100, 100), new PlanPoint(220, 100)),
+                        Wall("wall-right-run", new PlanPoint(250, 100), new PlanPoint(400, 100)),
+                        new ArcPrimitive(new PlanPoint(220, 100), 30, 0, Math.PI / 2) { SourceId = "door-swing" }
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        var opening = Assert.Single(result.Openings);
+        Assert.NotNull(opening.Placement);
+        var placement = opening.Placement!;
+        var incoherentPlacement = placement with
+        {
+            LengthDrawingUnits = placement.LengthDrawingUnits + 90,
+            HostWallEndParameter = 1.35
+        };
+        var incoherentResult = result with
+        {
+            Openings = new[] { opening with { Placement = incoherentPlacement } }
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            incoherentResult,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var placementParsed = JsonDocument.Parse(placementJson);
+        var exportedOpening = placementParsed.RootElement.GetProperty("openings")[0];
+        var reliability = exportedOpening.GetProperty("reliability");
+        var reasons = reliability.GetProperty("reasons")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+
+        Assert.Equal("Anchored", exportedOpening.GetProperty("placementStatus").GetString());
+        Assert.False(reliability.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(reliability.GetProperty("requiresReview").GetBoolean());
+        Assert.Contains(
+            reasons,
+            reason => reason is not null
+                && reason.Contains("placement offsets", StringComparison.OrdinalIgnoreCase)
+                && reason.Contains("parameters", StringComparison.OrdinalIgnoreCase));
+
+        var placementIssues = placementParsed.RootElement.GetProperty("issues").EnumerateArray().ToArray();
+        var placementIssue = Assert.Single(
+            placementIssues,
+            issue => issue.GetProperty("code").GetString() == "placement.opening.placement_inconsistent"
+                && issue.GetProperty("itemId").GetString() == opening.Id);
+        Assert.Equal("Warning", placementIssue.GetProperty("severity").GetString());
+        Assert.Equal("Anchored", placementIssue.GetProperty("properties").GetProperty("placementStatus").GetString());
+        Assert.Contains(
+            "inconsistent",
+            placementIssue.GetProperty("properties").GetProperty("reasons").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+
+        var placementImportReadiness = placementParsed.RootElement
+            .GetProperty("summary")
+            .GetProperty("importReadiness");
+        Assert.Contains(
+            "placement.opening.placement_inconsistent",
+            placementImportReadiness.GetProperty("reviewIssueCodes").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            placementImportReadiness.GetProperty("recommendedActions").EnumerateArray(),
+            item => item.GetString()?.Contains("opening placement spans", StringComparison.OrdinalIgnoreCase) == true);
+
+        var directReadiness = PlanImportReadiness.FromScanResult(incoherentResult);
+        Assert.Contains("placement.opening.placement_inconsistent", directReadiness.ReviewIssueCodes);
+
+        var rebuiltRoutingLayer = PlanRoutingLayerBuilder.FromScanResult(incoherentResult);
+        var passage = Assert.Single(rebuiltRoutingLayer.Passages);
+        Assert.False(passage.ReadyForCoordinatePlacement);
+        Assert.True(passage.RequiresReview);
+        Assert.Contains(
+            passage.ReviewReasons,
+            reason => reason.Contains("inconsistent", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            passage.Evidence,
+            item => item.Contains("not coordinate-ready", StringComparison.OrdinalIgnoreCase));
+
+        var routingPassageExport = RoutingPassageExport.From(
+            passage,
+            new Dictionary<string, PrimitiveSourceExport>());
+        Assert.Equal("Anchored", routingPassageExport.PlacementStatus);
+        Assert.False(routingPassageExport.ReadyForCoordinatePlacement);
+        Assert.True(routingPassageExport.RequiresReview);
+        Assert.Contains(
+            routingPassageExport.ReviewReasons,
+            reason => reason.Contains("inconsistent", StringComparison.OrdinalIgnoreCase));
+
+        var placementRoutingPassageExport = PlacementRoutingPassageExport.From(
+            passage,
+            incoherentResult.Calibration,
+            new Dictionary<string, PrimitiveSourceExport>());
+        Assert.Equal("Anchored", placementRoutingPassageExport.PlacementStatus);
+        Assert.False(placementRoutingPassageExport.ReadyForCoordinatePlacement);
+        Assert.True(placementRoutingPassageExport.RequiresReview);
+        Assert.Contains(
+            placementRoutingPassageExport.ReviewReasons,
+            reason => reason.Contains("inconsistent", StringComparison.OrdinalIgnoreCase));
+
+        var scanJson = PlanTraceJsonExporter.Serialize(incoherentResult);
+        using var scanParsed = JsonDocument.Parse(scanJson);
+        var review = Assert.Single(
+            scanParsed.RootElement.GetProperty("reviewQueue").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == ScanReviewQueueKinds.OpeningReview);
+
+        Assert.Equal("Warning", review.GetProperty("severity").GetString());
+        Assert.Equal("Anchored", review.GetProperty("properties").GetProperty("placementStatus").GetString());
+        Assert.Contains(
+            "inconsistent",
+            review.GetProperty("properties").GetProperty("reasons").GetString(),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

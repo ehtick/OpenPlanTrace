@@ -5,6 +5,79 @@ namespace OpenPlanTrace.Tests;
 public sealed class CliPlacementValidationTests
 {
     [Fact]
+    public async Task ValidateScanDeep_AcceptsGeneratedArtifactInventory()
+    {
+        using var workspace = TestWorkspace.Create();
+        var scanPath = workspace.Write("scan.json", await CreateGeneratedScanJsonAsync());
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            scanPath,
+            "--kind",
+            "scan",
+            "--deep",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(0, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.True(validation.RootElement.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            validation.RootElement.GetProperty("messages").EnumerateArray(),
+            message => message.GetProperty("message").GetString()?.Contains("Scan deep validation checked final artifact inventory", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task ValidateScanDeep_RejectsStaleArtifactInventoryCount()
+    {
+        using var workspace = TestWorkspace.Create();
+        var scanJson = await CreateGeneratedScanJsonAsync();
+        using var scan = JsonDocument.Parse(scanJson);
+        var wallsCount = scan.RootElement
+            .GetProperty("diagnostics")
+            .GetProperty("artifactInventory")
+            .EnumerateArray()
+            .First(item => item.GetProperty("artifact").GetString() == nameof(PlanArtifactKind.Walls))
+            .GetProperty("count")
+            .GetInt32();
+        var staleJson = scanJson.Replace(
+            $"\"artifact\":\"{nameof(PlanArtifactKind.Walls)}\",\"count\":{wallsCount}",
+            $"\"artifact\":\"{nameof(PlanArtifactKind.Walls)}\",\"count\":{wallsCount + 10}",
+            StringComparison.Ordinal);
+        Assert.NotEqual(scanJson, staleJson);
+
+        var scanPath = workspace.Write("scan.json", staleJson);
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            scanPath,
+            "--kind",
+            "scan",
+            "--deep",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(1, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.False(validation.RootElement.GetProperty("valid").GetBoolean());
+
+        var messages = validation.RootElement
+            .GetProperty("messages")
+            .EnumerateArray()
+            .Select(message => message.GetProperty("message").GetString() ?? string.Empty)
+            .ToArray();
+        Assert.Contains(messages, message => message.Contains("artifact 'Walls' count should be", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ValidatePlacementDeep_AcceptsCoherentPlacementPacket()
     {
         using var workspace = TestWorkspace.Create();
@@ -135,6 +208,43 @@ public sealed class CliPlacementValidationTests
     }
 
     [Fact]
+    public async Task ValidatePlacementDeep_RejectsBrokenOpeningFootprintGeometry()
+    {
+        using var workspace = TestWorkspace.Create();
+        var placementPath = workspace.Write(
+            "placement.json",
+            CreatePlacementJson().Replace(
+                "\"depthDrawingUnits\": 4",
+                "\"depthDrawingUnits\": 2",
+                StringComparison.Ordinal));
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            placementPath,
+            "--kind",
+            "placement",
+            "--deep",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(1, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.False(validation.RootElement.GetProperty("valid").GetBoolean());
+
+        var messages = validation.RootElement
+            .GetProperty("messages")
+            .EnumerateArray()
+            .Select(message => message.GetProperty("message").GetString() ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains(messages, message => message.Contains("depthDrawingUnits must match start/end jamb line lengths", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ValidatePlacementDeep_RejectsBrokenRoutingReferences()
     {
         using var workspace = TestWorkspace.Create();
@@ -171,6 +281,40 @@ public sealed class CliPlacementValidationTests
         Assert.Contains(messages, message => message.Contains("sourceId references missing opening 'missing-opening'", StringComparison.Ordinal));
         Assert.Contains(messages, message => message.Contains("suppressedByAggregateId references missing object aggregate 'missing-aggregate'", StringComparison.Ordinal));
         Assert.Contains(messages, message => message.Contains("replacementRoutingObstacleId references missing routing obstacle 'missing-routing-obstacle'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ValidatePlacementDeep_RejectsRoutingPassageThatClaimsReadinessWithBadPlacement()
+    {
+        using var workspace = TestWorkspace.Create();
+        var placementPath = workspace.Write(
+            "placement.json",
+            CreatePlacementJson(endOffset: 22, length: 30));
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            placementPath,
+            "--kind",
+            "placement",
+            "--deep",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(1, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.False(validation.RootElement.GetProperty("valid").GetBoolean());
+
+        var messages = validation.RootElement
+            .GetProperty("messages")
+            .EnumerateArray()
+            .Select(message => message.GetProperty("message").GetString() ?? string.Empty)
+            .ToArray();
+
+        Assert.Contains(messages, message => message.Contains("routing passage readyForCoordinatePlacement is true but placement failed coordinate-readiness checks", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -642,6 +786,17 @@ public sealed class CliPlacementValidationTests
                 "endOffsetDrawingUnits": {{endOffset}},
                 "centerOffsetDrawingUnits": {{centerOffset}},
                 "lengthDrawingUnits": {{length}},
+                "footprintBounds": { "x": 30, "y": 38, "width": 30, "height": 4 },
+                "footprintCorners": [
+                  { "x": 30, "y": 38 },
+                  { "x": 60, "y": 38 },
+                  { "x": 60, "y": 42 },
+                  { "x": 30, "y": 42 }
+                ],
+                "startJambLine": { "start": { "x": 30, "y": 38 }, "end": { "x": 30, "y": 42 } },
+                "endJambLine": { "start": { "x": 60, "y": 38 }, "end": { "x": 60, "y": 42 } },
+                "depthDrawingUnits": 4,
+                "depthMillimeters": 40,
                 "startOffsetMillimeters": 100,
                 "endOffsetMillimeters": 400,
                 "centerOffsetMillimeters": 250,
@@ -663,6 +818,23 @@ public sealed class CliPlacementValidationTests
               "hostWallIds": ["{{openingHostWallId}}"],
               "connectedRoomIds": ["room-1"],
               "connectedRoomLabels": ["Test room"],
+              "connectedRoomLinks": [
+                {
+                  "roomId": "room-1",
+                  "roomLabel": "Test room",
+                  "roomUseKind": "Unknown",
+                  "roomAdjacencyIds": ["room-adjacency-1"],
+                  "side": "PositiveNormalSide",
+                  "roomSidePoint": { "x": 45, "y": 43 },
+                  "nearestBoundaryPoint": { "x": 45, "y": 40 },
+                  "signedDistanceFromOpening": 25,
+                  "distanceToOpening": 0,
+                  "sharesHostWall": true,
+                  "confidence": 0.9,
+                  "evidence": ["test room side link"]
+                }
+              ],
+              "roomAdjacencyIds": ["room-adjacency-1"],
               "confidence": 0.9,
               "reliability": {
                 "readyForCoordinatePlacement": true,
@@ -711,6 +883,96 @@ public sealed class CliPlacementValidationTests
             }
           ],
           "wallGraphRepairCandidates": [],
+          "wallGraph": {
+            "summary": {
+              "nodeCount": 2,
+              "edgeCount": 1,
+              "componentCount": 1,
+              "mainStructuralComponentCount": 1,
+              "secondaryStructuralComponentCount": 0,
+              "objectLikeComponentCount": 0,
+              "isolatedFragmentComponentCount": 0,
+              "structuralEdgeCount": 1,
+              "excludedEdgeCount": 0,
+              "repairCandidateCount": 0,
+              "highSeverityRepairCandidateCount": 0,
+              "reviewRepairCandidateCount": 0,
+              "blockingRepairCandidateCount": 0
+            },
+            "nodes": [
+              {
+                "id": "node-1",
+                "pageNumber": 1,
+                "position": { "x": 20, "y": 40 },
+                "positionMillimeters": { "x": 200, "y": 400 },
+                "kind": "Endpoint",
+                "degree": 1,
+                "directions": ["East"],
+                "confidence": 0.9,
+                "evidence": ["test node"]
+              },
+              {
+                "id": "node-2",
+                "pageNumber": 1,
+                "position": { "x": 120, "y": 40 },
+                "positionMillimeters": { "x": 1200, "y": 400 },
+                "kind": "Endpoint",
+                "degree": 1,
+                "directions": ["West"],
+                "confidence": 0.9,
+                "evidence": ["test node"]
+              }
+            ],
+            "edges": [
+              {
+                "id": "edge-1",
+                "pageNumber": 1,
+                "fromNodeId": "node-1",
+                "toNodeId": "node-2",
+                "wallId": "wall-1",
+                "wallComponentId": null,
+                "wallComponentKind": "MainStructural",
+                "excludedFromStructuralTopology": false,
+                "centerLine": { "start": { "x": 20, "y": 40 }, "end": { "x": 120, "y": 40 } },
+                "centerLineMillimeters": { "start": { "x": 200, "y": 400 }, "end": { "x": 1200, "y": 400 } },
+                "bounds": { "x": 20, "y": 38, "width": 100, "height": 4 },
+                "boundsMillimeters": { "x": 200, "y": 380, "width": 1000, "height": 40 },
+                "drawingLength": 100,
+                "lengthMeters": 1,
+                "thicknessDrawingUnits": 4,
+                "thicknessMillimeters": 40,
+                "millimetersPerDrawingUnit": 10,
+                "confidence": 0.9,
+                "sourcePrimitiveIds": ["wall-primitive-1"],
+                "sourceLayers": ["A-WALL"],
+                "evidence": ["test wall graph edge"]
+              }
+            ],
+            "components": [
+              {
+                "id": "component-1",
+                "pageNumber": 1,
+                "kind": "MainStructural",
+                "bounds": { "x": 20, "y": 38, "width": 100, "height": 4 },
+                "boundsMillimeters": { "x": 200, "y": 380, "width": 1000, "height": 40 },
+                "wallIds": ["wall-1"],
+                "nodeIds": ["node-1", "node-2"],
+                "edgeIds": ["edge-1"],
+                "sourcePrimitiveIds": ["wall-primitive-1"],
+                "sourceLayers": ["A-WALL"],
+                "wallCount": 1,
+                "nodeCount": 2,
+                "edgeCount": 1,
+                "drawingLength": 100,
+                "lengthMeters": 1,
+                "confidence": 0.9,
+                "excludedFromStructuralTopology": false,
+                "evidence": ["test component"]
+              }
+            ],
+            "repairCandidateIds": [],
+            "evidence": ["test wall graph"]
+          },
           "routingLayer": {
             "barriers": [
               {
@@ -757,6 +1019,23 @@ public sealed class CliPlacementValidationTests
                 "hostWallIds": ["{{openingHostWallId}}"],
                 "connectedRoomIds": ["room-1"],
                 "connectedRoomLabels": ["Test room"],
+                "connectedRoomLinks": [
+                  {
+                    "roomId": "room-1",
+                    "roomLabel": "Test room",
+                    "roomUseKind": "Unknown",
+                    "roomAdjacencyIds": ["room-adjacency-1"],
+                    "side": "PositiveNormalSide",
+                    "roomSidePoint": { "x": 45, "y": 43 },
+                    "nearestBoundaryPoint": { "x": 45, "y": 40 },
+                    "signedDistanceFromOpening": 25,
+                    "distanceToOpening": 0,
+                    "sharesHostWall": true,
+                    "confidence": 0.9,
+                    "evidence": ["test routing passage room side link"]
+                  }
+                ],
+                "roomAdjacencyIds": ["room-adjacency-1"],
                 "placement": {
                   "hostWallId": "{{placementHostWallId}}",
                   "anchorWallIds": ["{{placementHostWallId}}"],
@@ -767,6 +1046,17 @@ public sealed class CliPlacementValidationTests
                   "endOffsetDrawingUnits": {{endOffset}},
                   "centerOffsetDrawingUnits": {{centerOffset}},
                   "lengthDrawingUnits": {{length}},
+                  "footprintBounds": { "x": 30, "y": 38, "width": 30, "height": 4 },
+                  "footprintCorners": [
+                    { "x": 30, "y": 38 },
+                    { "x": 60, "y": 38 },
+                    { "x": 60, "y": 42 },
+                    { "x": 30, "y": 42 }
+                  ],
+                  "startJambLine": { "start": { "x": 30, "y": 38 }, "end": { "x": 30, "y": 42 } },
+                  "endJambLine": { "start": { "x": 60, "y": 38 }, "end": { "x": 60, "y": 42 } },
+                  "depthDrawingUnits": 4,
+                  "depthMillimeters": 40,
                   "startOffsetMillimeters": 100,
                   "endOffsetMillimeters": 400,
                   "centerOffsetMillimeters": 250,
@@ -780,6 +1070,10 @@ public sealed class CliPlacementValidationTests
                   "confidence": 0.9,
                   "evidence": ["test routing passage placement"]
                 },
+                "placementStatus": "Anchored",
+                "readyForCoordinatePlacement": true,
+                "requiresReview": false,
+                "reviewReasons": [],
                 "confidence": 0.9,
                 "sourcePrimitiveIds": ["opening-primitive-1"],
                 "sourceLayers": ["A-DOOR"],
@@ -956,6 +1250,32 @@ public sealed class CliPlacementValidationTests
               ]
               """
             : "[]";
+
+    private static async Task<string> CreateGeneratedScanJsonAsync()
+    {
+        var document = new PlanDocument(
+            "cli-scan-validation-plan",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(500, 400),
+                    new PlanPrimitive[]
+                    {
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(300, 100))) { SourceId = "wall-top" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(300, 100), new PlanPoint(300, 260))) { SourceId = "wall-right" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(300, 260), new PlanPoint(100, 260))) { SourceId = "wall-bottom" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(100, 260), new PlanPoint(100, 100))) { SourceId = "wall-left" },
+                        new TextPrimitive("GARASJE 24 m2", new PlanRect(150, 165, 90, 18)) { SourceId = "room-label" },
+                        new TextPrimitive("Malestokk 1:100", new PlanRect(350, 330, 100, 16)) { SourceId = "scale-text" }
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        return PlanTraceJsonExporter.Serialize(
+            result,
+            new PlanTraceJsonExportOptions { WriteIndented = false });
+    }
 
     private sealed class TestWorkspace : IDisposable
     {

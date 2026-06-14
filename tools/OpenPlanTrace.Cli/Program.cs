@@ -261,7 +261,12 @@ internal static class OpenPlanTraceCli
             {
                 var pageNumber = parsed.PageNumber ?? result.Document.Pages.First().Number;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(parsed.SvgPath))!);
-                File.WriteAllText(parsed.SvgPath, PlanOverlaySvgRenderer.RenderPage(result, pageNumber));
+                File.WriteAllText(
+                    parsed.SvgPath,
+                    PlanOverlaySvgRenderer.RenderPage(
+                        result,
+                        pageNumber,
+                        SvgOverlayRenderOptions.ForProfile(parsed.SvgProfile)));
                 svgPathsByPage[pageNumber] = SnapshotArtifactPath(parsed.VisualSnapshotPath, parsed.SvgPath);
             }
 
@@ -271,7 +276,12 @@ internal static class OpenPlanTraceCli
                 foreach (var page in result.Document.Pages)
                 {
                     var svgPath = Path.Combine(parsed.SvgDirectory, $"page-{page.Number}.svg");
-                    File.WriteAllText(svgPath, PlanOverlaySvgRenderer.RenderPage(result, page.Number));
+                    File.WriteAllText(
+                        svgPath,
+                        PlanOverlaySvgRenderer.RenderPage(
+                            result,
+                            page.Number,
+                            SvgOverlayRenderOptions.ForProfile(parsed.SvgProfile)));
                     svgPathsByPage[page.Number] = SnapshotArtifactPath(parsed.VisualSnapshotPath, svgPath);
                 }
             }
@@ -284,7 +294,8 @@ internal static class OpenPlanTraceCli
                         result,
                         snapshotStream,
                         new PlanOverlaySnapshotJsonExportOptions { WriteIndented = parsed.PrettyJson },
-                        svgPathsByPage)
+                        svgPathsByPage,
+                        SvgOverlayRenderOptions.ForProfile(parsed.SvgProfile))
                     .ConfigureAwait(false);
             }
 
@@ -639,7 +650,12 @@ internal static class OpenPlanTraceCli
                     foreach (var page in scan.Document.Pages)
                     {
                         var svgPath = Path.Combine(overlayDirectory, $"page-{page.Number}.svg");
-                        File.WriteAllText(svgPath, PlanOverlaySvgRenderer.RenderPage(scan, page.Number));
+                        File.WriteAllText(
+                            svgPath,
+                            PlanOverlaySvgRenderer.RenderPage(
+                                scan,
+                                page.Number,
+                                SvgOverlayRenderOptions.ForProfile(parsed.SvgProfile)));
                         svgPathsByPage[page.Number] = SnapshotArtifactPath(visualSnapshotPath, svgPath);
                     }
 
@@ -648,7 +664,8 @@ internal static class OpenPlanTraceCli
                             scan,
                             snapshotStream,
                             new PlanOverlaySnapshotJsonExportOptions { WriteIndented = parsed.PrettyJson },
-                            svgPathsByPage)
+                            svgPathsByPage,
+                            SvgOverlayRenderOptions.ForProfile(parsed.SvgProfile))
                         .ConfigureAwait(false);
                 }
                 else
@@ -669,7 +686,8 @@ internal static class OpenPlanTraceCli
                             page => page.Number,
                             page => SnapshotArtifactPath(
                                 visualSnapshotPath,
-                                Path.Combine(overlayDirectory, $"page-{page.Number}.svg"))));
+                                Path.Combine(overlayDirectory, $"page-{page.Number}.svg"))),
+                    SvgOverlayRenderOptions.ForProfile(parsed.SvgProfile));
 
                 stopwatch.Stop();
                 return BatchScanItemResult.FromScan(
@@ -1839,6 +1857,12 @@ internal static class OpenPlanTraceCli
         var rooms = ValidatePlacementArray(root, "rooms", "room", ValidatePlacementRoom, messages);
         var openings = ValidatePlacementArray(root, "openings", "opening", ValidatePlacementOpening, messages);
         var objectAggregates = ValidatePlacementArray(root, "objectAggregates", "object aggregate", ValidatePlacementObjectAggregate, messages);
+        var repairCandidates = ReadArrayProperty(root, "wallGraphRepairCandidates", "Placement export", messages);
+
+        if (TryReadObjectProperty(root, "wallGraph", "Placement export", messages, out var wallGraph))
+        {
+            ValidatePlacementWallGraph(wallGraph, repairCandidates.Length, messages);
+        }
 
         var routingLayer = default(JsonElement);
         var hasRoutingLayer = false;
@@ -1978,6 +2002,9 @@ internal static class OpenPlanTraceCli
         var suppressedObjects = hasRoutingLayer ? ReadArrayProperty(routingLayer, "suppressedObjects", "Placement routingLayer", messages) : Array.Empty<JsonElement>();
         var suppressedObjectCandidateIds = hasRoutingLayer ? ReadStringArrayForDeep(routingLayer, "suppressedObjectCandidateIds").ToArray() : Array.Empty<string>();
         var routingItemCount = barriers.Length + passages.Length + obstacles.Length + roomUseHints.Length + suppressedObjects.Length;
+        var structuralWalls = walls
+            .Where(wall => ReadBooleanProperty(wall, "excludedFromStructuralTopology") != true)
+            .ToArray();
         var reliabilityTrackedEntityCount = walls.Length + rooms.Length + openings.Length + objectAggregates.Length;
         var coordinateReadyEntityCount = ReliabilityCount(walls, "readyForCoordinatePlacement")
             + ReliabilityCount(rooms, "readyForCoordinatePlacement")
@@ -1987,7 +2014,7 @@ internal static class OpenPlanTraceCli
             + ReliabilityCount(rooms, "readyForMetricPlacement")
             + ReliabilityCount(openings, "readyForMetricPlacement")
             + ReliabilityCount(objectAggregates, "readyForMetricPlacement");
-        var reviewRequiredEntityCount = ReliabilityCount(walls, "requiresReview")
+        var reviewRequiredEntityCount = ReliabilityCount(structuralWalls, "requiresReview")
             + ReliabilityCount(rooms, "requiresReview")
             + ReliabilityCount(openings, "requiresReview")
             + ReliabilityCount(objectAggregates, "requiresReview");
@@ -1995,8 +2022,8 @@ internal static class OpenPlanTraceCli
         AddExpectedIntegerMessage(Prefix, "pageCount", pages.Length, summary, messages);
         TryReadNonNegativeIntegerProperty(summary, Prefix, "mainFloorplanRegionCount", messages);
         AddExpectedIntegerMessage(Prefix, "wallCount", walls.Length, summary, messages);
-        AddExpectedIntegerMessage(Prefix, "structuralWallCount", walls.Count(wall => ReadBooleanProperty(wall, "excludedFromStructuralTopology") != true), summary, messages);
-        AddExpectedIntegerMessage(Prefix, "excludedWallCount", walls.Count(wall => ReadBooleanProperty(wall, "excludedFromStructuralTopology") == true), summary, messages);
+        AddExpectedIntegerMessage(Prefix, "structuralWallCount", structuralWalls.Length, summary, messages);
+        AddExpectedIntegerMessage(Prefix, "excludedWallCount", walls.Length - structuralWalls.Length, summary, messages);
         AddExpectedIntegerMessage(Prefix, "roomCount", rooms.Length, summary, messages);
         AddExpectedIntegerMessage(Prefix, "openingCount", openings.Length, summary, messages);
         AddExpectedIntegerMessage(Prefix, "anchoredOpeningCount", openings.Count(HasPlacementObject), summary, messages);
@@ -2125,6 +2152,9 @@ internal static class OpenPlanTraceCli
         }
 
         var pageWalls = walls.Where(item => ReadInt32Property(item, "pageNumber") == pageNumber.Value).ToArray();
+        var pageStructuralWalls = pageWalls
+            .Where(wall => ReadBooleanProperty(wall, "excludedFromStructuralTopology") != true)
+            .ToArray();
         var pageRooms = rooms.Where(item => ReadInt32Property(item, "pageNumber") == pageNumber.Value).ToArray();
         var pageOpenings = openings.Where(item => ReadInt32Property(item, "pageNumber") == pageNumber.Value).ToArray();
         var pageObjectAggregates = objectAggregates.Where(item => ReadInt32Property(item, "pageNumber") == pageNumber.Value).ToArray();
@@ -2135,8 +2165,8 @@ internal static class OpenPlanTraceCli
             + suppressedObjects.Count(item => ReadInt32Property(item, "pageNumber") == pageNumber.Value);
 
         AddExpectedIntegerMessage(prefix, "wallCount", pageWalls.Length, summary, messages);
-        AddExpectedIntegerMessage(prefix, "structuralWallCount", pageWalls.Count(wall => ReadBooleanProperty(wall, "excludedFromStructuralTopology") != true), summary, messages);
-        AddExpectedIntegerMessage(prefix, "excludedWallCount", pageWalls.Count(wall => ReadBooleanProperty(wall, "excludedFromStructuralTopology") == true), summary, messages);
+        AddExpectedIntegerMessage(prefix, "structuralWallCount", pageStructuralWalls.Length, summary, messages);
+        AddExpectedIntegerMessage(prefix, "excludedWallCount", pageWalls.Length - pageStructuralWalls.Length, summary, messages);
         AddExpectedIntegerMessage(prefix, "roomCount", pageRooms.Length, summary, messages);
         AddExpectedIntegerMessage(prefix, "openingCount", pageOpenings.Length, summary, messages);
         AddExpectedIntegerMessage(prefix, "anchoredOpeningCount", pageOpenings.Count(HasPlacementObject), summary, messages);
@@ -2146,7 +2176,7 @@ internal static class OpenPlanTraceCli
         AddExpectedIntegerMessage(prefix, "reliabilityTrackedEntityCount", pageWalls.Length + pageRooms.Length + pageOpenings.Length + pageObjectAggregates.Length, summary, messages);
         AddExpectedIntegerMessage(prefix, "coordinateReadyEntityCount", ReliabilityCount(pageWalls, "readyForCoordinatePlacement") + ReliabilityCount(pageRooms, "readyForCoordinatePlacement") + ReliabilityCount(pageOpenings, "readyForCoordinatePlacement") + ReliabilityCount(pageObjectAggregates, "readyForCoordinatePlacement"), summary, messages);
         AddExpectedIntegerMessage(prefix, "metricReadyEntityCount", ReliabilityCount(pageWalls, "readyForMetricPlacement") + ReliabilityCount(pageRooms, "readyForMetricPlacement") + ReliabilityCount(pageOpenings, "readyForMetricPlacement") + ReliabilityCount(pageObjectAggregates, "readyForMetricPlacement"), summary, messages);
-        AddExpectedIntegerMessage(prefix, "reviewRequiredEntityCount", ReliabilityCount(pageWalls, "requiresReview") + ReliabilityCount(pageRooms, "requiresReview") + ReliabilityCount(pageOpenings, "requiresReview") + ReliabilityCount(pageObjectAggregates, "requiresReview"), summary, messages);
+        AddExpectedIntegerMessage(prefix, "reviewRequiredEntityCount", ReliabilityCount(pageStructuralWalls, "requiresReview") + ReliabilityCount(pageRooms, "requiresReview") + ReliabilityCount(pageOpenings, "requiresReview") + ReliabilityCount(pageObjectAggregates, "requiresReview"), summary, messages);
         AddExpectedIntegerMessage(prefix, "issueCount", issues.Count(issue => ReadInt32Property(issue, "pageNumber") == pageNumber.Value), summary, messages);
     }
 
@@ -2326,6 +2356,7 @@ internal static class OpenPlanTraceCli
         }
 
         ValidatePlacementLineProperty(item, prefix, "centerLine", messages);
+        ValidateOptionalPlacementWallTopologySpans(item, prefix, messages);
         ValidatePlacementRectProperty(item, prefix, "bounds", messages);
         ValidateNonNegativeNumberProperty(item, prefix, "drawingLength", messages);
         ValidateNonNegativeNumberProperty(item, prefix, "thicknessDrawingUnits", messages);
@@ -2333,6 +2364,231 @@ internal static class OpenPlanTraceCli
         ValidatePlacementReliabilityProperty(item, prefix, messages);
         ValidateRequiredStringArrayProperty(item, prefix, "sourcePrimitiveIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "sourceLayers", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+    }
+
+    private static void ValidateOptionalPlacementWallTopologySpans(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!item.TryGetProperty("topologySpans", out var spans))
+        {
+            return;
+        }
+
+        if (spans.ValueKind != JsonValueKind.Array)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{prefix} topologySpans must be an array."));
+            return;
+        }
+
+        var index = 0;
+        foreach (var span in spans.EnumerateArray())
+        {
+            ValidatePlacementWallTopologySpan(span, $"{prefix}.topologySpans[{index}]", messages);
+            index++;
+        }
+    }
+
+    private static void ValidatePlacementWallTopologySpan(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{prefix} must be an object."));
+            return;
+        }
+
+        RequireNonEmptyStringProperty(item, prefix, "id", messages);
+        RequireNonEmptyStringProperty(item, prefix, "wallGraphEdgeId", messages);
+        ValidatePositiveIntegerProperty(item, prefix, "pageNumber", messages);
+        RequireNonEmptyStringProperty(item, prefix, "wallId", messages);
+        RequireNonEmptyStringProperty(item, prefix, "fromNodeId", messages);
+        RequireNonEmptyStringProperty(item, prefix, "toNodeId", messages);
+        ValidatePlacementLineProperty(item, prefix, "centerLine", messages);
+        ValidateRequiredNullableLineProperty(item, prefix, "centerLineMillimeters", messages);
+        ValidatePlacementRectProperty(item, prefix, "bounds", messages);
+        ValidateRequiredNullableRectProperty(item, prefix, "boundsMillimeters", messages);
+        ValidateNonNegativeNumberProperty(item, prefix, "drawingLength", messages);
+        ValidateRequiredNullableNonNegativeNumberProperty(item, prefix, "lengthMeters", messages);
+        ValidateNonNegativeNumberProperty(item, prefix, "thicknessDrawingUnits", messages);
+        ValidateRequiredNullableNonNegativeNumberProperty(item, prefix, "thicknessMillimeters", messages);
+        ValidateRequiredRatioProperty(item, prefix, "confidence", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "sourcePrimitiveIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "sourceLayers", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+    }
+
+    private static void ValidatePlacementWallGraph(
+        JsonElement item,
+        int repairCandidateCount,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        const string Prefix = "Placement wallGraph";
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{Prefix} must be an object."));
+            return;
+        }
+
+        var nodes = ReadArrayProperty(item, "nodes", Prefix, messages);
+        var edges = ReadArrayProperty(item, "edges", Prefix, messages);
+        var components = ReadArrayProperty(item, "components", Prefix, messages);
+        for (var index = 0; index < nodes.Length; index++)
+        {
+            ValidatePlacementWallGraphNode(nodes[index], $"{Prefix}.nodes[{index}]", messages);
+        }
+
+        for (var index = 0; index < edges.Length; index++)
+        {
+            ValidatePlacementWallGraphEdge(edges[index], $"{Prefix}.edges[{index}]", messages);
+        }
+
+        for (var index = 0; index < components.Length; index++)
+        {
+            ValidatePlacementWallGraphComponent(components[index], $"{Prefix}.components[{index}]", messages);
+        }
+
+        ValidateRequiredStringArrayProperty(item, Prefix, "repairCandidateIds", messages);
+        ValidateRequiredStringArrayProperty(item, Prefix, "evidence", messages);
+
+        if (TryReadObjectProperty(item, "summary", Prefix, messages, out var summary))
+        {
+            ValidatePlacementWallGraphSummary(summary, nodes.Length, edges.Length, components.Length, repairCandidateCount, messages);
+        }
+    }
+
+    private static void ValidatePlacementWallGraphSummary(
+        JsonElement item,
+        int nodeCount,
+        int edgeCount,
+        int componentCount,
+        int repairCandidateCount,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        const string Prefix = "Placement wallGraph.summary";
+        var reportedNodeCount = TryReadNonNegativeIntegerProperty(item, Prefix, "nodeCount", messages);
+        var reportedEdgeCount = TryReadNonNegativeIntegerProperty(item, Prefix, "edgeCount", messages);
+        var reportedComponentCount = TryReadNonNegativeIntegerProperty(item, Prefix, "componentCount", messages);
+        var reportedRepairCandidateCount = TryReadNonNegativeIntegerProperty(item, Prefix, "repairCandidateCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "mainStructuralComponentCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "secondaryStructuralComponentCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "objectLikeComponentCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "isolatedFragmentComponentCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "structuralEdgeCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "excludedEdgeCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "highSeverityRepairCandidateCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "reviewRepairCandidateCount", messages);
+        TryReadNonNegativeIntegerProperty(item, Prefix, "blockingRepairCandidateCount", messages);
+
+        if (reportedNodeCount is not null && reportedNodeCount != nodeCount)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{Prefix} nodeCount must equal wallGraph.nodes length."));
+        }
+
+        if (reportedEdgeCount is not null && reportedEdgeCount != edgeCount)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{Prefix} edgeCount must equal wallGraph.edges length."));
+        }
+
+        if (reportedComponentCount is not null && reportedComponentCount != componentCount)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{Prefix} componentCount must equal wallGraph.components length."));
+        }
+
+        if (reportedRepairCandidateCount is not null && reportedRepairCandidateCount != repairCandidateCount)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{Prefix} repairCandidateCount must equal wallGraphRepairCandidates length."));
+        }
+    }
+
+    private static void ValidatePlacementWallGraphNode(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{prefix} must be an object."));
+            return;
+        }
+
+        RequireNonEmptyStringProperty(item, prefix, "id", messages);
+        ValidatePositiveIntegerProperty(item, prefix, "pageNumber", messages);
+        ValidatePlacementPointProperty(item, prefix, "position", messages);
+        ValidateRequiredNullablePointProperty(item, prefix, "positionMillimeters", messages);
+        RequireNonEmptyStringProperty(item, prefix, "kind", messages);
+        TryReadNonNegativeIntegerProperty(item, prefix, "degree", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "directions", messages);
+        ValidateRequiredRatioProperty(item, prefix, "confidence", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+    }
+
+    private static void ValidatePlacementWallGraphEdge(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{prefix} must be an object."));
+            return;
+        }
+
+        RequireNonEmptyStringProperty(item, prefix, "id", messages);
+        ValidatePositiveIntegerProperty(item, prefix, "pageNumber", messages);
+        RequireNonEmptyStringProperty(item, prefix, "fromNodeId", messages);
+        RequireNonEmptyStringProperty(item, prefix, "toNodeId", messages);
+        RequireNonEmptyStringProperty(item, prefix, "wallId", messages);
+        ValidateRequiredNullableStringProperty(item, prefix, "wallComponentId", messages);
+        ValidateRequiredNullableStringProperty(item, prefix, "wallComponentKind", messages);
+        ValidateBooleanProperty(item, prefix, "excludedFromStructuralTopology", messages);
+        ValidateRequiredNullableLineProperty(item, prefix, "centerLine", messages);
+        ValidateRequiredNullableLineProperty(item, prefix, "centerLineMillimeters", messages);
+        ValidateRequiredNullableRectProperty(item, prefix, "bounds", messages);
+        ValidateRequiredNullableRectProperty(item, prefix, "boundsMillimeters", messages);
+        ValidateNonNegativeNumberProperty(item, prefix, "drawingLength", messages);
+        ValidateRequiredNullableNonNegativeNumberProperty(item, prefix, "lengthMeters", messages);
+        ValidateNonNegativeNumberProperty(item, prefix, "thicknessDrawingUnits", messages);
+        ValidateRequiredNullableNonNegativeNumberProperty(item, prefix, "thicknessMillimeters", messages);
+        ValidateRequiredNullableNonNegativeNumberProperty(item, prefix, "millimetersPerDrawingUnit", messages);
+        ValidateRequiredRatioProperty(item, prefix, "confidence", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "sourcePrimitiveIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "sourceLayers", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+    }
+
+    private static void ValidatePlacementWallGraphComponent(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{prefix} must be an object."));
+            return;
+        }
+
+        RequireNonEmptyStringProperty(item, prefix, "id", messages);
+        ValidatePositiveIntegerProperty(item, prefix, "pageNumber", messages);
+        RequireNonEmptyStringProperty(item, prefix, "kind", messages);
+        ValidatePlacementRectProperty(item, prefix, "bounds", messages);
+        ValidateRequiredNullableRectProperty(item, prefix, "boundsMillimeters", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "wallIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "nodeIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "edgeIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "sourcePrimitiveIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "sourceLayers", messages);
+        TryReadNonNegativeIntegerProperty(item, prefix, "wallCount", messages);
+        TryReadNonNegativeIntegerProperty(item, prefix, "nodeCount", messages);
+        TryReadNonNegativeIntegerProperty(item, prefix, "edgeCount", messages);
+        ValidateNonNegativeNumberProperty(item, prefix, "drawingLength", messages);
+        ValidateRequiredNullableNonNegativeNumberProperty(item, prefix, "lengthMeters", messages);
+        ValidateRequiredRatioProperty(item, prefix, "confidence", messages);
+        ValidateBooleanProperty(item, prefix, "excludedFromStructuralTopology", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
     }
 
@@ -2380,9 +2636,12 @@ internal static class OpenPlanTraceCli
         ValidatePlacementReliabilityProperty(item, prefix, messages);
         ValidateRequiredStringArrayProperty(item, prefix, "hostWallIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "connectedRoomIds", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "connectedRoomLabels", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "roomAdjacencyIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "sourcePrimitiveIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "sourceLayers", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+        ValidatePlacementOpeningRoomConnections(item, prefix, messages);
 
         var placementStatus = ReadStringProperty(item, "placementStatus");
         if (placementStatus is not "Anchored" and not "Unanchored")
@@ -2411,6 +2670,57 @@ internal static class OpenPlanTraceCli
         if (hasPlacement)
         {
             ValidatePlacementOpeningPlacement(placement, $"{prefix}.placement", messages);
+        }
+    }
+
+    private static void ValidatePlacementOpeningRoomConnections(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!item.TryGetProperty("connectedRoomLinks", out var links) || links.ValueKind != JsonValueKind.Array)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} requires an array connectedRoomLinks."));
+            return;
+        }
+
+        var index = 0;
+        foreach (var link in links.EnumerateArray())
+        {
+            var linkPrefix = $"{prefix}.connectedRoomLinks[{index}]";
+            if (link.ValueKind != JsonValueKind.Object)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{linkPrefix} must be an object."));
+                index++;
+                continue;
+            }
+
+            RequireNonEmptyStringProperty(link, linkPrefix, "roomId", messages);
+            ValidateRequiredNullableStringProperty(link, linkPrefix, "roomLabel", messages);
+            RequireNonEmptyStringProperty(link, linkPrefix, "roomUseKind", messages);
+            ValidateRequiredStringArrayProperty(link, linkPrefix, "roomAdjacencyIds", messages);
+            RequireNonEmptyStringProperty(link, linkPrefix, "side", messages);
+            var side = ReadStringProperty(link, "side");
+            if (side is not null
+                && side is not "Unknown" and not "PositiveNormalSide" and not "NegativeNormalSide" and not "OnOpeningLine")
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{linkPrefix} side must be Unknown, PositiveNormalSide, NegativeNormalSide, or OnOpeningLine."));
+            }
+
+            ValidateRequiredNullablePointProperty(link, linkPrefix, "roomSidePoint", messages);
+            ValidateRequiredNullablePointProperty(link, linkPrefix, "nearestBoundaryPoint", messages);
+            ValidateNumberProperty(link, linkPrefix, "signedDistanceFromOpening", messages);
+            ValidateNonNegativeNumberProperty(link, linkPrefix, "distanceToOpening", messages);
+            ValidateBooleanProperty(link, linkPrefix, "sharesHostWall", messages);
+            ValidateRequiredRatioProperty(link, linkPrefix, "confidence", messages);
+            ValidateRequiredStringArrayProperty(link, linkPrefix, "evidence", messages);
+            index++;
         }
     }
 
@@ -2529,11 +2839,80 @@ internal static class OpenPlanTraceCli
         ValidateRequiredStringArrayProperty(item, prefix, "hostWallIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "connectedRoomIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "connectedRoomLabels", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "roomAdjacencyIds", messages);
+        ValidatePlacementOpeningRoomConnections(item, prefix, messages);
         ValidateRequiredPlacementOrNullProperty(item, prefix, "placement", messages);
+        ValidateRoutingPassagePlacementReadiness(item, prefix, messages);
         ValidateRequiredRatioProperty(item, prefix, "confidence", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "sourcePrimitiveIds", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "sourceLayers", messages);
         ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+    }
+
+    private static void ValidateRoutingPassagePlacementReadiness(
+        JsonElement item,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        var placementStatus = ReadStringProperty(item, "placementStatus");
+        if (placementStatus is not "Anchored" and not "Unanchored")
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} placementStatus must be Anchored or Unanchored."));
+        }
+
+        ValidateBooleanProperty(item, prefix, "readyForCoordinatePlacement", messages);
+        ValidateBooleanProperty(item, prefix, "requiresReview", messages);
+        ValidateRequiredStringArrayProperty(item, prefix, "reviewReasons", messages);
+
+        var hasPlacement = item.TryGetProperty("placement", out var placement)
+            && placement.ValueKind == JsonValueKind.Object;
+        var readyForCoordinatePlacement = ReadBooleanProperty(item, "readyForCoordinatePlacement");
+        var requiresReview = ReadBooleanProperty(item, "requiresReview");
+        var reviewReasons = ReadStringArrayForDeep(item, "reviewReasons").ToArray();
+
+        if (placementStatus == "Anchored" && !hasPlacement)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} placementStatus is Anchored but placement is missing."));
+        }
+
+        if (placementStatus == "Unanchored" && hasPlacement)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} placementStatus is Unanchored but placement is present."));
+        }
+
+        if (readyForCoordinatePlacement == true && !hasPlacement)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} readyForCoordinatePlacement cannot be true when placement is missing."));
+        }
+
+        if (readyForCoordinatePlacement == false && requiresReview == false)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} requiresReview must be true when readyForCoordinatePlacement is false."));
+        }
+
+        if (requiresReview == true && reviewReasons.Length == 0)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} reviewReasons must explain why requiresReview is true."));
+        }
+
+        if (requiresReview == false && reviewReasons.Length > 0)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "warning",
+                $"{prefix} reviewReasons should be empty when requiresReview is false."));
+        }
     }
 
     private static void ValidatePlacementRoutingObstacle(
@@ -2976,6 +3355,8 @@ internal static class OpenPlanTraceCli
         RequireNonEmptyStringProperty(layer, prefix, "name", messages);
         var count = TryReadNonNegativeIntegerProperty(layer, prefix, "count", messages) ?? 0;
         ValidateSnapshotRectProperty(layer, prefix, "bounds", allowEmpty: true, messages);
+        ValidateSnapshotRectProperty(layer, prefix, "normalizedBounds", allowEmpty: true, messages);
+        ValidateNonNegativeNumberProperty(layer, prefix, "normalizedDensity", messages);
         ValidateOptionalRatioProperty(layer, prefix, "averageConfidence", messages);
         ValidateOptionalRatioProperty(layer, prefix, "minimumConfidence", messages);
         ValidateOptionalRatioProperty(layer, prefix, "maximumConfidence", messages);
@@ -3751,6 +4132,29 @@ internal static class OpenPlanTraceCli
             var item = stages[index];
             var itemPrefix = $"{prefix}[{index}]";
             RequireNonEmptyStringProperty(item, itemPrefix, "stage", messages);
+            ValidateOptionalStringProperty(item, itemPrefix, "displayName", messages);
+            ValidateOptionalStringProperty(item, itemPrefix, "kind", messages);
+            ValidateOptionalNonNegativeIntegerProperty(item, itemPrefix, "dependencyLevel", messages);
+            ValidateOptionalNonNegativeIntegerProperty(item, itemPrefix, "preferredDependencyLevel", messages);
+            ValidateOptionalStringArrayProperty(item, itemPrefix, "reads", messages);
+            ValidateOptionalStringArrayProperty(item, itemPrefix, "optionalReads", messages);
+            ValidateOptionalStringArrayProperty(item, itemPrefix, "writes", messages);
+            ValidateOptionalStringArrayProperty(item, itemPrefix, "capabilities", messages);
+            ValidateOptionalBooleanProperty(item, itemPrefix, "isDependencyReady", messages);
+            ValidateOptionalStringArrayProperty(item, itemPrefix, "missingRequiredReads", messages);
+            ValidateOptionalStringArrayProperty(item, itemPrefix, "missingOptionalReads", messages);
+            ValidateArtifactSnapshots(
+                ReadArrayProperty(item, "inputArtifacts", itemPrefix, messages),
+                $"{itemPrefix}.inputArtifacts",
+                messages);
+            ValidateArtifactSnapshots(
+                ReadArrayProperty(item, "outputArtifacts", itemPrefix, messages),
+                $"{itemPrefix}.outputArtifacts",
+                messages);
+            ValidateArtifactChanges(
+                ReadArrayProperty(item, "changedArtifacts", itemPrefix, messages),
+                $"{itemPrefix}.changedArtifacts",
+                messages);
             ValidateNonNegativeNumberProperty(item, itemPrefix, "durationMilliseconds", messages);
             TryReadNonNegativeIntegerProperty(item, itemPrefix, "inputCount", messages);
             TryReadNonNegativeIntegerProperty(item, itemPrefix, "outputCount", messages);
@@ -3758,6 +4162,100 @@ internal static class OpenPlanTraceCli
             TryReadNonNegativeIntegerProperty(item, itemPrefix, "infoCount", messages);
             TryReadNonNegativeIntegerProperty(item, itemPrefix, "warningCount", messages);
             TryReadNonNegativeIntegerProperty(item, itemPrefix, "errorCount", messages);
+        }
+    }
+
+    private static void ValidateArtifactSnapshots(
+        JsonElement[] snapshots,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        for (var index = 0; index < snapshots.Length; index++)
+        {
+            var itemPrefix = $"{prefix}[{index}]";
+            ValidateEnumProperty<PlanArtifactKind>(snapshots[index], itemPrefix, "artifact", messages);
+            TryReadNonNegativeIntegerProperty(snapshots[index], itemPrefix, "count", messages);
+        }
+    }
+
+    private static void ValidateArtifactChanges(
+        JsonElement[] changes,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        for (var index = 0; index < changes.Length; index++)
+        {
+            var item = changes[index];
+            var itemPrefix = $"{prefix}[{index}]";
+            ValidateEnumProperty<PlanArtifactKind>(item, itemPrefix, "artifact", messages);
+            var before = TryReadNonNegativeIntegerProperty(item, itemPrefix, "beforeCount", messages);
+            var after = TryReadNonNegativeIntegerProperty(item, itemPrefix, "afterCount", messages);
+            var delta = TryReadIntegerProperty(item, itemPrefix, "delta", messages);
+            if (before is not null && after is not null && delta is not null && after.Value - before.Value != delta.Value)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{itemPrefix} delta should equal afterCount - beforeCount."));
+            }
+        }
+    }
+
+    private static void ValidateOptionalStringProperty(
+        JsonElement root,
+        string displayName,
+        string propertyName,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{displayName} {propertyName} must be a string when present."));
+        }
+    }
+
+    private static void ValidateOptionalNonNegativeIntegerProperty(
+        JsonElement root,
+        string displayName,
+        string propertyName,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return;
+        }
+
+        if (value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var number)
+            || number < 0)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{displayName} {propertyName} must be a non-negative integer when present."));
+        }
+    }
+
+    private static void ValidateOptionalBooleanProperty(
+        JsonElement root,
+        string displayName,
+        string propertyName,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return;
+        }
+
+        if (value.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{displayName} {propertyName} must be a boolean when present."));
         }
     }
 
@@ -4361,6 +4859,31 @@ internal static class OpenPlanTraceCli
             messages.Add(new ArtifactValidationMessage(
                 "error",
                 $"{displayName} {propertyName} must be a non-negative integer."));
+            return null;
+        }
+
+        return number;
+    }
+
+    private static int? TryReadIntegerProperty(
+        JsonElement root,
+        string displayName,
+        string propertyName,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Number)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{displayName} requires numeric {propertyName}."));
+            return null;
+        }
+
+        if (!value.TryGetInt32(out var number))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{displayName} {propertyName} must be an integer."));
             return null;
         }
 
@@ -5419,9 +5942,275 @@ internal static class OpenPlanTraceCli
             return;
         }
 
+        if (kind == "scan")
+        {
+            ValidateDeepScanExport(root, messages);
+            return;
+        }
+
         messages.Add(new ArtifactValidationMessage(
             "info",
             $"Deep validation has no extra checks for artifact kind '{kind}'."));
+    }
+
+    private static void ValidateDeepScanExport(
+        JsonElement root,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!TryReadObjectProperty(root, "diagnostics", "Scan export", messages, out var diagnostics))
+        {
+            return;
+        }
+
+        var expectedCounts = BuildScanArtifactExpectedCounts(root, diagnostics);
+        var inventory = ReadArrayProperty(diagnostics, "artifactInventory", "Scan diagnostics", messages);
+        var availableArtifactCount = TryReadNonNegativeIntegerProperty(diagnostics, "Scan diagnostics", "availableArtifactCount", messages);
+        var emptyArtifactCount = TryReadNonNegativeIntegerProperty(diagnostics, "Scan diagnostics", "emptyArtifactCount", messages);
+        var importCriticalArtifactCount = TryReadNonNegativeIntegerProperty(diagnostics, "Scan diagnostics", "importCriticalArtifactCount", messages);
+        var missingImportCriticalArtifactCount = TryReadNonNegativeIntegerProperty(diagnostics, "Scan diagnostics", "missingImportCriticalArtifactCount", messages);
+
+        var seenArtifacts = new HashSet<string>(StringComparer.Ordinal);
+        var inventoryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var presentCount = 0;
+        var emptyCount = 0;
+        var criticalCount = 0;
+        var missingCriticalCount = 0;
+
+        for (var index = 0; index < inventory.Length; index++)
+        {
+            var item = inventory[index];
+            var prefix = $"Scan diagnostics.artifactInventory[{index}]";
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                messages.Add(new ArtifactValidationMessage("error", $"{prefix} must be an object."));
+                continue;
+            }
+
+            RequireNonEmptyStringProperty(item, prefix, "artifact", messages);
+            RequireNonEmptyStringProperty(item, prefix, "importance", messages);
+            RequireNonEmptyStringProperty(item, prefix, "readinessImpact", messages);
+            ValidateBooleanProperty(item, prefix, "isPresent", messages);
+            ValidateBooleanProperty(item, prefix, "isSourceArtifact", messages);
+            ValidateBooleanProperty(item, prefix, "isImportCritical", messages);
+            ValidateRequiredStringArrayProperty(item, prefix, "producerStages", messages);
+            ValidateRequiredStringArrayProperty(item, prefix, "consumerStages", messages);
+            ValidateRequiredStringArrayProperty(item, prefix, "evidence", messages);
+
+            var artifact = ReadStringProperty(item, "artifact");
+            var count = TryReadNonNegativeIntegerProperty(item, prefix, "count", messages);
+            var isPresent = ReadBooleanProperty(item, "isPresent");
+            var isImportCritical = ReadBooleanProperty(item, "isImportCritical");
+            if (string.IsNullOrWhiteSpace(artifact) || count is null)
+            {
+                continue;
+            }
+
+            if (!seenArtifacts.Add(artifact))
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{prefix} duplicates artifact '{artifact}'."));
+            }
+
+            inventoryCounts[artifact] = count.Value;
+            if (isPresent == true)
+            {
+                presentCount++;
+            }
+            else
+            {
+                emptyCount++;
+            }
+
+            if (isImportCritical == true)
+            {
+                criticalCount++;
+                if (isPresent != true)
+                {
+                    missingCriticalCount++;
+                }
+            }
+
+            if (isPresent is not null && isPresent.Value != (count.Value > 0))
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{prefix} isPresent must match whether count is greater than 0."));
+            }
+
+            if (expectedCounts.TryGetValue(artifact, out var expected) && expected != count.Value)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{prefix} artifact '{artifact}' count should be {expected} based on exported scan content, got {count.Value}."));
+            }
+        }
+
+        foreach (var expected in expectedCounts.Where(item => item.Value > 0))
+        {
+            if (!inventoryCounts.ContainsKey(expected.Key))
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"Scan diagnostics.artifactInventory is missing artifact '{expected.Key}' with expected count {expected.Value}."));
+            }
+        }
+
+        AddExpectedInventoryTotalMessage("availableArtifactCount", availableArtifactCount, presentCount, messages);
+        AddExpectedInventoryTotalMessage("emptyArtifactCount", emptyArtifactCount, emptyCount, messages);
+        AddExpectedInventoryTotalMessage("importCriticalArtifactCount", importCriticalArtifactCount, criticalCount, messages);
+        AddExpectedInventoryTotalMessage("missingImportCriticalArtifactCount", missingImportCriticalArtifactCount, missingCriticalCount, messages);
+
+        messages.Add(new ArtifactValidationMessage(
+            "info",
+            "Scan deep validation checked final artifact inventory totals, required inventory item fields, present/empty flags, duplicate artifacts, and exported-content count consistency."));
+    }
+
+    private static IReadOnlyDictionary<string, int> BuildScanArtifactExpectedCounts(
+        JsonElement root,
+        JsonElement diagnostics)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["Document"] = TryGetObject(root, "document", out _) ? 1 : 0,
+            ["Pages"] = CountArray(root, "pages"),
+            ["Primitives"] = SumArrayIntegerProperty(root, "pages", "primitiveCount", CountArray(root, "primitiveSources")),
+            ["Layers"] = CountNestedArray(root, "layerAnalysis", "layers"),
+            ["SheetRegions"] = CountArray(root, "regions"),
+            ["TitleBlocks"] = CountArray(root, "titleBlocks"),
+            ["Calibration"] = CountNestedArray(root, "calibration", "evidence")
+                + CountNestedArray(root, "calibration", "scaleGroups"),
+            ["Dimensions"] = CountArray(root, "dimensions"),
+            ["Annotations"] = CountArray(root, "annotations") + CountChildArrays(root, "annotations", "items"),
+            ["GridAxes"] = CountArray(root, "gridAxes"),
+            ["GridBays"] = CountArray(root, "gridBaySpacings"),
+            ["MeasurementConsistency"] = CountNestedArray(root, "measurementConsistency", "checks"),
+            ["DimensionChains"] = CountDiagnosticsByStage(diagnostics, "dimension-chains"),
+            ["SurfacePatterns"] = CountArray(root, "surfacePatterns"),
+            ["Walls"] = CountArray(root, "walls"),
+            ["WallGraph"] = CountNestedArray(root, "wallGraph", "nodes")
+                + CountNestedArray(root, "wallGraph", "edges")
+                + CountNestedArray(root, "wallGraph", "components")
+                + CountNestedArray(root, "wallGraph", "repairCandidates"),
+            ["TopologySpans"] = CountNestedArray(root, "wallGraph", "edges"),
+            ["Openings"] = CountArray(root, "openings"),
+            ["Rooms"] = CountArray(root, "rooms"),
+            ["RoomAdjacency"] = CountNestedArray(root, "roomAdjacencyGraph", "edges")
+                + CountNestedArray(root, "roomAdjacencyGraph", "clusters"),
+            ["ObjectCandidates"] = CountArray(root, "objects"),
+            ["ObjectGroups"] = CountArray(root, "objectGroups"),
+            ["ObjectAggregates"] = CountArray(root, "objectAggregates"),
+            ["RoutingBarriers"] = CountNestedArray(root, "routingLayer", "barriers"),
+            ["RoutingPassages"] = CountNestedArray(root, "routingLayer", "passages"),
+            ["RoutingObstacles"] = CountNestedArray(root, "routingLayer", "obstacles"),
+            ["RoutingRoomUseHints"] = CountNestedArray(root, "routingLayer", "roomUseHints"),
+            ["RoutingSuppressedObjects"] = CountNestedArray(root, "routingLayer", "suppressedObjects"),
+            ["RoutingIgnoredObjects"] = CountNestedArray(root, "routingLayer", "ignoredObjects"),
+            ["VisualAiClassifications"] = CountObjectsWithObjectProperty(root, "objects", "visualAi")
+                + CountObjectsWithObjectProperty(root, "objectGroups", "visualAi"),
+            ["LayerConsistency"] = CountDiagnosticsByStage(diagnostics, "layer-consistency"),
+            ["Diagnostics"] = CountArray(diagnostics, "messages")
+        };
+
+        return counts;
+    }
+
+    private static void AddExpectedInventoryTotalMessage(
+        string propertyName,
+        int? actual,
+        int expected,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (actual is not null && actual.Value != expected)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"Scan diagnostics {propertyName} should be {expected} based on artifactInventory."));
+        }
+    }
+
+    private static bool TryGetObject(JsonElement root, string propertyName, out JsonElement value) =>
+        root.TryGetProperty(propertyName, out value) && value.ValueKind == JsonValueKind.Object;
+
+    private static int CountArray(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Array
+            ? property.GetArrayLength()
+            : 0;
+
+    private static int CountNestedArray(JsonElement root, string objectPropertyName, string arrayPropertyName) =>
+        TryGetObject(root, objectPropertyName, out var item)
+            ? CountArray(item, arrayPropertyName)
+            : 0;
+
+    private static int CountChildArrays(JsonElement root, string arrayPropertyName, string childArrayPropertyName)
+    {
+        if (!root.TryGetProperty(arrayPropertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        return array.EnumerateArray().Sum(item => CountArray(item, childArrayPropertyName));
+    }
+
+    private static int SumArrayIntegerProperty(
+        JsonElement root,
+        string arrayPropertyName,
+        string integerPropertyName,
+        int fallback)
+    {
+        if (!root.TryGetProperty(arrayPropertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return fallback;
+        }
+
+        var total = 0;
+        var found = false;
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty(integerPropertyName, out var property)
+                || property.ValueKind != JsonValueKind.Number
+                || !property.TryGetInt32(out var value)
+                || value < 0)
+            {
+                continue;
+            }
+
+            total += value;
+            found = true;
+        }
+
+        return found ? total : fallback;
+    }
+
+    private static int CountObjectsWithObjectProperty(
+        JsonElement root,
+        string arrayPropertyName,
+        string objectPropertyName)
+    {
+        if (!root.TryGetProperty(arrayPropertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        return array
+            .EnumerateArray()
+            .Count(item => item.ValueKind == JsonValueKind.Object
+                && item.TryGetProperty(objectPropertyName, out var property)
+                && property.ValueKind == JsonValueKind.Object);
+    }
+
+    private static int CountDiagnosticsByStage(JsonElement diagnostics, string stage)
+    {
+        if (!diagnostics.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        return messages
+            .EnumerateArray()
+            .Count(message => message.ValueKind == JsonValueKind.Object
+                && string.Equals(ReadStringProperty(message, "stage"), stage, StringComparison.Ordinal));
     }
 
     private static void ValidateDeepPlacementExport(
@@ -5983,13 +6772,42 @@ internal static class OpenPlanTraceCli
             }
         }
 
-        foreach (var roomId in ReadStringArrayForDeep(item, "connectedRoomIds"))
+        var connectedRoomIds = ReadStringArrayForDeep(item, "connectedRoomIds").ToHashSet(StringComparer.Ordinal);
+        foreach (var roomId in connectedRoomIds)
         {
             if (!roomIds.Contains(roomId))
             {
                 messages.Add(new ArtifactValidationMessage(
                     "error",
                     $"{prefix} connectedRoomIds references missing room '{roomId}'."));
+            }
+        }
+
+        if (item.TryGetProperty("connectedRoomLinks", out var links) && links.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0;
+            foreach (var link in links.EnumerateArray())
+            {
+                var linkPrefix = $"{prefix}.connectedRoomLinks[{index}]";
+                var roomId = ReadStringProperty(link, "roomId");
+                if (!string.IsNullOrWhiteSpace(roomId))
+                {
+                    if (!roomIds.Contains(roomId))
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            "error",
+                            $"{linkPrefix} roomId references missing room '{roomId}'."));
+                    }
+
+                    if (!connectedRoomIds.Contains(roomId))
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            "error",
+                            $"{linkPrefix} roomId must also appear in connectedRoomIds."));
+                    }
+                }
+
+                index++;
             }
         }
 
@@ -6141,6 +6959,109 @@ internal static class OpenPlanTraceCli
         if (hasEndPoint)
         {
             ValidateProjectedOffset(referenceLine, endPoint, endOffset.Value, $"{prefix} endPoint", messages);
+        }
+
+        ValidateDeepOpeningFootprint(placement, prefix, hasStartPoint ? startPoint : null, hasEndPoint ? endPoint : null, messages);
+    }
+
+    private static void ValidateDeepOpeningFootprint(
+        JsonElement placement,
+        string prefix,
+        PlacementValidationPoint? startPoint,
+        PlacementValidationPoint? endPoint,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        var hasAnyFootprintProperty =
+            placement.TryGetProperty("footprintBounds", out _)
+            || placement.TryGetProperty("footprintCorners", out _)
+            || placement.TryGetProperty("startJambLine", out _)
+            || placement.TryGetProperty("endJambLine", out _)
+            || placement.TryGetProperty("depthDrawingUnits", out _);
+        if (!hasAnyFootprintProperty)
+        {
+            return;
+        }
+
+        if (!TryReadValidationRect(placement, "footprintBounds", out var footprintBounds))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} footprintBounds must be a valid rect when opening footprint geometry is present."));
+            return;
+        }
+
+        if (footprintBounds.Width < 0 || footprintBounds.Height < 0)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} footprintBounds width and height must be non-negative."));
+        }
+
+        if (!TryReadValidationPointArray(placement, "footprintCorners", expectedCount: 4, out var corners))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} footprintCorners must contain exactly four valid points."));
+            return;
+        }
+
+        foreach (var corner in corners)
+        {
+            if (!PointInsideRect(corner, footprintBounds, PlacementValidationTolerance))
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{prefix} footprintCorners must lie inside footprintBounds."));
+                break;
+            }
+        }
+
+        if (!TryReadValidationLine(placement, "startJambLine", out var startJambLine))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} startJambLine must be a valid line when opening footprint geometry is present."));
+            return;
+        }
+
+        if (!TryReadValidationLine(placement, "endJambLine", out var endJambLine))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} endJambLine must be a valid line when opening footprint geometry is present."));
+            return;
+        }
+
+        ValidatePointNear(startJambLine.Start, corners[0], $"{prefix} startJambLine.start", messages);
+        ValidatePointNear(startJambLine.End, corners[3], $"{prefix} startJambLine.end", messages);
+        ValidatePointNear(endJambLine.Start, corners[1], $"{prefix} endJambLine.start", messages);
+        ValidatePointNear(endJambLine.End, corners[2], $"{prefix} endJambLine.end", messages);
+
+        var depth = ReadNonNegativeDoubleForDeep(placement, "depthDrawingUnits");
+        if (depth is null)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} depthDrawingUnits must be non-negative when opening footprint geometry is present."));
+            return;
+        }
+
+        if (Math.Abs(startJambLine.Length - depth.Value) > Math.Max(0.25, Math.Max(1, depth.Value) * 0.03)
+            || Math.Abs(endJambLine.Length - depth.Value) > Math.Max(0.25, Math.Max(1, depth.Value) * 0.03))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} depthDrawingUnits must match start/end jamb line lengths."));
+        }
+
+        if (startPoint is { } start)
+        {
+            ValidatePointNear(Midpoint(startJambLine), start, $"{prefix} startJambLine midpoint", messages);
+        }
+
+        if (endPoint is { } end)
+        {
+            ValidatePointNear(Midpoint(endJambLine), end, $"{prefix} endJambLine midpoint", messages);
         }
     }
 
@@ -6390,13 +7311,42 @@ internal static class OpenPlanTraceCli
             }
         }
 
-        foreach (var roomId in ReadStringArrayForDeep(item, "connectedRoomIds"))
+        var connectedRoomIds = ReadStringArrayForDeep(item, "connectedRoomIds").ToHashSet(StringComparer.Ordinal);
+        foreach (var roomId in connectedRoomIds)
         {
             if (!roomIds.Contains(roomId))
             {
                 messages.Add(new ArtifactValidationMessage(
                     "error",
                     $"{prefix} connectedRoomIds references missing room '{roomId}'."));
+            }
+        }
+
+        if (item.TryGetProperty("connectedRoomLinks", out var links) && links.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0;
+            foreach (var link in links.EnumerateArray())
+            {
+                var linkPrefix = $"{prefix}.connectedRoomLinks[{index}]";
+                var roomId = ReadStringProperty(link, "roomId");
+                if (!string.IsNullOrWhiteSpace(roomId))
+                {
+                    if (!roomIds.Contains(roomId))
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            "error",
+                            $"{linkPrefix} roomId references missing room '{roomId}'."));
+                    }
+
+                    if (!connectedRoomIds.Contains(roomId))
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            "error",
+                            $"{linkPrefix} roomId must also appear in connectedRoomIds."));
+                    }
+                }
+
+                index++;
             }
         }
 
@@ -6408,6 +7358,7 @@ internal static class OpenPlanTraceCli
                 $"{prefix} centerLine must have positive length."));
         }
 
+        var placementValidationMessageCount = messages.Count;
         if (item.TryGetProperty("placement", out var placement)
             && placement.ValueKind == JsonValueKind.Object)
         {
@@ -6417,6 +7368,14 @@ internal static class OpenPlanTraceCli
                 ReadStringArrayForDeep(item, "hostWallIds").ToArray(),
                 wallIds,
                 messages);
+        }
+
+        if (ReadBooleanProperty(item, "readyForCoordinatePlacement") == true
+            && messages.Count > placementValidationMessageCount)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} readyForCoordinatePlacement is true but placement failed coordinate-readiness checks."));
         }
 
         ValidateDeepPlacementMetricLine(item, "centerLine", "centerLineMillimeters", prefix, messages);
@@ -6824,6 +7783,37 @@ internal static class OpenPlanTraceCli
         return true;
     }
 
+    private static bool TryReadValidationPointArray(
+        JsonElement root,
+        string propertyName,
+        int expectedCount,
+        out PlacementValidationPoint[] points)
+    {
+        points = Array.Empty<PlacementValidationPoint>();
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var items = value.EnumerateArray().ToArray();
+        if (items.Length != expectedCount)
+        {
+            return false;
+        }
+
+        var result = new PlacementValidationPoint[items.Length];
+        for (var index = 0; index < items.Length; index++)
+        {
+            if (!TryReadValidationPoint(items[index], out result[index]))
+            {
+                return false;
+            }
+        }
+
+        points = result;
+        return true;
+    }
+
     private static bool TryReadValidationLine(
         JsonElement root,
         string propertyName,
@@ -6966,6 +7956,34 @@ internal static class OpenPlanTraceCli
             messages.Add(new ArtifactValidationMessage(
                 "warning",
                 $"{label} is not close to placement referenceLine."));
+        }
+    }
+
+    private static bool PointInsideRect(
+        PlacementValidationPoint point,
+        PlacementValidationRect rect,
+        double tolerance) =>
+        point.X >= rect.X - tolerance
+        && point.X <= rect.Right + tolerance
+        && point.Y >= rect.Y - tolerance
+        && point.Y <= rect.Bottom + tolerance;
+
+    private static PlacementValidationPoint Midpoint(PlacementValidationLine line) =>
+        new((line.Start.X + line.End.X) / 2.0, (line.Start.Y + line.End.Y) / 2.0);
+
+    private static void ValidatePointNear(
+        PlacementValidationPoint actual,
+        PlacementValidationPoint expected,
+        string label,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        var dx = actual.X - expected.X;
+        var dy = actual.Y - expected.Y;
+        if (Math.Sqrt((dx * dx) + (dy * dy)) > Math.Max(0.25, PlacementValidationTolerance))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{label} must match opening footprint corner geometry."));
         }
     }
 
@@ -7682,6 +8700,25 @@ internal static class OpenPlanTraceCli
             AddNonNegativeMessage(fixturePrefix, "stage maxDiagnostics", stage.MaxDiagnostics, messages);
             AddNonNegativeMessage(fixturePrefix, "stage maxWarnings", stage.MaxWarnings, messages);
             AddNonNegativeMessage(fixturePrefix, "stage maxErrors", stage.MaxErrors, messages);
+
+            foreach (var artifact in stage.ArtifactExpectations ?? Array.Empty<BenchmarkStageArtifactExpectation>())
+            {
+                var artifactPrefix = $"{fixturePrefix} stage '{stage.Stage}' artifact '{artifact.Artifact}'";
+                if (artifact.Artifact == PlanArtifactKind.Unknown)
+                {
+                    messages.Add(new ArtifactValidationMessage(
+                        "error",
+                        $"{fixturePrefix} stage '{stage.Stage}' artifact expectation requires a known artifact."));
+                }
+
+                AddNonNegativeMessage(artifactPrefix, "minBeforeCount", artifact.MinBeforeCount, messages);
+                AddNonNegativeMessage(artifactPrefix, "maxBeforeCount", artifact.MaxBeforeCount, messages);
+                AddNonNegativeMessage(artifactPrefix, "minAfterCount", artifact.MinAfterCount, messages);
+                AddNonNegativeMessage(artifactPrefix, "maxAfterCount", artifact.MaxAfterCount, messages);
+                AddRangeMessage(artifactPrefix, "beforeCount", artifact.MinBeforeCount, artifact.MaxBeforeCount, messages);
+                AddRangeMessage(artifactPrefix, "afterCount", artifact.MinAfterCount, artifact.MaxAfterCount, messages);
+                AddRangeMessage(artifactPrefix, "delta", artifact.MinDelta, artifact.MaxDelta, messages);
+            }
         }
 
         foreach (var (name, metric) in BenchmarkMetrics(expectations))
@@ -7777,6 +8814,21 @@ internal static class OpenPlanTraceCli
             messages.Add(new ArtifactValidationMessage(
                 "error",
                 $"{fixturePrefix} {fieldName} must be between 0 and 1."));
+        }
+    }
+
+    private static void AddRangeMessage(
+        string fixturePrefix,
+        string fieldName,
+        int? minValue,
+        int? maxValue,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (minValue is not null && maxValue is not null && minValue.Value > maxValue.Value)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{fixturePrefix} {fieldName} minimum cannot be greater than maximum."));
         }
     }
 
@@ -8352,6 +9404,11 @@ internal static class OpenPlanTraceCli
             Console.WriteLine($"SVG directory: {Path.GetFullPath(parsed.SvgDirectory)}");
         }
 
+        if (parsed.SvgPath is not null || parsed.SvgDirectory is not null)
+        {
+            Console.WriteLine($"SVG profile: {SvgOverlayRenderOptions.ProfileName(parsed.SvgProfile)}");
+        }
+
         if (parsed.VisualSnapshotPath is not null)
         {
             Console.WriteLine($"Visual snapshot: {Path.GetFullPath(parsed.VisualSnapshotPath)}");
@@ -8784,6 +9841,7 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --placement <path>        Write compact downstream placement JSON with coordinates, metric transforms, routing, and trust gates");
         Console.WriteLine("  --svg <path>              Write one SVG overlay");
         Console.WriteLine("  --svg-dir <directory>     Write one SVG overlay per page");
+        Console.WriteLine("  --svg-profile <name>      SVG overlay profile: structural-review (default) or full");
         Console.WriteLine("  --visual-snapshot <path>  Write visual QA snapshot JSON with per-page overlay counts, bounds, and issues");
         Console.WriteLine("  --out-dir <directory>     Write scan.json, scan.geojson, placement.json, overlays/page-N.svg, and visual-snapshot.json");
         Console.WriteLine("  --page <number>           Page used with --svg, default first page");
@@ -8847,6 +9905,7 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --geojson                 Write scan.geojson beside each per-file scan.json");
         Console.WriteLine("  --recursive               Recurse into input directories");
         Console.WriteLine("  --no-svg                  Do not write per-page SVG overlays; visual-snapshot.json is still written without SVG links");
+        Console.WriteLine("  --svg-profile <name>      SVG overlay profile: structural-review (default) or full");
         Console.WriteLine("  --compact-json            Disable pretty JSON");
         Console.WriteLine("  --parallel <n>            Scan up to n batch items at once; default 1");
         Console.WriteLine("  --retries <n>             Retry failed scan/load attempts n times; default 0");
@@ -9515,6 +10574,17 @@ internal static class OpenPlanTraceCli
         }
 
         return new LayerCategoryOverride(pattern, category);
+    }
+
+    internal static SvgOverlayRenderProfile ParseSvgOverlayProfile(string value)
+    {
+        if (SvgOverlayRenderOptions.TryParseProfile(value, out var profile))
+        {
+            return profile;
+        }
+
+        throw new ArgumentException(
+            $"Invalid SVG overlay profile '{value}'. Valid profiles: structural-review, full.");
     }
 }
 
@@ -10290,6 +11360,8 @@ internal sealed class ScanArguments : IVisualAiCliArguments
 
     public string? SvgDirectory { get; set; }
 
+    public SvgOverlayRenderProfile SvgProfile { get; set; } = SvgOverlayRenderProfile.StructuralReview;
+
     public string? GeoJsonPath { get; set; }
 
     public string? PlacementPath { get; set; }
@@ -10422,6 +11494,9 @@ internal sealed class ScanArguments : IVisualAiCliArguments
                     break;
                 case "--svg-dir":
                     parsed.SvgDirectory = ReadValue(args, ref index, arg);
+                    break;
+                case "--svg-profile":
+                    parsed.SvgProfile = OpenPlanTraceCli.ParseSvgOverlayProfile(ReadValue(args, ref index, arg));
                     break;
                 case "--geojson":
                     parsed.GeoJsonPath = ReadValue(args, ref index, arg);
@@ -10639,6 +11714,8 @@ internal sealed class BatchArguments : IVisualAiCliArguments
 
     public bool NoSvg { get; set; }
 
+    public SvgOverlayRenderProfile SvgProfile { get; set; } = SvgOverlayRenderProfile.StructuralReview;
+
     public bool GeoJson { get; set; }
 
     public bool PrettyJson { get; set; } = true;
@@ -10765,6 +11842,9 @@ internal sealed class BatchArguments : IVisualAiCliArguments
                     break;
                 case "--no-svg":
                     parsed.NoSvg = true;
+                    break;
+                case "--svg-profile":
+                    parsed.SvgProfile = OpenPlanTraceCli.ParseSvgOverlayProfile(ReadValue(args, ref index, arg));
                     break;
                 case "--geojson":
                     parsed.GeoJson = true;

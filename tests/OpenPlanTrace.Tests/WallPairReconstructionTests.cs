@@ -272,6 +272,43 @@ public sealed class WallPairReconstructionTests
     }
 
     [Fact]
+    public async Task ScanAsync_UsesSharedAxisSeparationProfileAcrossOrientations()
+    {
+        var primitives = new List<PlanPrimitive>();
+        for (var index = 0; index < 12; index++)
+        {
+            var y = 70 + (index * 28);
+            primitives.Add(WallFace($"dominant-horizontal-{index}-a", new PlanPoint(80, y), new PlanPoint(260, y)));
+            primitives.Add(WallFace($"dominant-horizontal-{index}-b", new PlanPoint(80, y + 6), new PlanPoint(260, y + 6)));
+        }
+
+        primitives.Add(WallFace("sparse-vertical-outlier-a", new PlanPoint(340, 70), new PlanPoint(340, 250)));
+        primitives.Add(WallFace("sparse-vertical-outlier-b", new PlanPoint(358, 70), new PlanPoint(358, 250)));
+        var document = new PlanDocument(
+            "shared-axis-wall-thickness-profile",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(500, 520),
+                    primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.Equal(12, result.Walls.Count(wall => wall.DetectionKind == WallDetectionKind.ParallelLinePair));
+        Assert.Equal(2, result.Walls.Count(wall => wall.DetectionKind == WallDetectionKind.SingleLine));
+        Assert.DoesNotContain(result.Walls, wall => wall.PairEvidence?.FaceSeparation == 18);
+        Assert.DoesNotContain(result.Diagnostics.Messages, diagnostic => diagnostic.Code == "walls.parallel_pair_thickness_variance");
+
+        var profile = Assert.Single(result.Diagnostics.Messages.Where(message => message.Code == "walls.parallel_pairs.separation_profile"));
+        Assert.Equal("axis", profile.Properties["runKind"]);
+        Assert.Equal("6", profile.Properties["dominantFaceSeparation"]);
+        Assert.Equal("12", profile.Properties["maxTrustedFaceSeparation"]);
+        Assert.Equal("12", profile.Properties["reconstructedPairCount"]);
+    }
+
+    [Fact]
     public async Task ScanAsync_DoesNotHealFragmentGapBeyondConfiguredLimit()
     {
         var document = new PlanDocument(

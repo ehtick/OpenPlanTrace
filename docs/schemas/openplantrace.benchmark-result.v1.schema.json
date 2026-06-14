@@ -116,7 +116,14 @@
         "metrics",
         "qualityIssues",
         "diagnosticIssues",
+        "planIssues",
         "stages",
+        "artifactInventory",
+        "artifactPlans",
+        "executionWaves",
+        "rerunImpacts",
+        "rerunPlans",
+        "pipelineHealth",
         "importReadiness",
         "passedAssertionCount",
         "failedAssertionCount"
@@ -177,11 +184,50 @@
             "$ref": "#/$defs/caseIssueSummary"
           }
         },
+        "planIssues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pipelinePlanIssueSummary"
+          }
+        },
         "stages": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/stageSummary"
           }
+        },
+        "artifactInventory": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactSnapshot"
+          }
+        },
+        "artifactPlans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactPlanSummary"
+          }
+        },
+        "executionWaves": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/executionWaveSummary"
+          }
+        },
+        "rerunImpacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rerunImpactSummary"
+          }
+        },
+        "rerunPlans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rerunPlanSummary"
+          }
+        },
+        "pipelineHealth": {
+          "$ref": "#/$defs/pipelineHealthSummary"
         },
         "importReadiness": {
           "$ref": "#/$defs/importReadiness"
@@ -200,6 +246,399 @@
         },
         "failedAssertionCount": {
           "$ref": "#/$defs/nonNegativeInteger"
+        }
+      }
+    },
+    "executionWaveSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "level",
+        "stageCount",
+        "stages",
+        "reads",
+        "writes",
+        "directDownstreamStages",
+        "directDownstreamStageCount",
+        "downstreamReadArtifacts",
+        "writeConflictArtifacts",
+        "intraWaveDependencyCount",
+        "hasWriteConflicts",
+        "hasIntraWaveDependencies",
+        "isParallelCandidate",
+        "parallelReadiness",
+        "schedulingReasons",
+        "recommendedExecutionMode"
+      ],
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "stageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "stages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "reads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "writes": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "directDownstreamStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "directDownstreamStageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "downstreamReadArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "writeConflictArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "intraWaveDependencyCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "hasWriteConflicts": {
+          "type": "boolean"
+        },
+        "hasIntraWaveDependencies": {
+          "type": "boolean"
+        },
+        "isParallelCandidate": {
+          "type": "boolean"
+        },
+        "parallelReadiness": {
+          "type": "string"
+        },
+        "schedulingReasons": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "recommendedExecutionMode": {
+          "type": "string"
+        }
+      }
+    },
+    "artifactPlanSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "isSourceArtifact",
+        "isProducedByStage",
+        "isConsumedByStage",
+        "isTerminalArtifact",
+        "producerStages",
+        "requiredConsumerStages",
+        "optionalConsumerStages",
+        "consumerStages",
+        "producerCount",
+        "consumerCount",
+        "firstProducerWave",
+        "lastProducerWave",
+        "firstConsumerWave",
+        "lastConsumerWave",
+        "hasMultipleProducers",
+        "hasRequiredConsumers",
+        "dependencyRole",
+        "evidence"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string"
+        },
+        "isSourceArtifact": {
+          "type": "boolean"
+        },
+        "isProducedByStage": {
+          "type": "boolean"
+        },
+        "isConsumedByStage": {
+          "type": "boolean"
+        },
+        "isTerminalArtifact": {
+          "type": "boolean"
+        },
+        "producerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "requiredConsumerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "optionalConsumerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "consumerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "producerCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "consumerCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "firstProducerWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "lastProducerWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "firstConsumerWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "lastConsumerWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "hasMultipleProducers": {
+          "type": "boolean"
+        },
+        "hasRequiredConsumers": {
+          "type": "boolean"
+        },
+        "dependencyRole": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "pipelinePlanIssueSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "code",
+        "severity",
+        "stage",
+        "artifacts",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "artifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "rerunImpactSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "isSourceArtifact",
+        "impactScope",
+        "producerStages",
+        "directConsumerStages",
+        "affectedStages",
+        "affectedArtifacts",
+        "firstAffectedWave",
+        "affectedStageCount",
+        "hasImpact",
+        "evidence"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string"
+        },
+        "isSourceArtifact": {
+          "type": "boolean"
+        },
+        "impactScope": {
+          "type": "string"
+        },
+        "producerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "directConsumerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "affectedStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "affectedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "firstAffectedWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "affectedStageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "hasImpact": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "rerunPlanSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "planId",
+        "displayName",
+        "changedArtifacts",
+        "changedSourceArtifacts",
+        "directConsumerStages",
+        "rerunStages",
+        "rerunWaves",
+        "affectedArtifacts",
+        "firstRerunWave",
+        "lastRerunWave",
+        "rerunStageCount",
+        "affectedArtifactCount",
+        "hasWork",
+        "recommendedExecutionMode",
+        "evidence"
+      ],
+      "properties": {
+        "planId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "changedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "changedSourceArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "directConsumerStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "rerunStages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "rerunWaves": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonNegativeInteger"
+          }
+        },
+        "affectedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "firstRerunWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "lastRerunWave": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "rerunStageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "affectedArtifactCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "hasWork": {
+          "type": "boolean"
+        },
+        "recommendedExecutionMode": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "pipelineHealthSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "dependencyReady",
+        "planIssueCount",
+        "planWarningCount",
+        "planErrorCount",
+        "stageCount",
+        "dependencyReadyStageCount",
+        "notDependencyReadyStageCount",
+        "missingRequiredReadCount",
+        "missingOptionalReadCount",
+        "runtimeRequiredReadsHaveData",
+        "runtimeOptionalReadsHaveData",
+        "emptyRequiredRuntimeReadCount",
+        "emptyOptionalRuntimeReadCount",
+        "writesOnlyDeclaredArtifacts",
+        "contractViolationStageCount",
+        "undeclaredChangedArtifactCount",
+        "emptyDeclaredOutputCount",
+        "reviewStageNames",
+        "evidence"
+      ],
+      "properties": {
+        "dependencyReady": {
+          "type": "boolean"
+        },
+        "planIssueCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "planWarningCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "planErrorCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "stageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "dependencyReadyStageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "notDependencyReadyStageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "missingRequiredReadCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "missingOptionalReadCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "runtimeRequiredReadsHaveData": {
+          "type": "boolean"
+        },
+        "runtimeOptionalReadsHaveData": {
+          "type": "boolean"
+        },
+        "emptyRequiredRuntimeReadCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "emptyOptionalRuntimeReadCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "writesOnlyDeclaredArtifacts": {
+          "type": "boolean"
+        },
+        "contractViolationStageCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "undeclaredChangedArtifactCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "emptyDeclaredOutputCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "reviewStageNames": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
         }
       }
     },
@@ -309,9 +748,12 @@
         "scanQualityScore",
         "measurementScore",
         "importReadinessScore",
+        "pipelineHealthScore",
         "readyForGeometryImport",
         "readyForMetricImport",
         "readyForRoutingImport",
+        "pipelineHealthReady",
+        "pipelineHealthIssueCount",
         "expectedTargetCount",
         "matchedTargetCount",
         "missedTargetCount",
@@ -355,6 +797,9 @@
         "importReadinessScore": {
           "$ref": "#/$defs/confidence"
         },
+        "pipelineHealthScore": {
+          "$ref": "#/$defs/confidence"
+        },
         "readyForGeometryImport": {
           "type": "boolean"
         },
@@ -363,6 +808,12 @@
         },
         "readyForRoutingImport": {
           "type": "boolean"
+        },
+        "pipelineHealthReady": {
+          "type": "boolean"
+        },
+        "pipelineHealthIssueCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
         },
         "expectedTargetCount": {
           "$ref": "#/$defs/nonNegativeInteger"
@@ -841,6 +1292,7 @@
         "grade",
         "overallScore",
         "consumerReadinessScore",
+        "pipelineHealthScore",
         "readyForDownstreamUse",
         "caseCount",
         "scoredCaseCount",
@@ -862,6 +1314,7 @@
         "grade": { "$ref": "#/$defs/scoreGrade" },
         "overallScore": { "$ref": "#/$defs/confidence" },
         "consumerReadinessScore": { "$ref": "#/$defs/confidence" },
+        "pipelineHealthScore": { "$ref": "#/$defs/confidence" },
         "readyForDownstreamUse": { "type": "boolean" },
         "caseCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "scoredCaseCount": { "$ref": "#/$defs/nonNegativeInteger" },
@@ -901,12 +1354,83 @@
         "diagnosticCount",
         "infoCount",
         "warningCount",
-        "errorCount"
+        "errorCount",
+        "inputArtifacts",
+        "outputArtifacts",
+        "changedArtifacts",
+        "artifactDeltas",
+        "outputReadiness"
       ],
       "properties": {
         "stage": {
           "type": "string",
           "minLength": 1
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "dependencyLevel": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "preferredDependencyLevel": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "reads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "optionalReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "writes": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "isDependencyReady": {
+          "type": "boolean"
+        },
+        "missingRequiredReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "missingOptionalReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "inputArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactSnapshot"
+          }
+        },
+        "outputArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactSnapshot"
+          }
+        },
+        "changedArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactChange"
+          }
+        },
+        "artifactDeltas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactDelta"
+          }
+        },
+        "runtimeReadiness": {
+          "$ref": "#/$defs/stageRuntimeReadiness"
+        },
+        "outputReadiness": {
+          "$ref": "#/$defs/stageOutputReadiness"
+        },
+        "contract": {
+          "$ref": "#/$defs/stageContract"
         },
         "durationMilliseconds": {
           "$ref": "#/$defs/nonNegativeNumber"
@@ -930,6 +1454,249 @@
           "$ref": "#/$defs/nonNegativeInteger"
         }
       }
+    },
+    "stageOutputReadiness": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "declaredOutputsHaveData",
+        "hasEmptyDeclaredOutputs",
+        "nonEmptyDeclaredOutputs",
+        "emptyDeclaredOutputs",
+        "changedDeclaredOutputs",
+        "unchangedDeclaredOutputs",
+        "hasUndeclaredChanges",
+        "undeclaredChangedArtifacts",
+        "evidence"
+      ],
+      "properties": {
+        "declaredOutputsHaveData": {
+          "type": "boolean"
+        },
+        "hasEmptyDeclaredOutputs": {
+          "type": "boolean"
+        },
+        "nonEmptyDeclaredOutputs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "emptyDeclaredOutputs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "changedDeclaredOutputs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "unchangedDeclaredOutputs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "hasUndeclaredChanges": {
+          "type": "boolean"
+        },
+        "undeclaredChangedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "stageRuntimeReadiness": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "requiredReadsHaveData",
+        "hasEmptyRequiredReads",
+        "nonEmptyRequiredReads",
+        "emptyRequiredReads",
+        "optionalReadsHaveData",
+        "hasEmptyOptionalReads",
+        "nonEmptyOptionalReads",
+        "emptyOptionalReads",
+        "evidence"
+      ],
+      "properties": {
+        "requiredReadsHaveData": {
+          "type": "boolean"
+        },
+        "hasEmptyRequiredReads": {
+          "type": "boolean"
+        },
+        "nonEmptyRequiredReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "emptyRequiredReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "optionalReadsHaveData": {
+          "type": "boolean"
+        },
+        "hasEmptyOptionalReads": {
+          "type": "boolean"
+        },
+        "nonEmptyOptionalReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "emptyOptionalReads": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "stageContract": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "writesOnlyDeclaredArtifacts",
+        "declaredWrites",
+        "changedArtifacts",
+        "undeclaredChangedArtifacts",
+        "declaredUnchangedArtifacts"
+      ],
+      "properties": {
+        "writesOnlyDeclaredArtifacts": {
+          "type": "boolean"
+        },
+        "declaredWrites": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "changedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "undeclaredChangedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "declaredUnchangedArtifacts": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "artifactSnapshot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "count",
+        "stateKey",
+        "revision",
+        "evidence"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "count": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "stateKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "artifactChange": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "beforeCount",
+        "afterCount",
+        "delta",
+        "changeKind"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "beforeCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "afterCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "delta": {
+          "type": "integer",
+          "description": "afterCount - beforeCount"
+        },
+        "changeKind": {
+          "$ref": "#/$defs/artifactDeltaKind"
+        }
+      }
+    },
+    "artifactDelta": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "artifact",
+        "beforeCount",
+        "afterCount",
+        "delta",
+        "changeKind",
+        "changed",
+        "wasPresent",
+        "isPresent",
+        "isDeclaredWrite",
+        "isEmptyDeclaredOutput",
+        "evidence"
+      ],
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "beforeCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "afterCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "delta": {
+          "type": "integer",
+          "description": "afterCount - beforeCount"
+        },
+        "changeKind": {
+          "$ref": "#/$defs/artifactDeltaKind"
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "wasPresent": {
+          "type": "boolean"
+        },
+        "isPresent": {
+          "type": "boolean"
+        },
+        "isDeclaredWrite": {
+          "type": "boolean"
+        },
+        "isEmptyDeclaredOutput": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "artifactDeltaKind": {
+      "type": "string",
+      "enum": [
+        "Unchanged",
+        "Created",
+        "Increased",
+        "Decreased",
+        "Removed"
+      ]
     },
     "scoreGrade": {
       "type": "string",

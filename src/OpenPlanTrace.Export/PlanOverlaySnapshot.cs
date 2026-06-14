@@ -20,20 +20,22 @@ public sealed record PlanOverlaySnapshot(
     IReadOnlyList<PlanOverlayPageSnapshot> Pages,
     IReadOnlyList<PlanOverlaySnapshotIssue> Issues)
 {
-    public const string CurrentSchemaVersion = "openplantrace.visual-snapshot.v2";
+    public const string CurrentSchemaVersion = "openplantrace.visual-snapshot.v3";
 
     public static PlanOverlaySnapshot From(
         PlanScanResult result,
-        IReadOnlyDictionary<int, string>? svgPathsByPage = null)
+        IReadOnlyDictionary<int, string>? svgPathsByPage = null,
+        SvgOverlayRenderOptions? svgOptions = null)
     {
         ArgumentNullException.ThrowIfNull(result);
+        svgOptions ??= new SvgOverlayRenderOptions();
 
         var sourceLookup = PrimitiveSourceExport.From(result.Document)
             .Where(source => !string.IsNullOrWhiteSpace(source.SourceId))
             .ToDictionary(source => source.SourceId, StringComparer.Ordinal);
         var reviewQueue = ScanReviewQueueItemExport.From(result, sourceLookup);
         var pages = result.Document.Pages
-            .Select(page => PlanOverlayPageSnapshot.From(result, page, reviewQueue, svgPathsByPage))
+            .Select(page => PlanOverlayPageSnapshot.From(result, page, reviewQueue, svgPathsByPage, svgOptions))
             .ToArray();
 
         return new PlanOverlaySnapshot(
@@ -79,6 +81,11 @@ public sealed record PlanOverlayPageSnapshot(
     int DrawableItemCount,
     int PrimitiveCount,
     string? SvgPath,
+    string SvgProfile,
+    int VisibleDrawableItemCount,
+    int HiddenDrawableItemCount,
+    IReadOnlyList<string> VisibleLayerNames,
+    IReadOnlyList<string> HiddenLayerNames,
     IReadOnlyList<PlanOverlayLayerSnapshot> Layers,
     int ReviewQueueCount,
     IReadOnlyDictionary<string, int> ReviewQueueKindBreakdown,
@@ -90,14 +97,29 @@ public sealed record PlanOverlayPageSnapshot(
         PlanScanResult result,
         PlanPage page,
         IReadOnlyList<ScanReviewQueueItemExport> reviewQueue,
-        IReadOnlyDictionary<int, string>? svgPathsByPage = null)
+        IReadOnlyDictionary<int, string>? svgPathsByPage = null,
+        SvgOverlayRenderOptions? svgOptions = null)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(page);
         ArgumentNullException.ThrowIfNull(reviewQueue);
+        svgOptions ??= new SvgOverlayRenderOptions();
 
         var pageBounds = new PlanRect(0, 0, page.Size.Width, page.Size.Height);
-        var layers = BuildLayers(result, page.Number).ToArray();
+        var layers = BuildLayers(result, page.Number, pageBounds).ToArray();
+        var visibleLayerNames = BuildVisibleLayerNames(svgOptions).ToArray();
+        var visibleLayerNameSet = visibleLayerNames.ToHashSet(StringComparer.Ordinal);
+        var hiddenLayerNames = layers
+            .Select(layer => layer.Name)
+            .Where(name => !visibleLayerNameSet.Contains(name))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var visibleDrawableItemCount = layers
+            .Where(layer => visibleLayerNameSet.Contains(layer.Name))
+            .Sum(layer => layer.Count);
+        var hiddenDrawableItemCount = layers
+            .Where(layer => !visibleLayerNameSet.Contains(layer.Name))
+            .Sum(layer => layer.Count);
         var detectionBounds = PlanRect.Union(layers.Select(layer => layer.Bounds.ToPlanRect()));
         var coverage = pageBounds.Area <= 0 || detectionBounds.IsEmpty
             ? 0
@@ -122,6 +144,11 @@ public sealed record PlanOverlayPageSnapshot(
             layers.Sum(layer => layer.Count),
             page.Primitives.Count,
             SvgPathFor(page.Number, svgPathsByPage),
+            SvgOverlayRenderOptions.ProfileName(svgOptions.Profile),
+            visibleDrawableItemCount,
+            hiddenDrawableItemCount,
+            visibleLayerNames,
+            hiddenLayerNames,
             layers,
             pageReviewQueue.Length,
             PlanOverlaySnapshot.CountBy(pageReviewQueue, item => item.Kind),
@@ -130,8 +157,61 @@ public sealed record PlanOverlayPageSnapshot(
             issues);
     }
 
-    private static IEnumerable<PlanOverlayLayerSnapshot> BuildLayers(PlanScanResult result, int pageNumber)
+    private static IReadOnlyList<string> BuildVisibleLayerNames(SvgOverlayRenderOptions options)
     {
+        var names = new List<string>();
+
+        Add(options.IncludeRegions, "regions", "titleBlocks");
+        Add(options.IncludeDimensions, "dimensions");
+        Add(options.IncludeAnnotations, "annotations");
+        Add(options.IncludeGridAxes, "gridAxes");
+        Add(options.IncludeGridBaySpacings, "gridBaySpacings");
+        Add(options.IncludeWallComponents, "wallComponents");
+        Add(options.IncludeSurfacePatterns, "surfacePatterns");
+        Add(options.IncludeWalls, "walls");
+        Add(options.IncludeWallNodes, "wallNodes");
+        Add(options.IncludeRooms, "rooms");
+        Add(options.IncludeRoomClusters, "roomClusters");
+        Add(options.IncludeRoomAdjacency, "roomAdjacency");
+        Add(options.IncludeOpenings, "openings");
+        Add(options.IncludeObjects, "objects", "objectGroups");
+        Add(options.IncludeObjectAggregates, "objectAggregates");
+        Add(
+            options.IncludeRoutingLayer,
+            "routingBarriers",
+            "routingPassages",
+            "routingObstacles",
+            "routingRoomUseHints");
+
+        return names
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        void Add(bool visible, params string[] layerNames)
+        {
+            if (!visible)
+            {
+                return;
+            }
+
+            names.AddRange(layerNames);
+        }
+    }
+
+    private static IEnumerable<PlanOverlayLayerSnapshot> BuildLayers(
+        PlanScanResult result,
+        int pageNumber,
+        PlanRect pageBounds)
+    {
+        PlanOverlayLayerSnapshot Layer<T>(
+            string name,
+            IEnumerable<T> items,
+            Func<T, PlanRect> bounds,
+            Func<T, Confidence> confidence,
+            IReadOnlyDictionary<string, int>? breakdown = null) =>
+            BuildLayer(name, items, bounds, confidence, pageBounds, breakdown);
+
         var routing = result.RoutingLayer;
 
         yield return Layer(
@@ -198,11 +278,25 @@ public sealed record PlanOverlayPageSnapshot(
                 .GroupBy(item => item.Kind.ToString())
                 .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
 
-        yield return Layer(
-            "walls",
-            result.Walls.Where(item => item.PageNumber == pageNumber),
-            item => item.Bounds,
-            item => item.Confidence);
+        var wallTopologySpans = WallGraphTopologySpanBuilder.Build(result.WallGraph, result.Walls)
+            .Where(item => item.PageNumber == pageNumber)
+            .ToArray();
+        if (wallTopologySpans.Length > 0)
+        {
+            yield return Layer(
+                "walls",
+                wallTopologySpans,
+                item => item.Bounds,
+                item => item.Confidence);
+        }
+        else
+        {
+            yield return Layer(
+                "walls",
+                result.Walls.Where(item => item.PageNumber == pageNumber),
+                item => item.Bounds,
+                item => item.Confidence);
+        }
 
         yield return Layer(
             "wallNodes",
@@ -301,11 +395,12 @@ public sealed record PlanOverlayPageSnapshot(
             item => item.Confidence);
     }
 
-    private static PlanOverlayLayerSnapshot Layer<T>(
+    private static PlanOverlayLayerSnapshot BuildLayer<T>(
         string name,
         IEnumerable<T> items,
         Func<T, PlanRect> bounds,
         Func<T, Confidence> confidence,
+        PlanRect pageBounds,
         IReadOnlyDictionary<string, int>? breakdown = null)
     {
         var materialized = items.ToArray();
@@ -313,6 +408,8 @@ public sealed record PlanOverlayPageSnapshot(
             .Select(bounds)
             .Where(rect => !rect.IsEmpty)
             .ToArray();
+        var layerBounds = PlanRect.Union(rects);
+        var normalizedBounds = PlanRectSnapshot.FromNormalized(layerBounds, pageBounds);
         var confidenceValues = materialized
             .Select(item => confidence(item).Value)
             .ToArray();
@@ -320,11 +417,25 @@ public sealed record PlanOverlayPageSnapshot(
         return new PlanOverlayLayerSnapshot(
             name,
             materialized.Length,
-            PlanRectSnapshot.From(PlanRect.Union(rects)),
+            PlanRectSnapshot.From(layerBounds),
+            normalizedBounds,
+            NormalizedDensity(materialized.Length, normalizedBounds),
             confidenceValues.Length == 0 ? null : PlanOverlaySnapshot.Round(confidenceValues.Average()),
             confidenceValues.Length == 0 ? null : PlanOverlaySnapshot.Round(confidenceValues.Min()),
             confidenceValues.Length == 0 ? null : PlanOverlaySnapshot.Round(confidenceValues.Max()),
             breakdown ?? new Dictionary<string, int>(StringComparer.Ordinal));
+    }
+
+    private static double NormalizedDensity(int count, PlanRectSnapshot normalizedBounds)
+    {
+        if (count <= 0 || normalizedBounds.IsEmpty)
+        {
+            return 0;
+        }
+
+        var normalizedArea = Math.Abs(normalizedBounds.Area);
+        var densityArea = normalizedArea <= 0 ? 0.0001 : normalizedArea;
+        return PlanOverlaySnapshot.Round(count / densityArea);
     }
 
     private static IEnumerable<PlanOverlaySnapshotIssue> BuildIssues(
@@ -371,6 +482,15 @@ public sealed record PlanOverlayPageSnapshot(
             yield return Issue("visual.object_aggregation_missing", pageNumber, "warning", "Many objects were detected but no object aggregate was created; clutter may affect routing consumers.");
         }
 
+        foreach (var layer in layers.Where(IsHighDensityLayer))
+        {
+            yield return Issue(
+                "visual.layer_density_high",
+                pageNumber,
+                "warning",
+                $"Layer '{layer.Name}' has {layer.Count} item(s) concentrated in a small page area; inspect this layer for clutter, dense detail, or missed aggregation.");
+        }
+
         if (reviewQueue.Count > 0)
         {
             var blockingCount = reviewQueue.Count(item => IsBlockingReviewSeverity(item.Severity));
@@ -401,6 +521,11 @@ public sealed record PlanOverlayPageSnapshot(
     private static int LayerCount(IReadOnlyList<PlanOverlayLayerSnapshot> layers, string name) =>
         layers.FirstOrDefault(layer => string.Equals(layer.Name, name, StringComparison.Ordinal))?.Count ?? 0;
 
+    private static bool IsHighDensityLayer(PlanOverlayLayerSnapshot layer) =>
+        layer.Count >= 20
+        && !layer.NormalizedBounds.IsEmpty
+        && layer.NormalizedDensity >= 1000;
+
     private static PlanOverlaySnapshotIssue Issue(string code, int pageNumber, string severity, string message) =>
         new(code, severity, message, pageNumber);
 
@@ -414,6 +539,8 @@ public sealed record PlanOverlayLayerSnapshot(
     string Name,
     int Count,
     PlanRectSnapshot Bounds,
+    PlanRectSnapshot NormalizedBounds,
+    double NormalizedDensity,
     double? AverageConfidence,
     double? MinimumConfidence,
     double? MaximumConfidence,
@@ -496,6 +623,20 @@ public sealed record PlanRectSnapshot(
                 PlanOverlaySnapshot.Round(rect.Center.Y),
                 PlanOverlaySnapshot.Round(rect.Area));
 
+    public static PlanRectSnapshot FromNormalized(PlanRect rect, PlanRect pageBounds)
+    {
+        if (rect.IsEmpty || pageBounds.Width <= 0 || pageBounds.Height <= 0)
+        {
+            return From(PlanRect.Empty);
+        }
+
+        return From(new PlanRect(
+            (rect.X - pageBounds.X) / pageBounds.Width,
+            (rect.Y - pageBounds.Y) / pageBounds.Height,
+            rect.Width / pageBounds.Width,
+            rect.Height / pageBounds.Height));
+    }
+
     public PlanRect ToPlanRect() => new(X, Y, Width, Height);
 }
 
@@ -517,8 +658,9 @@ public static class PlanOverlaySnapshotJsonExporter
     public static string Serialize(
         PlanScanResult result,
         PlanOverlaySnapshotJsonExportOptions? options = null,
-        IReadOnlyDictionary<int, string>? svgPathsByPage = null) =>
-        Serialize(PlanOverlaySnapshot.From(result, svgPathsByPage), options);
+        IReadOnlyDictionary<int, string>? svgPathsByPage = null,
+        SvgOverlayRenderOptions? svgOptions = null) =>
+        Serialize(PlanOverlaySnapshot.From(result, svgPathsByPage, svgOptions), options);
 
     public static async ValueTask WriteAsync(
         PlanOverlaySnapshot snapshot,
@@ -542,8 +684,9 @@ public static class PlanOverlaySnapshotJsonExporter
         Stream stream,
         PlanOverlaySnapshotJsonExportOptions? options = null,
         IReadOnlyDictionary<int, string>? svgPathsByPage = null,
+        SvgOverlayRenderOptions? svgOptions = null,
         CancellationToken cancellationToken = default) =>
-        WriteAsync(PlanOverlaySnapshot.From(result, svgPathsByPage), stream, options, cancellationToken);
+        WriteAsync(PlanOverlaySnapshot.From(result, svgPathsByPage, svgOptions), stream, options, cancellationToken);
 
     private static JsonSerializerOptions CreateJsonOptions(PlanOverlaySnapshotJsonExportOptions? options)
     {

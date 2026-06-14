@@ -141,6 +141,7 @@ public static class BenchmarkManifestDraftMarkdownReport
         builder.AppendLine(countGates.Length == 0
             ? "- Count gates: none"
             : $"- Count gates: {string.Join(", ", countGates)}");
+        AppendArtifactExpectationSummary(builder, expectations.ArtifactExpectations);
         builder.AppendLine($"- Quality grade: {MarkdownValue(expectations.MinQualityGrade?.ToString())}");
         builder.AppendLine($"- Quality confidence: {RatioValue(expectations.MinQualityConfidence)}");
         builder.AppendLine($"- Max diagnostic warnings: {MarkdownValue(expectations.MaxDiagnosticWarnings?.ToString(CultureInfo.InvariantCulture))}");
@@ -157,7 +158,92 @@ public static class BenchmarkManifestDraftMarkdownReport
         builder.AppendLine($"- Allow import review: {BoolGateValue(expectations.AllowImportReview)}");
         builder.AppendLine($"- Required import issues: {ListValue(expectations.RequiredImportIssueCodes)}");
         builder.AppendLine($"- Forbidden import issues: {ListValue(expectations.ForbiddenImportIssueCodes)}");
+        AppendSourceReadinessSummary(builder, expectations);
     }
+
+    private static void AppendArtifactExpectationSummary(
+        StringBuilder builder,
+        IReadOnlyList<BenchmarkArtifactExpectation> artifactExpectations)
+    {
+        if (artifactExpectations.Count == 0)
+        {
+            builder.AppendLine("- Final artifact inventory gates: none");
+            return;
+        }
+
+        builder.AppendLine("- Final artifact inventory gates:");
+        foreach (var artifact in artifactExpectations
+                     .Where(item => item.Artifact != PlanArtifactKind.Unknown)
+                     .OrderBy(item => item.Artifact.ToString(), StringComparer.Ordinal)
+                     .Take(12))
+        {
+            var gates = new List<string>();
+            if (artifact.MinCount is { } min)
+            {
+                gates.Add($">= {min.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (artifact.MaxCount is { } max)
+            {
+                gates.Add($"<= {max.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (artifact.RequirePresent is { } present)
+            {
+                gates.Add($"present {BoolValue(present)}");
+            }
+
+            builder.AppendLine($"  - {artifact.Artifact}: {(gates.Count == 0 ? "visible" : string.Join(", ", gates))}");
+        }
+
+        if (artifactExpectations.Count > 12)
+        {
+            builder.AppendLine($"  - (+{artifactExpectations.Count - 12} more)");
+        }
+    }
+
+    private static void AppendSourceReadinessSummary(StringBuilder builder, BenchmarkExpectations expectations)
+    {
+        if (!HasSourceReadinessGates(expectations))
+        {
+            builder.AppendLine("- Source readiness: -");
+            return;
+        }
+
+        builder.AppendLine("- Source readiness:");
+        builder.AppendLine($"  - Format: {MarkdownValue(expectations.RequiredSourceFormat)}");
+        builder.AppendLine($"  - Loader: {MarkdownValue(expectations.RequiredSourceLoader)}");
+        builder.AppendLine($"  - Source kind: {MarkdownValue(expectations.RequiredSourceKind)}");
+        builder.AppendLine($"  - Effective source kind: {MarkdownValue(expectations.RequiredEffectiveSourceKind)}");
+        builder.AppendLine($"  - Ingestion path: {MarkdownValue(expectations.RequiredSourceIngestionPath)}");
+        builder.AppendLine($"  - Readiness status: {MarkdownValue(expectations.RequiredSourceReadinessStatus)}");
+        builder.AppendLine($"  - Geometry basis: {MarkdownValue(expectations.RequiredSourceGeometryBasis)}");
+        builder.AppendLine($"  - Require vector geometry: {BoolGateValue(expectations.RequireSourceVectorGeometryReady)}");
+        builder.AppendLine($"  - Require external adapter: {BoolGateValue(expectations.RequireSourceExternalAdapter)}");
+        builder.AppendLine($"  - Require OCR: {BoolGateValue(expectations.RequireSourceOcr)}");
+        builder.AppendLine($"  - Require legal adapter backing: {BoolGateValue(expectations.RequireSourceLegalAdapterBacked)}");
+        builder.AppendLine($"  - Require DWG-derived source: {BoolGateValue(expectations.RequireDwgDerivedSource)}");
+        builder.AppendLine($"  - Require raster-derived source: {BoolGateValue(expectations.RequireRasterDerivedSource)}");
+        builder.AppendLine($"  - Required evidence contains: {ListValue(expectations.RequiredSourceEvidenceContains, 8)}");
+        builder.AppendLine($"  - Forbidden evidence contains: {ListValue(expectations.ForbiddenSourceEvidenceContains, 8)}");
+    }
+
+    private static bool HasSourceReadinessGates(BenchmarkExpectations expectations) =>
+        !string.IsNullOrWhiteSpace(expectations.RequiredSourceFormat)
+        || !string.IsNullOrWhiteSpace(expectations.RequiredSourceLoader)
+        || !string.IsNullOrWhiteSpace(expectations.RequiredSourceKind)
+        || !string.IsNullOrWhiteSpace(expectations.RequiredEffectiveSourceKind)
+        || !string.IsNullOrWhiteSpace(expectations.RequiredSourceIngestionPath)
+        || !string.IsNullOrWhiteSpace(expectations.RequiredSourceReadinessStatus)
+        || !string.IsNullOrWhiteSpace(expectations.RequiredSourceGeometryBasis)
+        || expectations.RequireSourceVectorGeometryReady is not null
+        || expectations.RequireSourceExternalAdapter is not null
+        || expectations.RequireSourceOcr is not null
+        || expectations.RequireSourceLegalAdapterBacked is not null
+        || expectations.RequireDwgDerivedSource is not null
+        || expectations.RequireRasterDerivedSource is not null
+        || expectations.RequiredSourceEvidenceContains.Count > 0
+        || expectations.ForbiddenSourceEvidenceContains.Count > 0;
 
     private static void AppendDetectorSummary(StringBuilder builder, BenchmarkExpectations expectations)
     {

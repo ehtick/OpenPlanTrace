@@ -304,6 +304,101 @@ public static class PlanScanQualityAnalyzer
         && measuredValue is null
         && string.IsNullOrWhiteSpace(measurementScaleGroupId);
 
+    private static bool HasRoomConnectivityEvidence(OpeningCandidate opening) =>
+        opening.ConnectedRoomIds.Count > 0
+        || opening.ConnectedRoomLabels.Count > 0
+        || opening.ConnectedRoomLinks.Count > 0
+        || opening.RoomAdjacencyIds.Count > 0;
+
+    private static bool HasRoomConnectivityEvidence(RoutingPassage passage) =>
+        passage.ConnectedRoomIds.Count > 0
+        || passage.ConnectedRoomLabels.Count > 0
+        || passage.ConnectedRoomLinks.Count > 0
+        || passage.RoomAdjacencyIds.Count > 0;
+
+    private static bool HasImportReadyRoomSideLinks(OpeningCandidate opening) =>
+        HasImportReadyRoomSideLinks(opening.ConnectedRoomLinks, ExpectedRoomConnectionCount(opening));
+
+    private static bool HasImportReadyRoomSideLinks(RoutingPassage passage) =>
+        HasImportReadyRoomSideLinks(passage.ConnectedRoomLinks, ExpectedRoomConnectionCount(passage));
+
+    private static bool HasImportReadyRoomSideLinks(
+        IReadOnlyList<OpeningRoomConnection> links,
+        int expectedRoomConnectionCount)
+    {
+        if (expectedRoomConnectionCount <= 0 || links.Count == 0)
+        {
+            return false;
+        }
+
+        var sideAwareLinks = links
+            .Where(IsImportReadyRoomSideLink)
+            .ToArray();
+        if (sideAwareLinks.Length == 0)
+        {
+            return false;
+        }
+
+        if (expectedRoomConnectionCount <= 1)
+        {
+            return true;
+        }
+
+        var sideAwareRoomCount = sideAwareLinks
+            .Select(link => link.RoomId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        return sideAwareRoomCount >= Math.Min(expectedRoomConnectionCount, 2)
+            && HasOppositeRoomSides(sideAwareLinks);
+    }
+
+    private static bool HasOppositeRoomSides(IReadOnlyList<OpeningRoomConnection> links) =>
+        links.Any(link => link.Side == OpeningRoomSide.PositiveNormalSide)
+        && links.Any(link => link.Side == OpeningRoomSide.NegativeNormalSide);
+
+    private static bool IsImportReadyRoomSideLink(OpeningRoomConnection link) =>
+        !string.IsNullOrWhiteSpace(link.RoomId)
+        && link.Side is OpeningRoomSide.PositiveNormalSide or OpeningRoomSide.NegativeNormalSide
+        && link.RoomSidePoint is not null
+        && link.NearestBoundaryPoint is not null
+        && double.IsFinite(link.SignedDistanceFromOpening)
+        && double.IsFinite(link.DistanceToOpening)
+        && link.DistanceToOpening >= 0;
+
+    private static int ExpectedRoomConnectionCount(OpeningCandidate opening) =>
+        ExpectedRoomConnectionCount(
+            opening.ConnectedRoomIds,
+            opening.ConnectedRoomLabels,
+            opening.RoomAdjacencyIds,
+            opening.ConnectedRoomLinks);
+
+    private static int ExpectedRoomConnectionCount(RoutingPassage passage) =>
+        ExpectedRoomConnectionCount(
+            passage.ConnectedRoomIds,
+            passage.ConnectedRoomLabels,
+            passage.RoomAdjacencyIds,
+            passage.ConnectedRoomLinks);
+
+    private static int ExpectedRoomConnectionCount(
+        IReadOnlyList<string> roomIds,
+        IReadOnlyList<string> roomLabels,
+        IReadOnlyList<string> roomAdjacencyIds,
+        IReadOnlyList<OpeningRoomConnection> roomLinks)
+    {
+        var roomIdCount = CountDistinctNonBlank(roomIds);
+        var roomLabelCount = CountDistinctNonBlank(roomLabels);
+        var roomLinkCount = CountDistinctNonBlank(roomLinks.Select(link => link.RoomId));
+        var adjacencyImpliedCount = roomAdjacencyIds.Count > 0 ? 2 : 0;
+        return Math.Max(Math.Max(roomIdCount, roomLabelCount), Math.Max(roomLinkCount, adjacencyImpliedCount));
+    }
+
+    private static int CountDistinctNonBlank(IEnumerable<string?> values) =>
+        values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+
     private static bool RequiresQualityReview(PlanScanQualityIssue issue) =>
         issue.Severity == DiagnosticSeverity.Warning
         && !string.Equals(issue.Code, "quality.diagnostic_warnings", StringComparison.Ordinal);
@@ -495,10 +590,7 @@ public static class PlanScanQualityAnalyzer
 
         if (result.Rooms.Count >= 2 && result.Openings.Count >= 4)
         {
-            var roomConnectedOpenings = result.Openings.Count(opening =>
-                opening.ConnectedRoomIds.Count > 0
-                || opening.RoomAdjacencyIds.Count > 0
-                || opening.ConnectedRoomLabels.Count > 0);
+            var roomConnectedOpenings = result.Openings.Count(HasRoomConnectivityEvidence);
             var roomConnectedRatio = roomConnectedOpenings / (double)result.Openings.Count;
             var hostedOpenings = result.Openings.Count(opening => opening.HostWallIds.Count > 0 || !string.IsNullOrWhiteSpace(opening.WallId));
             var hostedRatio = hostedOpenings / (double)result.Openings.Count;
@@ -518,6 +610,72 @@ public static class PlanScanQualityAnalyzer
                         ["hostedOpeningRatio"] = FormatRatio(hostedRatio),
                         ["roomAdjacencyEdgeCount"] = result.RoomAdjacencyGraph.Edges.Count.ToString()
                 }));
+            }
+        }
+
+        var connectedOpenings = result.Openings
+            .Where(HasRoomConnectivityEvidence)
+            .ToArray();
+        if (result.Rooms.Count >= 2 && connectedOpenings.Length >= 2)
+        {
+            var sideAwareOpenings = connectedOpenings.Count(HasImportReadyRoomSideLinks);
+            var sideAwareRatio = sideAwareOpenings / (double)connectedOpenings.Length;
+            var twoSidedOpenings = connectedOpenings.Count(opening => ExpectedRoomConnectionCount(opening) >= 2);
+            var oppositeSideOpenings = connectedOpenings.Count(opening =>
+                ExpectedRoomConnectionCount(opening) >= 2
+                && HasOppositeRoomSides(opening.ConnectedRoomLinks));
+
+            if (sideAwareRatio < 0.75)
+            {
+                risks.Add(new QualityRiskPattern(
+                    "quality.scan_risk.opening_room_side_links_incomplete",
+                    DiagnosticSeverity.Warning,
+                    "Openings are room-linked, but many lack side-aware room connection geometry for import-grade topology.",
+                    Math.Min(0.05, 0.02 + (1 - sideAwareRatio) * 0.045),
+                    new Dictionary<string, string>
+                    {
+                        ["roomCount"] = result.Rooms.Count.ToString(),
+                        ["openingCount"] = result.Openings.Count.ToString(),
+                        ["roomConnectedOpeningCount"] = connectedOpenings.Length.ToString(),
+                        ["sideAwareConnectedOpeningCount"] = sideAwareOpenings.ToString(),
+                        ["sideAwareConnectedOpeningRatio"] = FormatRatio(sideAwareRatio),
+                        ["twoSidedOpeningCount"] = twoSidedOpenings.ToString(),
+                        ["oppositeSideOpeningCount"] = oppositeSideOpenings.ToString(),
+                        ["minimumSideAwareOpeningRatio"] = "0.75"
+                    }));
+            }
+        }
+
+        var roomLinkedRoutingPassages = result.RoutingLayer.Passages
+            .Where(HasRoomConnectivityEvidence)
+            .ToArray();
+        if (result.Rooms.Count >= 2 && roomLinkedRoutingPassages.Length >= 2)
+        {
+            var sideAwarePassages = roomLinkedRoutingPassages.Count(HasImportReadyRoomSideLinks);
+            var sideAwareRatio = sideAwarePassages / (double)roomLinkedRoutingPassages.Length;
+            var twoSidedPassages = roomLinkedRoutingPassages.Count(passage => ExpectedRoomConnectionCount(passage) >= 2);
+            var oppositeSidePassages = roomLinkedRoutingPassages.Count(passage =>
+                ExpectedRoomConnectionCount(passage) >= 2
+                && HasOppositeRoomSides(passage.ConnectedRoomLinks));
+
+            if (sideAwareRatio < 0.75)
+            {
+                risks.Add(new QualityRiskPattern(
+                    "quality.scan_risk.routing_passage_room_side_links_incomplete",
+                    DiagnosticSeverity.Warning,
+                    "Routing passages are room-linked, but many lack side-aware room connection geometry for import-grade path topology.",
+                    Math.Min(0.04, 0.015 + (1 - sideAwareRatio) * 0.035),
+                    new Dictionary<string, string>
+                    {
+                        ["roomCount"] = result.Rooms.Count.ToString(),
+                        ["routingPassageCount"] = result.RoutingLayer.Passages.Count.ToString(),
+                        ["roomLinkedRoutingPassageCount"] = roomLinkedRoutingPassages.Length.ToString(),
+                        ["sideAwareRoutingPassageCount"] = sideAwarePassages.ToString(),
+                        ["sideAwareRoutingPassageRatio"] = FormatRatio(sideAwareRatio),
+                        ["twoSidedRoutingPassageCount"] = twoSidedPassages.ToString(),
+                        ["oppositeSideRoutingPassageCount"] = oppositeSidePassages.ToString(),
+                        ["minimumSideAwareRoutingPassageRatio"] = "0.75"
+                    }));
             }
         }
 
@@ -716,6 +874,7 @@ public static class PlanScanQualityAnalyzer
                 opening.Confidence,
                 opening.Evidence.Count > 0,
                 opening.HostWallIds.Count == 0
+                || (HasRoomConnectivityEvidence(opening) && !HasImportReadyRoomSideLinks(opening))
                 || opening.Operation == OpeningOperation.Unknown
                 || MeasurementScaleNeedsReview(result, opening.WidthMillimeters, opening.MeasurementScaleGroupId))));
         yield return Summary(

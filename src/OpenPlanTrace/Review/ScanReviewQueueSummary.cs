@@ -86,9 +86,83 @@ public sealed record ScanReviewQueueSummary(
     }
 
     public static bool NeedsOpeningReview(OpeningCandidate opening) =>
-        opening.Placement is null
-        || opening.Operation == OpeningOperation.Unknown
-        || opening.Confidence.Value < 0.5;
+        OpeningReviewReasons(opening).Count > 0;
+
+    public static bool OpeningPlacementIsCoordinateReady(OpeningCandidate opening) =>
+        opening.Placement is not null
+        && IsOpeningPlacementSpanCoherent(opening.Placement);
+
+    public static IReadOnlyList<string> OpeningReviewReasons(OpeningCandidate opening)
+    {
+        ArgumentNullException.ThrowIfNull(opening);
+
+        var reasons = new List<string>();
+        if (opening.Placement is null)
+        {
+            reasons.Add("opening is not anchored to a host-wall placement reference");
+        }
+        else if (!IsOpeningPlacementSpanCoherent(opening.Placement))
+        {
+            reasons.Add("opening placement offsets or host-wall parameters are inconsistent");
+        }
+
+        if (opening.Operation == OpeningOperation.Unknown)
+        {
+            reasons.Add("opening operation is unknown");
+        }
+
+        if (opening.Confidence.Value < 0.5)
+        {
+            reasons.Add("opening confidence is below 0.5");
+        }
+
+        return reasons;
+    }
+
+    private static bool IsOpeningPlacementSpanCoherent(OpeningPlacement placement)
+    {
+        if (placement.ReferenceLine.Length <= 0.001
+            || placement.LengthDrawingUnits <= 0.001
+            || !IsFinite(placement.StartOffsetDrawingUnits)
+            || !IsFinite(placement.EndOffsetDrawingUnits)
+            || !IsFinite(placement.CenterOffsetDrawingUnits)
+            || !IsFinite(placement.HostWallStartParameter)
+            || !IsFinite(placement.HostWallEndParameter)
+            || !IsFinite(placement.HostWallCenterParameter)
+            || !IsFinite(placement.CrossWallOffsetDrawingUnits))
+        {
+            return false;
+        }
+
+        var spanLength = Math.Abs(placement.EndOffsetDrawingUnits - placement.StartOffsetDrawingUnits);
+        var lengthTolerance = Math.Max(0.01, placement.LengthDrawingUnits * 0.02);
+        if (Math.Abs(spanLength - placement.LengthDrawingUnits) > lengthTolerance)
+        {
+            return false;
+        }
+
+        var minOffset = Math.Min(placement.StartOffsetDrawingUnits, placement.EndOffsetDrawingUnits);
+        var maxOffset = Math.Max(placement.StartOffsetDrawingUnits, placement.EndOffsetDrawingUnits);
+        if (placement.CenterOffsetDrawingUnits < minOffset - lengthTolerance
+            || placement.CenterOffsetDrawingUnits > maxOffset + lengthTolerance)
+        {
+            return false;
+        }
+
+        var parameterTolerance = Math.Max(0.01, 2.0 / Math.Max(placement.ReferenceLine.Length, 1));
+        if (Math.Min(placement.HostWallStartParameter, placement.HostWallEndParameter) < -parameterTolerance
+            || Math.Max(placement.HostWallStartParameter, placement.HostWallEndParameter) > 1 + parameterTolerance
+            || placement.HostWallCenterParameter < -parameterTolerance
+            || placement.HostWallCenterParameter > 1 + parameterTolerance)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsFinite(double value) =>
+        !double.IsNaN(value) && !double.IsInfinity(value);
 
     public static IReadOnlyList<PlanDiagnostic> QueuedWallGraphGapDiagnostics(IEnumerable<PlanDiagnostic> diagnostics)
     {

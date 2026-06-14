@@ -144,10 +144,366 @@ public sealed class ScannerPipelineTests
             item => Assert.True(item.OutputDetectionCount >= item.InputDetectionCount));
     }
 
+    [Fact]
+    public async Task ScanAsync_AttachesPipelineStageMetadataToDiagnostics()
+    {
+        var document = new PlanDocument(
+            "metadata-plan",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(400, 300),
+                    new PlanPrimitive[]
+                    {
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(220, 100))) { SourceId = "wall-top" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(220, 100), new PlanPoint(220, 200))) { SourceId = "wall-right" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(220, 200), new PlanPoint(100, 200))) { SourceId = "wall-bottom" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(100, 200), new PlanPoint(100, 100))) { SourceId = "wall-left" }
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.Equal(
+            PipelineStageMetadataCatalog.All.Select(metadata => metadata.Stage),
+            result.Diagnostics.StageReports.Select(report => report.Stage));
+        Assert.True(result.Diagnostics.ExecutionPlan.IsDependencyReady);
+        Assert.Empty(result.Diagnostics.ExecutionPlan.Issues);
+        Assert.Equal("fixed-stage-chain", result.Diagnostics.ExecutionPlan.ExecutionModel);
+        Assert.Contains(PlanArtifactKind.Primitives, result.Diagnostics.ExecutionPlan.SourceArtifacts);
+        Assert.NotEmpty(result.Diagnostics.ExecutionPlan.ExecutionWaves);
+        Assert.Equal(
+            result.Diagnostics.ExecutionPlan.Stages.Select(stage => stage.DependencyLevel).Distinct().Count(),
+            result.Diagnostics.ExecutionPlan.ExecutionWaves.Count);
+        Assert.Contains(
+            result.Diagnostics.ExecutionPlan.ExecutionWaves,
+            wave => wave.IsParallelCandidate
+                && wave.StageCount > 1
+                && wave.WriteConflictArtifacts.Count == 0
+                && wave.IntraWaveDependencies.Count == 0
+                && wave.ParallelReadiness == "Ready"
+                && wave.RecommendedExecutionMode == "Parallel");
+        Assert.Contains(
+            result.Diagnostics.ExecutionPlan.ExecutionWaves,
+            wave => wave.DirectDownstreamStageCount > 0
+                && wave.DirectDownstreamStages.Count == wave.DirectDownstreamStageCount
+                && wave.DownstreamReadArtifacts.Count > 0
+                && wave.SchedulingReasons.Any(reason => reason.Contains("later stage", StringComparison.OrdinalIgnoreCase)));
+        Assert.NotEmpty(result.Diagnostics.ExecutionPlan.RerunImpacts);
+        Assert.NotEmpty(result.Diagnostics.ExecutionPlan.ArtifactPlans);
+        var primitiveArtifactPlan = Assert.Single(result.Diagnostics.ExecutionPlan.ArtifactPlans, plan => plan.Artifact == PlanArtifactKind.Primitives);
+        Assert.True(primitiveArtifactPlan.IsSourceArtifact);
+        Assert.False(primitiveArtifactPlan.IsProducedByStage);
+        Assert.True(primitiveArtifactPlan.IsConsumedByStage);
+        Assert.Equal("SourceInput", primitiveArtifactPlan.DependencyRole);
+        Assert.Contains("layer-analysis", primitiveArtifactPlan.RequiredConsumerStages);
+        Assert.True(primitiveArtifactPlan.FirstConsumerWave > 0);
+        var wallGraphArtifactPlan = Assert.Single(result.Diagnostics.ExecutionPlan.ArtifactPlans, plan => plan.Artifact == PlanArtifactKind.WallGraph);
+        Assert.False(wallGraphArtifactPlan.IsSourceArtifact);
+        Assert.True(wallGraphArtifactPlan.IsProducedByStage);
+        Assert.True(wallGraphArtifactPlan.IsConsumedByStage);
+        Assert.False(wallGraphArtifactPlan.IsTerminalArtifact);
+        Assert.Equal("ProducedAndConsumed", wallGraphArtifactPlan.DependencyRole);
+        Assert.Contains("wall-graph", wallGraphArtifactPlan.ProducerStages);
+        Assert.Contains("openings", wallGraphArtifactPlan.RequiredConsumerStages);
+        Assert.Contains("routing-layer", wallGraphArtifactPlan.RequiredConsumerStages);
+        Assert.True(wallGraphArtifactPlan.FirstProducerOrder > 0);
+        Assert.True(wallGraphArtifactPlan.LastConsumerOrder >= wallGraphArtifactPlan.FirstProducerOrder);
+        Assert.NotEmpty(wallGraphArtifactPlan.Evidence);
+        var wallImpact = Assert.Single(result.Diagnostics.ExecutionPlan.RerunImpacts, impact => impact.Artifact == PlanArtifactKind.Walls);
+        Assert.True(wallImpact.HasImpact);
+        Assert.Equal("DerivedArtifact", wallImpact.ImpactScope);
+        Assert.Contains("walls", wallImpact.ProducerStages);
+        Assert.Contains("wall-graph", wallImpact.DirectConsumerStages);
+        Assert.Contains("routing-layer", wallImpact.AffectedStages);
+        Assert.Contains(PlanArtifactKind.WallGraph, wallImpact.AffectedArtifacts);
+        Assert.True(wallImpact.FirstAffectedWave > 0);
+        var primitiveImpact = Assert.Single(result.Diagnostics.ExecutionPlan.RerunImpacts, impact => impact.Artifact == PlanArtifactKind.Primitives);
+        Assert.True(primitiveImpact.IsSourceArtifact);
+        Assert.Equal("SourceArtifact", primitiveImpact.ImpactScope);
+        Assert.Contains("layer-analysis", primitiveImpact.DirectConsumerStages);
+        Assert.Contains("routing-layer", primitiveImpact.AffectedStages);
+        Assert.NotEmpty(result.Diagnostics.ExecutionPlan.RerunPlans);
+        var wallPlan = Assert.Single(result.Diagnostics.ExecutionPlan.RerunPlans, plan => plan.PlanId == "wall-geometry");
+        Assert.True(wallPlan.HasWork);
+        Assert.Contains(PlanArtifactKind.Walls, wallPlan.ChangedArtifacts);
+        Assert.Contains("wall-graph", wallPlan.DirectConsumerStages);
+        Assert.Contains("routing-layer", wallPlan.RerunStages);
+        Assert.Contains(PlanArtifactKind.WallGraph, wallPlan.AffectedArtifacts);
+        Assert.True(wallPlan.FirstRerunWave > 0);
+        Assert.True(wallPlan.LastRerunWave >= wallPlan.FirstRerunWave);
+        var sourcePlan = Assert.Single(result.Diagnostics.ExecutionPlan.RerunPlans, plan => plan.PlanId == "source-primitives");
+        Assert.Contains(PlanArtifactKind.Primitives, sourcePlan.ChangedSourceArtifacts);
+        Assert.True(sourcePlan.RerunStageCount >= wallPlan.RerunStageCount);
+        var customPlan = result.Diagnostics.ExecutionPlan.CreateRerunPlan(
+            "manual-wall-room",
+            "Manual wall and room correction",
+            new[] { PlanArtifactKind.Walls, PlanArtifactKind.Rooms });
+        Assert.Contains(PlanArtifactKind.Walls, customPlan.ChangedArtifacts);
+        Assert.Contains(PlanArtifactKind.Rooms, customPlan.ChangedArtifacts);
+        Assert.Equal(customPlan.RerunStages.Count, customPlan.RerunStages.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("routing-layer", customPlan.RerunStages);
+        Assert.All(result.Diagnostics.ExecutionPlan.Stages, stage =>
+        {
+            Assert.True(stage.DependencyLevel > 0);
+            Assert.Equal(stage.DependencyLevel, stage.ExecutionWave);
+            Assert.True(stage.PreferredDependencyLevel >= stage.DependencyLevel);
+        });
+        Assert.All(result.Diagnostics.StageReports, report =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(report.Metadata.DisplayName));
+            Assert.NotEmpty(report.Metadata.Reads);
+            Assert.NotEmpty(report.Metadata.Writes);
+            Assert.NotEmpty(report.Metadata.Capabilities);
+            Assert.NotEmpty(report.RuntimeReadiness.Evidence);
+            Assert.Equal(
+                report.RuntimeReadiness.EmptyRequiredReads.Count > 0,
+                report.RuntimeReadiness.HasEmptyRequiredReads);
+            Assert.NotEmpty(report.OutputReadiness.Evidence);
+            Assert.Equal(
+                report.OutputReadiness.EmptyDeclaredOutputs.Count > 0,
+                report.OutputReadiness.HasEmptyDeclaredOutputs);
+            Assert.Equal(
+                report.OutputReadiness.UndeclaredChangedArtifacts.Count > 0,
+                report.OutputReadiness.HasUndeclaredChanges);
+            Assert.True(
+                report.Contract.WritesOnlyDeclaredArtifacts,
+                $"{report.Stage} changed undeclared artifacts: {string.Join(", ", report.Contract.UndeclaredChangedArtifacts)}");
+            Assert.Equal(
+                report.Metadata.Writes.OrderBy(artifact => artifact.ToString()),
+                report.Contract.DeclaredWrites);
+            Assert.All(report.InputArtifacts.Concat(report.OutputArtifacts), artifact =>
+            {
+                Assert.False(string.IsNullOrWhiteSpace(artifact.StateKey));
+                Assert.True(artifact.Revision > 0);
+                Assert.NotEmpty(artifact.Evidence);
+            });
+        });
+
+        var wallGraph = Assert.Single(result.Diagnostics.StageReports, report => report.Stage == "wall-graph");
+        Assert.Equal(PipelineStageKind.Topology, wallGraph.Metadata.Kind);
+        Assert.Contains(PlanArtifactKind.Walls, wallGraph.Metadata.Reads);
+        Assert.Contains(PlanArtifactKind.WallGraph, wallGraph.Metadata.Writes);
+        Assert.Contains(PlanArtifactKind.TopologySpans, wallGraph.Metadata.Writes);
+        Assert.Contains(wallGraph.InputArtifacts, artifact => artifact.Artifact == PlanArtifactKind.Walls && artifact.Count > 0);
+        Assert.Contains(wallGraph.OutputArtifacts, artifact => artifact.Artifact == PlanArtifactKind.WallGraph && artifact.Count > 0);
+        Assert.True(wallGraph.RuntimeReadiness.RequiredReadsHaveData);
+        Assert.Empty(wallGraph.RuntimeReadiness.EmptyRequiredReads);
+        Assert.Contains(PlanArtifactKind.Walls, wallGraph.RuntimeReadiness.NonEmptyRequiredReads);
+        Assert.True(wallGraph.OutputReadiness.DeclaredOutputsHaveData);
+        Assert.False(wallGraph.OutputReadiness.HasEmptyDeclaredOutputs);
+        Assert.Contains(PlanArtifactKind.WallGraph, wallGraph.OutputReadiness.NonEmptyDeclaredOutputs);
+        Assert.Contains(PlanArtifactKind.TopologySpans, wallGraph.OutputReadiness.ChangedDeclaredOutputs);
+        Assert.Empty(wallGraph.OutputReadiness.UndeclaredChangedArtifacts);
+        Assert.Contains(
+            wallGraph.ChangedArtifacts,
+            artifact => artifact.Artifact == PlanArtifactKind.WallGraph
+                && artifact.BeforeCount == 0
+                && artifact.AfterCount > 0
+                && artifact.Delta > 0);
+        Assert.Contains(
+            wallGraph.ArtifactDeltas,
+            artifact => artifact.Artifact == PlanArtifactKind.WallGraph
+                && artifact.IsDeclaredWrite
+                && artifact.ChangeKind == PipelineArtifactDeltaKind.Created
+                && artifact.BeforeCount == 0
+                && artifact.AfterCount > 0
+                && artifact.Changed);
+        Assert.Contains(
+            wallGraph.ArtifactDeltas,
+            artifact => artifact.Artifact == PlanArtifactKind.TopologySpans
+                && artifact.IsDeclaredWrite
+                && artifact.ChangeKind == PipelineArtifactDeltaKind.Created
+                && artifact.IsPresent);
+        Assert.True(wallGraph.Contract.WritesOnlyDeclaredArtifacts);
+        Assert.Contains(PlanArtifactKind.WallGraph, wallGraph.Contract.ChangedArtifacts);
+        Assert.Contains(PlanArtifactKind.WallGraph, wallGraph.Contract.DeclaredWrites);
+        Assert.Empty(wallGraph.Contract.UndeclaredChangedArtifacts);
+
+        var wallGraphPlan = Assert.Single(result.Diagnostics.ExecutionPlan.Stages, stage => stage.Stage == "wall-graph");
+        var wallDetectionPlan = Assert.Single(result.Diagnostics.ExecutionPlan.Stages, stage => stage.Stage == "walls");
+        Assert.True(wallGraphPlan.DependencyLevel > wallDetectionPlan.DependencyLevel);
+
+        var routingLayer = Assert.Single(result.Diagnostics.StageReports, report => report.Stage == "routing-layer");
+        Assert.Equal(PipelineStageKind.Topology, routingLayer.Metadata.Kind);
+        Assert.Contains(PlanArtifactKind.WallGraph, routingLayer.Metadata.Reads);
+        Assert.Contains(PlanArtifactKind.ObjectAggregates, routingLayer.Metadata.Reads);
+        Assert.Contains(PlanArtifactKind.RoutingBarriers, routingLayer.Metadata.Writes);
+        Assert.Contains(PlanArtifactKind.RoutingPassages, routingLayer.Metadata.Writes);
+        Assert.Contains(PlanArtifactKind.RoutingIgnoredObjects, routingLayer.Metadata.Writes);
+        Assert.Contains(
+            routingLayer.OutputArtifacts,
+            artifact => artifact.Artifact == PlanArtifactKind.RoutingBarriers);
+        Assert.Contains(
+            routingLayer.ChangedArtifacts,
+            artifact => artifact.Artifact == PlanArtifactKind.RoutingBarriers
+                && artifact.BeforeCount == 0
+                && artifact.AfterCount > 0
+                && artifact.Delta > 0);
+        Assert.Contains(
+            routingLayer.ArtifactDeltas,
+            artifact => artifact.Artifact == PlanArtifactKind.RoutingBarriers
+                && artifact.IsDeclaredWrite
+                && !artifact.IsEmptyDeclaredOutput);
+
+        var routingPlan = Assert.Single(result.Diagnostics.ExecutionPlan.Stages, stage => stage.Stage == "routing-layer");
+        var objectAggregatePlan = Assert.Single(result.Diagnostics.ExecutionPlan.Stages, stage => stage.Stage == "object-aggregates");
+        Assert.True(routingPlan.DependencyLevel > objectAggregatePlan.DependencyLevel);
+
+        var calibrationPlan = Assert.Single(result.Diagnostics.ExecutionPlan.Stages, stage => stage.Stage == "calibration");
+        Assert.True(calibrationPlan.PreferredDependencyLevel > calibrationPlan.DependencyLevel);
+
+        var rasterExtraction = Assert.Single(result.Diagnostics.StageReports, report => report.Stage == "raster-extraction");
+        Assert.False(rasterExtraction.RuntimeReadiness.RequiredReadsHaveData);
+        Assert.Contains(PlanArtifactKind.RasterImages, rasterExtraction.RuntimeReadiness.EmptyRequiredReads);
+        Assert.Contains(PlanArtifactKind.Document, rasterExtraction.RuntimeReadiness.NonEmptyRequiredReads);
+    }
+
+    [Fact]
+    public void PipelineStageContract_FlagsUndeclaredArtifactChanges()
+    {
+        var contract = PipelineStageContract.From(
+            new[] { PlanArtifactKind.Walls, PlanArtifactKind.Diagnostics },
+            new[] { PlanArtifactKind.Walls, PlanArtifactKind.Rooms });
+
+        Assert.False(contract.WritesOnlyDeclaredArtifacts);
+        Assert.Contains(PlanArtifactKind.Rooms, contract.UndeclaredChangedArtifacts);
+        Assert.Contains(PlanArtifactKind.Diagnostics, contract.DeclaredUnchangedArtifacts);
+        Assert.DoesNotContain(PlanArtifactKind.Walls, contract.UndeclaredChangedArtifacts);
+    }
+
+    [Fact]
+    public void ArtifactDeltas_ReportDeclaredOutputsAndUndeclaredChanges()
+    {
+        var before = new Dictionary<PlanArtifactKind, int>
+        {
+            [PlanArtifactKind.Walls] = 4,
+            [PlanArtifactKind.Diagnostics] = 1
+        };
+        var after = new Dictionary<PlanArtifactKind, int>
+        {
+            [PlanArtifactKind.Walls] = 6,
+            [PlanArtifactKind.Diagnostics] = 1,
+            [PlanArtifactKind.Rooms] = 2,
+            [PlanArtifactKind.Openings] = 0
+        };
+
+        var deltas = PipelineArtifactDelta.FromCounts(
+            before,
+            after,
+            new[] { PlanArtifactKind.Walls, PlanArtifactKind.Openings },
+            new[] { PlanArtifactKind.Walls, PlanArtifactKind.Rooms });
+
+        Assert.Contains(
+            deltas,
+            delta => delta.Artifact == PlanArtifactKind.Walls
+                && delta.IsDeclaredWrite
+                && delta.ChangeKind == PipelineArtifactDeltaKind.Increased
+                && delta.BeforeCount == 4
+                && delta.AfterCount == 6
+                && delta.Delta == 2);
+        Assert.Contains(
+            deltas,
+            delta => delta.Artifact == PlanArtifactKind.Openings
+                && delta.IsDeclaredWrite
+                && delta.IsEmptyDeclaredOutput
+                && delta.ChangeKind == PipelineArtifactDeltaKind.Unchanged);
+        Assert.Contains(
+            deltas,
+            delta => delta.Artifact == PlanArtifactKind.Rooms
+                && !delta.IsDeclaredWrite
+                && delta.ChangeKind == PipelineArtifactDeltaKind.Created
+                && delta.BeforeCount == 0
+                && delta.AfterCount == 2);
+    }
+
+    [Fact]
+    public void PipelineExecutionPlan_ReportsMissingRequiredArtifactsForInvalidOrder()
+    {
+        var plan = PipelineExecutionPlan.FromStages(new[] { PipelineStageMetadataCatalog.Get("wall-graph") });
+
+        Assert.False(plan.IsDependencyReady);
+        var issue = Assert.Single(plan.Issues, issue => issue.Code == "pipeline.stage.required_artifacts_missing");
+        Assert.Equal("wall-graph", issue.Stage);
+        Assert.Contains(PlanArtifactKind.Walls, issue.Artifacts);
+        var artifactIssue = Assert.Single(plan.Issues, issue => issue.Code == "pipeline.artifact.producer_missing");
+        Assert.Equal("wall-graph", artifactIssue.Stage);
+        Assert.Equal(DiagnosticSeverity.Error, artifactIssue.Severity);
+        Assert.Contains(PlanArtifactKind.Walls, artifactIssue.Artifacts);
+        var stage = Assert.Single(plan.Stages);
+        Assert.Equal(1, stage.DependencyLevel);
+        Assert.Equal(1, stage.ExecutionWave);
+        Assert.Equal(1, stage.PreferredDependencyLevel);
+    }
+
+    [Fact]
+    public void PipelineExecutionPlan_FlagsArtifactProducerOrderAndOwnershipProblems()
+    {
+        var plan = PipelineExecutionPlan.FromStages(new[]
+        {
+            StageMetadata(
+                "wall-consumer",
+                PipelineStageKind.Topology,
+                new[] { PlanArtifactKind.Walls },
+                new[] { PlanArtifactKind.WallGraph }),
+            StageMetadata(
+                "wall-producer-a",
+                PipelineStageKind.Geometry,
+                new[] { PlanArtifactKind.Primitives },
+                new[] { PlanArtifactKind.Walls }),
+            StageMetadata(
+                "wall-producer-b",
+                PipelineStageKind.Geometry,
+                new[] { PlanArtifactKind.Primitives },
+                new[] { PlanArtifactKind.Walls })
+        });
+
+        Assert.True(plan.HasErrors);
+        Assert.True(plan.HasWarnings);
+        Assert.Contains(
+            plan.Issues,
+            issue => issue.Code == "pipeline.stage.required_artifacts_missing"
+                && issue.Stage == "wall-consumer"
+                && issue.Artifacts.Contains(PlanArtifactKind.Walls));
+        Assert.Contains(
+            plan.Issues,
+            issue => issue.Code == "pipeline.artifact.producer_after_required_consumer"
+                && issue.Stage == "wall-consumer"
+                && issue.Severity == DiagnosticSeverity.Error
+                && issue.Artifacts.Contains(PlanArtifactKind.Walls));
+        Assert.Contains(
+            plan.Issues,
+            issue => issue.Code == "pipeline.artifact.multiple_producers"
+                && issue.Stage == "wall-producer-a"
+                && issue.Severity == DiagnosticSeverity.Warning
+                && issue.Artifacts.Contains(PlanArtifactKind.Walls));
+
+        var wallPlan = Assert.Single(plan.ArtifactPlans, artifact => artifact.Artifact == PlanArtifactKind.Walls);
+        Assert.True(wallPlan.HasMultipleProducers);
+        Assert.Equal(new[] { "wall-producer-a", "wall-producer-b" }, wallPlan.ProducerStages);
+        Assert.Equal(new[] { "wall-consumer" }, wallPlan.RequiredConsumerStages);
+        Assert.Equal("ProducedAndConsumed", wallPlan.DependencyRole);
+    }
+
+    private static PipelineStageMetadata StageMetadata(
+        string stage,
+        PipelineStageKind kind,
+        IReadOnlyList<PlanArtifactKind> reads,
+        IReadOnlyList<PlanArtifactKind> writes) =>
+        new(
+            stage,
+            stage,
+            kind,
+            reads,
+            writes,
+            new[] { "test-stage" });
+
     private sealed class CapturingProgress : IProgress<PipelineStageProgress>
     {
         public List<PipelineStageProgress> Events { get; } = new();
 
         public void Report(PipelineStageProgress value) => Events.Add(value);
     }
+
 }

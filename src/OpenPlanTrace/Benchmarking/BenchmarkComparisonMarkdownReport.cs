@@ -24,6 +24,11 @@ public static class BenchmarkComparisonMarkdownReport
         builder.AppendLine();
 
         AppendSignals(builder, comparison);
+        AppendPipelineHealth(builder, comparison);
+        AppendPipelinePlanIssues(builder, comparison);
+        AppendArtifactPlans(builder, comparison);
+        AppendRerunPlans(builder, comparison);
+        AppendArtifactState(builder, comparison);
         AppendCases(builder, comparison);
         return builder.ToString();
     }
@@ -49,6 +54,157 @@ public static class BenchmarkComparisonMarkdownReport
         {
             builder.AppendLine(
                 $"| {Cell(signal.Severity.ToString())} | {Cell(signal.FixtureId)} | `{Cell(signal.Code)}` | {Cell(signal.Baseline ?? "-")} | {Cell(signal.Candidate ?? "-")} | {Cell(signal.Message)} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void AppendPipelineHealth(StringBuilder builder, BenchmarkComparisonResult comparison)
+    {
+        var rows = comparison.Cases
+            .SelectMany(item => item.CountDeltas
+                .Where(delta => delta.Name.StartsWith("pipelineHealth.", StringComparison.Ordinal)
+                    && delta.Delta is not null and not 0)
+                .Select(delta => (Case: item, Delta: delta)))
+            .OrderByDescending(item => Math.Abs(item.Delta.Delta!.Value))
+            .ThenBy(item => item.Case.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Delta.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (rows.Length == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## Pipeline Health");
+        builder.AppendLine();
+        builder.AppendLine("| Fixture | Metric | Baseline | Candidate | Delta |");
+        builder.AppendLine("| --- | --- | ---: | ---: | ---: |");
+        foreach (var row in rows)
+        {
+            builder.AppendLine(
+                $"| {Cell(row.Case.FixtureId)} | `{Cell(row.Delta.Name)}` | {Cell(CountText(row.Delta.Baseline))} | {Cell(CountText(row.Delta.Candidate))} | {Cell(FormatDelta(row.Delta.Delta))} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void AppendPipelinePlanIssues(StringBuilder builder, BenchmarkComparisonResult comparison)
+    {
+        var rows = comparison.Cases
+            .SelectMany(item => item.CountDeltas
+                .Where(delta => delta.Name.StartsWith("planIssue.", StringComparison.Ordinal)
+                    && delta.Delta is not null and not 0)
+                .Select(delta => (Case: item, Delta: delta)))
+            .OrderByDescending(item => Math.Abs(item.Delta.Delta!.Value))
+            .ThenBy(item => item.Case.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Delta.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (rows.Length == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## Pipeline Plan Issues");
+        builder.AppendLine();
+        builder.AppendLine("| Fixture | Metric | Baseline | Candidate | Delta |");
+        builder.AppendLine("| --- | --- | ---: | ---: | ---: |");
+        foreach (var row in rows)
+        {
+            builder.AppendLine(
+                $"| {Cell(row.Case.FixtureId)} | `{Cell(row.Delta.Name)}` | {Cell(CountText(row.Delta.Baseline))} | {Cell(CountText(row.Delta.Candidate))} | {Cell(FormatDelta(row.Delta.Delta))} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void AppendRerunPlans(StringBuilder builder, BenchmarkComparisonResult comparison)
+    {
+        var rows = comparison.Cases
+            .SelectMany(item => item.CountDeltas
+                .Where(delta => delta.Name.StartsWith("rerunPlan.", StringComparison.Ordinal)
+                    && delta.Delta is not null and not 0)
+                .Select(delta => (Case: item, Delta: delta)))
+            .OrderByDescending(item => Math.Abs(item.Delta.Delta!.Value))
+            .ThenBy(item => item.Case.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Delta.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (rows.Length == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## Rerun Plans");
+        builder.AppendLine();
+        builder.AppendLine("| Fixture | Metric | Baseline | Candidate | Delta |");
+        builder.AppendLine("| --- | --- | ---: | ---: | ---: |");
+        foreach (var row in rows)
+        {
+            builder.AppendLine(
+                $"| {Cell(row.Case.FixtureId)} | `{Cell(row.Delta.Name)}` | {Cell(CountText(row.Delta.Baseline))} | {Cell(CountText(row.Delta.Candidate))} | {Cell(FormatDelta(row.Delta.Delta))} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void AppendArtifactPlans(StringBuilder builder, BenchmarkComparisonResult comparison)
+    {
+        var rows = comparison.Cases
+            .SelectMany(item => item.CountDeltas
+                .Where(delta => delta.Name.StartsWith("artifactPlan.", StringComparison.Ordinal)
+                    && delta.Delta is not null and not 0)
+                .Select(delta => (Case: item, Delta: delta)))
+            .OrderByDescending(item => Math.Abs(item.Delta.Delta!.Value))
+            .ThenBy(item => item.Case.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Delta.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (rows.Length == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## Artifact Plan Graph");
+        builder.AppendLine();
+        builder.AppendLine("| Fixture | Metric | Baseline | Candidate | Delta |");
+        builder.AppendLine("| --- | --- | ---: | ---: | ---: |");
+        foreach (var row in rows)
+        {
+            builder.AppendLine(
+                $"| {Cell(row.Case.FixtureId)} | `{Cell(row.Delta.Name)}` | {Cell(CountText(row.Delta.Baseline))} | {Cell(CountText(row.Delta.Candidate))} | {Cell(FormatDelta(row.Delta.Delta))} |");
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void AppendArtifactState(StringBuilder builder, BenchmarkComparisonResult comparison)
+    {
+        var rows = comparison.Cases
+            .SelectMany(item => item.CountDeltas
+                .Where(delta => delta.Name.StartsWith("artifact.", StringComparison.Ordinal)
+                    && delta.Name.EndsWith(".revision", StringComparison.Ordinal)
+                    && delta.Delta is not null and not 0)
+                .Select(delta => (Case: item, Delta: delta)))
+            .OrderByDescending(item => Math.Abs(item.Delta.Delta!.Value))
+            .ThenBy(item => item.Case.FixtureId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Delta.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (rows.Length == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("## Artifact State");
+        builder.AppendLine();
+        builder.AppendLine("| Fixture | Metric | Baseline | Candidate | Delta |");
+        builder.AppendLine("| --- | --- | ---: | ---: | ---: |");
+        foreach (var row in rows)
+        {
+            builder.AppendLine(
+                $"| {Cell(row.Case.FixtureId)} | `{Cell(row.Delta.Name)}` | {Cell(CountText(row.Delta.Baseline))} | {Cell(CountText(row.Delta.Candidate))} | {Cell(FormatDelta(row.Delta.Delta))} |");
         }
 
         builder.AppendLine();
@@ -88,11 +244,42 @@ public static class BenchmarkComparisonMarkdownReport
     private static string KeyDeltas(BenchmarkCaseComparison item)
     {
         var keys = new[] { "walls", "rooms", "roomClusters", "openings", "annotations", "annotationReferences", "objects", "qualityIssues", "measurementChecked", "measurementOutliers", "scanReviewQueueItems" };
-        return string.Join(
-            ", ",
-            item.CountDeltas
+        var standard = item.CountDeltas
                 .Where(delta => keys.Contains(delta.Name, StringComparer.Ordinal))
-                .Select(delta => $"{delta.Name} {FormatDelta(delta.Delta)}"));
+            .Select(delta => $"{delta.Name} {FormatDelta(delta.Delta)}");
+        var stageArtifacts = item.CountDeltas
+            .Where(delta => delta.Name.StartsWith("stage.", StringComparison.OrdinalIgnoreCase) && delta.Delta is not null and not 0)
+            .OrderByDescending(delta => Math.Abs(delta.Delta!.Value))
+            .ThenBy(delta => delta.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(delta => $"{delta.Name} {FormatDelta(delta.Delta)}");
+
+        var finalArtifacts = item.CountDeltas
+            .Where(delta => delta.Name.StartsWith("artifact.", StringComparison.OrdinalIgnoreCase)
+                && !delta.Name.EndsWith(".revision", StringComparison.OrdinalIgnoreCase)
+                && delta.Delta is not null and not 0)
+            .OrderByDescending(delta => Math.Abs(delta.Delta!.Value))
+            .ThenBy(delta => delta.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(delta => $"{delta.Name} {FormatDelta(delta.Delta)}");
+
+        var artifactPlans = item.CountDeltas
+            .Where(delta => delta.Name.StartsWith("artifactPlan.", StringComparison.OrdinalIgnoreCase)
+                && delta.Delta is not null and not 0)
+            .OrderByDescending(delta => Math.Abs(delta.Delta!.Value))
+            .ThenBy(delta => delta.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(delta => $"{delta.Name} {FormatDelta(delta.Delta)}");
+
+        var planIssues = item.CountDeltas
+            .Where(delta => delta.Name.StartsWith("planIssue.", StringComparison.OrdinalIgnoreCase)
+                && delta.Delta is not null and not 0)
+            .OrderByDescending(delta => Math.Abs(delta.Delta!.Value))
+            .ThenBy(delta => delta.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .Select(delta => $"{delta.Name} {FormatDelta(delta.Delta)}");
+
+        return string.Join(", ", standard.Concat(finalArtifacts).Concat(artifactPlans).Concat(planIssues).Concat(stageArtifacts));
     }
 
     private static string FormatDelta(int? delta) =>
@@ -101,6 +288,9 @@ public static class BenchmarkComparisonMarkdownReport
             : delta.Value >= 0
                 ? $"+{delta.Value.ToString(CultureInfo.InvariantCulture)}"
                 : delta.Value.ToString(CultureInfo.InvariantCulture);
+
+    private static string CountText(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? "-";
 
     private static string FormatMilliseconds(double? value) =>
         value is null

@@ -21,4 +21,26 @@ public sealed record BenchmarkStageSummary(
     int DiagnosticCount,
     int InfoCount,
     int WarningCount,
-    int ErrorCount);
+    int ErrorCount,
+    string DisplayName,
+    string Kind,
+    int DependencyLevel,
+    int PreferredDependencyLevel,
+    IReadOnlyList<string> Reads,
+    IReadOnlyList<string> OptionalReads,
+    IReadOnlyList<string> Writes,
+    IReadOnlyList<string> Capabilities,
+    bool IsDependencyReady,
+    IReadOnlyList<string> MissingRequiredReads,
+    IReadOnlyList<string> MissingOptionalReads,
+    IReadOnlyList<PipelineArtifactSnapshot> InputArtifacts,
+    IReadOnlyList<PipelineArtifactSnapshot> OutputArtifacts,
+    IReadOnlyList<PipelineArtifactChange> ChangedArtifacts,
+    IReadOnlyList<PipelineArtifactDelta> ArtifactDeltas)
+{
+    public PipelineStageRuntimeReadiness RuntimeReadiness { get; init; } = PipelineStageRuntimeReadiness.Empty;
+
+    public PipelineStageOutputReadiness OutputReadiness { get; init; } = PipelineStageOutputReadiness.Empty;
+
+    public PipelineStageContract Contract { get; init; } = PipelineStageContract.Empty;
+}

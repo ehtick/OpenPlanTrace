@@ -44,6 +44,8 @@ public sealed record ScannerOptions
 
     public bool ExcludeObjectLikeWallComponentsFromStructuralTopology { get; init; } = true;
 
+    public bool ExcludeWeakWallFragmentsFromStructuralTopology { get; init; }
+
     public double MinWallPairSeparation { get; init; } = 2;
 
     public double MaxWallPairSeparation { get; init; } = 24;

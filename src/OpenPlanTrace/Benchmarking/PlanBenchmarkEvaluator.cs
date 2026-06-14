@@ -20,9 +20,12 @@ public static class PlanBenchmarkEvaluator
 
         AddCountAssertions(assertions, fixture.Expectations, counts);
         AddPerformanceAssertions(assertions, fixture.Expectations, result, duration);
+        AddPipelineHealthAssertions(assertions, fixture.Expectations, result);
         AddQualityAssertions(assertions, fixture.Expectations, result);
         AddScanReviewQueueAssertions(assertions, fixture.Expectations, scanReviewQueue);
         AddImportReadinessAssertions(assertions, fixture.Expectations, importReadiness);
+        AddSourceReadinessAssertions(assertions, fixture.Expectations, result);
+        AddArtifactInventoryAssertions(assertions, fixture.Expectations, result);
         AddMeasurementAssertions(assertions, fixture.Expectations, result);
         AddDiagnosticAssertions(assertions, fixture.Expectations, result);
         AddRequiredRegionAssertions(assertions, fixture.Expectations, result);
@@ -34,6 +37,7 @@ public static class PlanBenchmarkEvaluator
         AddRequiredLayerAssertions(assertions, fixture.Expectations, result);
         AddCalibrationAssertion(assertions, fixture.Expectations, result);
         var metrics = AddDetectorMetricAssertions(assertions, fixture.Expectations, result);
+        var stages = StageSummaries(result);
 
         return new BenchmarkCaseResult(
             FixtureId(fixture),
@@ -50,7 +54,24 @@ public static class PlanBenchmarkEvaluator
             Metrics = metrics,
             QualityIssues = QualityIssueSummaries(result),
             DiagnosticIssues = DiagnosticIssueSummaries(result),
-            Stages = StageSummaries(result),
+            PlanIssues = result.Diagnostics.ExecutionPlan.Issues
+                .Select(BenchmarkPipelinePlanIssueSummary.From)
+                .ToArray(),
+            Stages = stages,
+            ArtifactInventory = result.Diagnostics.ArtifactInventory,
+            ArtifactPlans = result.Diagnostics.ExecutionPlan.ArtifactPlans
+                .Select(BenchmarkArtifactPlanSummary.From)
+                .ToArray(),
+            ExecutionWaves = result.Diagnostics.ExecutionPlan.ExecutionWaves
+                .Select(BenchmarkExecutionWaveSummary.From)
+                .ToArray(),
+            RerunImpacts = result.Diagnostics.ExecutionPlan.RerunImpacts
+                .Select(BenchmarkRerunImpactSummary.From)
+                .ToArray(),
+            RerunPlans = result.Diagnostics.ExecutionPlan.RerunPlans
+                .Select(BenchmarkRerunPlanSummary.From)
+                .ToArray(),
+            PipelineHealth = BenchmarkPipelineHealthSummary.From(result.Diagnostics.ExecutionPlan, stages),
             ImportReadiness = importReadiness,
             ScanReviewQueue = scanReviewQueue
         };
@@ -202,16 +223,47 @@ public static class PlanBenchmarkEvaluator
             .ToArray();
 
     private static IReadOnlyList<BenchmarkStageSummary> StageSummaries(PlanScanResult result) =>
-        result.Diagnostics.StageReports
-            .Select(stage => new BenchmarkStageSummary(
-                stage.Stage,
-                stage.Duration.TotalMilliseconds,
-                stage.InputCount,
-                stage.OutputCount,
-                stage.DiagnosticCount,
-                stage.InfoCount,
-                stage.WarningCount,
-                stage.ErrorCount))
+        StageSummaries(
+            result.Diagnostics.StageReports,
+            result.Diagnostics.ExecutionPlan.Stages.ToDictionary(stage => stage.Stage, StringComparer.Ordinal));
+
+    private static IReadOnlyList<BenchmarkStageSummary> StageSummaries(
+        IReadOnlyList<PipelineStageReport> reports,
+        IReadOnlyDictionary<string, PipelineStagePlan> stagePlans) =>
+        reports
+            .Select(stage =>
+            {
+                stagePlans.TryGetValue(stage.Stage, out var stagePlan);
+                return new BenchmarkStageSummary(
+                    stage.Stage,
+                    stage.Duration.TotalMilliseconds,
+                    stage.InputCount,
+                    stage.OutputCount,
+                    stage.DiagnosticCount,
+                    stage.InfoCount,
+                    stage.WarningCount,
+                    stage.ErrorCount,
+                    stage.Metadata.DisplayName,
+                    stage.Metadata.Kind.ToString(),
+                    stagePlan?.DependencyLevel ?? 0,
+                    stagePlan?.PreferredDependencyLevel ?? 0,
+                    stage.Metadata.Reads.Select(artifact => artifact.ToString()).ToArray(),
+                    stage.Metadata.OptionalReads.Select(artifact => artifact.ToString()).ToArray(),
+                    stage.Metadata.Writes.Select(artifact => artifact.ToString()).ToArray(),
+                    stage.Metadata.Capabilities.ToArray(),
+                    stagePlan?.IsDependencyReady ?? true,
+                    stagePlan?.MissingRequiredReads.Select(artifact => artifact.ToString()).ToArray() ?? Array.Empty<string>(),
+                    stagePlan?.MissingOptionalReads.Select(artifact => artifact.ToString()).ToArray() ?? Array.Empty<string>(),
+                    stage.InputArtifacts,
+                    stage.OutputArtifacts,
+                    stage.ChangedArtifacts,
+                    stage.ArtifactDeltas)
+                {
+                    RuntimeReadiness = stage.RuntimeReadiness,
+                    OutputReadiness = stage.OutputReadiness,
+                    Contract = stage.Contract
+                };
+            })
             .ToArray();
 
     private static double? MaxConfidence(IEnumerable<Confidence?> values)
@@ -283,6 +335,9 @@ public static class PlanBenchmarkEvaluator
             duration.TotalMilliseconds,
             "scan duration");
 
+        var stagePlans = result.Diagnostics.ExecutionPlan.Stages
+            .ToDictionary(stage => stage.Stage, StringComparer.OrdinalIgnoreCase);
+
         foreach (var stageExpectation in expectations.StageExpectations.Where(item => !string.IsNullOrWhiteSpace(item.Stage)))
         {
             var stageName = stageExpectation.Stage.Trim();
@@ -314,6 +369,303 @@ public static class PlanBenchmarkEvaluator
             AddMax(assertions, $"stage.{stage.Stage}.diagnostics.max", stageExpectation.MaxDiagnostics, stage.DiagnosticCount);
             AddMax(assertions, $"stage.{stage.Stage}.warnings.max", stageExpectation.MaxWarnings, stage.WarningCount);
             AddMax(assertions, $"stage.{stage.Stage}.errors.max", stageExpectation.MaxErrors, stage.ErrorCount);
+            stagePlans.TryGetValue(stage.Stage, out var stagePlan);
+            AddStageHealthAssertions(assertions, stageExpectation, stage, stagePlan);
+            AddStageArtifactAssertions(assertions, stageExpectation, stage);
+        }
+    }
+
+    private static void AddStageHealthAssertions(
+        List<BenchmarkAssertionResult> assertions,
+        BenchmarkStageExpectation expectation,
+        PipelineStageReport stage,
+        PipelineStagePlan? stagePlan)
+    {
+        var readiness = stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty;
+        var outputReadiness = stage.OutputReadiness ?? PipelineStageOutputReadiness.Empty;
+        var contract = stage.Contract ?? PipelineStageContract.Empty;
+        var dependencyReady = stagePlan?.IsDependencyReady ?? true;
+        var missingRequiredReads = stagePlan?.MissingRequiredReads.Count ?? 0;
+        var missingOptionalReads = stagePlan?.MissingOptionalReads.Count ?? 0;
+        var emptyDeclaredOutputs = EmptyDeclaredOutputCount(outputReadiness, stage.ArtifactDeltas);
+        var detail = StageHealthSummary(stage, stagePlan, readiness, outputReadiness, contract, emptyDeclaredOutputs);
+
+        AddRequiredBool(
+            assertions,
+            $"stage.{stage.Stage}.dependency.ready.required",
+            expectation.RequireDependencyReady,
+            dependencyReady,
+            detail);
+        AddMax(assertions, $"stage.{stage.Stage}.dependency.missing_required.max", expectation.MaxMissingRequiredReads, missingRequiredReads);
+        AddMax(assertions, $"stage.{stage.Stage}.dependency.missing_optional.max", expectation.MaxMissingOptionalReads, missingOptionalReads);
+        AddRequiredBool(
+            assertions,
+            $"stage.{stage.Stage}.runtime.required_reads_have_data.required",
+            expectation.RequireRuntimeRequiredReadsHaveData,
+            readiness.RequiredReadsHaveData,
+            detail);
+        AddRequiredBool(
+            assertions,
+            $"stage.{stage.Stage}.runtime.optional_reads_have_data.required",
+            expectation.RequireRuntimeOptionalReadsHaveData,
+            readiness.OptionalReadsHaveData,
+            detail);
+        AddMax(assertions, $"stage.{stage.Stage}.runtime.empty_required_reads.max", expectation.MaxEmptyRequiredRuntimeReads, readiness.EmptyRequiredReads.Count);
+        AddMax(assertions, $"stage.{stage.Stage}.runtime.empty_optional_reads.max", expectation.MaxEmptyOptionalRuntimeReads, readiness.EmptyOptionalReads.Count);
+        AddRequiredBool(
+            assertions,
+            $"stage.{stage.Stage}.contract.writes_only_declared.required",
+            expectation.RequireWritesOnlyDeclaredArtifacts,
+            contract.WritesOnlyDeclaredArtifacts,
+            detail);
+        AddMax(assertions, $"stage.{stage.Stage}.contract.undeclared_changed.max", expectation.MaxUndeclaredChangedArtifacts, contract.UndeclaredChangedArtifacts.Count);
+        AddMax(assertions, $"stage.{stage.Stage}.contract.empty_declared_outputs.max", expectation.MaxEmptyDeclaredOutputs, emptyDeclaredOutputs);
+    }
+
+    private static string StageHealthSummary(
+        PipelineStageReport stage,
+        PipelineStagePlan? stagePlan,
+        PipelineStageRuntimeReadiness readiness,
+        PipelineStageOutputReadiness outputReadiness,
+        PipelineStageContract contract,
+        int emptyDeclaredOutputs) =>
+        $"dependency ready {((stagePlan?.IsDependencyReady ?? true) ? "yes" : "no")}, " +
+        $"missing required reads {stagePlan?.MissingRequiredReads.Count ?? 0}, " +
+        $"missing optional reads {stagePlan?.MissingOptionalReads.Count ?? 0}, " +
+        $"empty required runtime reads {readiness.EmptyRequiredReads.Count}, " +
+        $"empty optional runtime reads {readiness.EmptyOptionalReads.Count}, " +
+        $"undeclared changed artifacts {contract.UndeclaredChangedArtifacts.Count}, " +
+        $"empty declared outputs {emptyDeclaredOutputs}, " +
+        $"declared outputs with data {outputReadiness.NonEmptyDeclaredOutputs.Count}";
+
+    private static void AddStageArtifactAssertions(
+        List<BenchmarkAssertionResult> assertions,
+        BenchmarkStageExpectation expectation,
+        PipelineStageReport stage)
+    {
+        foreach (var artifactExpectation in expectation.ArtifactExpectations.Where(item => item.Artifact != PlanArtifactKind.Unknown))
+        {
+            var artifact = artifactExpectation.Artifact;
+            var change = stage.ChangedArtifacts.FirstOrDefault(item => item.Artifact == artifact);
+            var lifecycle = stage.ArtifactDeltas.FirstOrDefault(item => item.Artifact == artifact);
+            var inputCount = SnapshotCount(stage.InputArtifacts, artifact);
+            var outputCount = SnapshotCount(stage.OutputArtifacts, artifact);
+            var beforeCount = lifecycle?.BeforeCount ?? (change is null ? inputCount ?? outputCount : change.BeforeCount);
+            var afterCount = lifecycle?.AfterCount ?? (change is null ? outputCount ?? inputCount : change.AfterCount);
+            var delta = change is null && beforeCount is not null && afterCount is not null
+                ? afterCount.Value - beforeCount.Value
+                : change?.Delta;
+            var prefix = $"stage.{stage.Stage}.artifact.{artifact}";
+            var visible = inputCount is not null || outputCount is not null || change is not null;
+
+            assertions.Add(
+                visible
+                    ? Pass(
+                        $"{prefix}.visible",
+                        "visible",
+                        ArtifactActual(beforeCount, afterCount, delta),
+                        $"Artifact '{artifact}' was visible in stage '{stage.Stage}'.")
+                    : Fail(
+                        $"{prefix}.visible",
+                        "visible",
+                        "(missing)",
+                        $"Artifact '{artifact}' was not present in stage '{stage.Stage}' snapshots or changes."));
+
+            if (!visible)
+            {
+                continue;
+            }
+
+            if (artifactExpectation.RequireChanged is { } requireChanged)
+            {
+                var wasChanged = change is not null && change.Delta != 0;
+                assertions.Add(
+                    wasChanged == requireChanged
+                        ? Pass(
+                            $"{prefix}.changed.required",
+                            requireChanged.ToString(),
+                            wasChanged.ToString(),
+                            $"Artifact '{artifact}' changed state matched expectation.")
+                        : Fail(
+                            $"{prefix}.changed.required",
+                            requireChanged.ToString(),
+                            wasChanged.ToString(),
+                            $"Artifact '{artifact}' changed state did not match expectation."));
+            }
+
+            AddNullableMin(assertions, $"{prefix}.before.min", artifactExpectation.MinBeforeCount, beforeCount, "before count");
+            AddNullableMax(assertions, $"{prefix}.before.max", artifactExpectation.MaxBeforeCount, beforeCount, "before count");
+            AddNullableMin(assertions, $"{prefix}.after.min", artifactExpectation.MinAfterCount, afterCount, "after count");
+            AddNullableMax(assertions, $"{prefix}.after.max", artifactExpectation.MaxAfterCount, afterCount, "after count");
+            AddNullableMin(assertions, $"{prefix}.delta.min", artifactExpectation.MinDelta, delta, "delta");
+            AddNullableMax(assertions, $"{prefix}.delta.max", artifactExpectation.MaxDelta, delta, "delta");
+        }
+    }
+
+    private static int EmptyDeclaredOutputCount(
+        PipelineStageOutputReadiness? outputReadiness,
+        IReadOnlyList<PipelineArtifactDelta> artifactDeltas)
+    {
+        var readiness = outputReadiness ?? PipelineStageOutputReadiness.Empty;
+        return readiness.IsAvailable
+            ? readiness.EmptyDeclaredOutputs.Count
+            : artifactDeltas.Count(delta => delta.IsEmptyDeclaredOutput);
+    }
+
+    private static void AddPipelineHealthAssertions(
+        List<BenchmarkAssertionResult> assertions,
+        BenchmarkExpectations expectations,
+        PlanScanResult result)
+    {
+        var plan = result.Diagnostics.ExecutionPlan ?? PipelineExecutionPlan.Empty;
+        var stages = result.Diagnostics.StageReports;
+        var planIssues = plan.Issues;
+        var planWarningCount = planIssues.Count(issue => issue.Severity == DiagnosticSeverity.Warning);
+        var planErrorCount = planIssues.Count(issue => issue.Severity == DiagnosticSeverity.Error);
+        var allStagesDependencyReady = plan.Stages.All(stage => stage.IsDependencyReady);
+        var allRuntimeRequiredReadsHaveData = stages.All(stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).RequiredReadsHaveData);
+        var allRuntimeOptionalReadsHaveData = stages.All(stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).OptionalReadsHaveData);
+        var totalEmptyRequiredRuntimeReads = stages.Sum(stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).EmptyRequiredReads.Count);
+        var totalEmptyOptionalRuntimeReads = stages.Sum(stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).EmptyOptionalReads.Count);
+        var allWritesOnlyDeclared = stages.All(stage => (stage.Contract ?? PipelineStageContract.Empty).WritesOnlyDeclaredArtifacts);
+        var totalUndeclaredChangedArtifacts = stages.Sum(stage => (stage.Contract ?? PipelineStageContract.Empty).UndeclaredChangedArtifacts.Count);
+        var totalEmptyDeclaredOutputs = stages.Sum(stage => EmptyDeclaredOutputCount(stage.OutputReadiness, stage.ArtifactDeltas));
+        var detail = PipelineHealthSummary(
+            plan,
+            stages,
+            totalEmptyRequiredRuntimeReads,
+            totalEmptyOptionalRuntimeReads,
+            totalUndeclaredChangedArtifacts,
+            totalEmptyDeclaredOutputs);
+
+        AddRequiredBool(
+            assertions,
+            "pipeline.dependency_ready.required",
+            expectations.RequirePipelineDependencyReady,
+            plan.IsDependencyReady,
+            detail);
+        AddMax(assertions, "pipeline.plan_issues.max", expectations.MaxPipelinePlanIssues, planIssues.Count);
+        AddMax(assertions, "pipeline.plan_warnings.max", expectations.MaxPipelinePlanWarnings, planWarningCount);
+        AddMax(assertions, "pipeline.plan_errors.max", expectations.MaxPipelinePlanErrors, planErrorCount);
+        AddRequiredBool(
+            assertions,
+            "pipeline.stages.dependency_ready.required",
+            expectations.RequireAllStagesDependencyReady,
+            allStagesDependencyReady,
+            detail);
+        AddRequiredBool(
+            assertions,
+            "pipeline.stages.runtime_required_reads_have_data.required",
+            expectations.RequireAllStagesRuntimeRequiredReadsHaveData,
+            allRuntimeRequiredReadsHaveData,
+            detail);
+        AddRequiredBool(
+            assertions,
+            "pipeline.stages.runtime_optional_reads_have_data.required",
+            expectations.RequireAllStagesRuntimeOptionalReadsHaveData,
+            allRuntimeOptionalReadsHaveData,
+            detail);
+        AddMax(assertions, "pipeline.stages.runtime_empty_required_reads.max", expectations.MaxTotalEmptyRequiredRuntimeReads, totalEmptyRequiredRuntimeReads);
+        AddMax(assertions, "pipeline.stages.runtime_empty_optional_reads.max", expectations.MaxTotalEmptyOptionalRuntimeReads, totalEmptyOptionalRuntimeReads);
+        AddRequiredBool(
+            assertions,
+            "pipeline.stages.writes_only_declared.required",
+            expectations.RequireAllStagesWriteOnlyDeclaredArtifacts,
+            allWritesOnlyDeclared,
+            detail);
+        AddMax(assertions, "pipeline.stages.undeclared_changed_artifacts.max", expectations.MaxTotalUndeclaredChangedArtifacts, totalUndeclaredChangedArtifacts);
+        AddMax(assertions, "pipeline.stages.empty_declared_outputs.max", expectations.MaxTotalEmptyDeclaredOutputs, totalEmptyDeclaredOutputs);
+    }
+
+    private static string PipelineHealthSummary(
+        PipelineExecutionPlan plan,
+        IReadOnlyList<PipelineStageReport> stages,
+        int totalEmptyRequiredRuntimeReads,
+        int totalEmptyOptionalRuntimeReads,
+        int totalUndeclaredChangedArtifacts,
+        int totalEmptyDeclaredOutputs) =>
+        $"plan issues {plan.Issues.Count}, plan errors {plan.Issues.Count(issue => issue.Severity == DiagnosticSeverity.Error)}, " +
+        $"missing dependency stages {plan.Stages.Count(stage => !stage.IsDependencyReady)}, " +
+        $"empty required runtime reads {totalEmptyRequiredRuntimeReads} ({StageList(stages, stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).HasEmptyRequiredReads)}), " +
+        $"empty optional runtime reads {totalEmptyOptionalRuntimeReads} ({StageList(stages, stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).HasEmptyOptionalReads)}), " +
+        $"undeclared changed artifacts {totalUndeclaredChangedArtifacts} ({StageList(stages, stage => !(stage.Contract ?? PipelineStageContract.Empty).WritesOnlyDeclaredArtifacts)}), " +
+        $"empty declared outputs {totalEmptyDeclaredOutputs} ({StageList(stages, stage => stage.ArtifactDeltas.Any(delta => delta.IsEmptyDeclaredOutput))})";
+
+    private static string StageList(
+        IReadOnlyList<PipelineStageReport> stages,
+        Func<PipelineStageReport, bool> predicate)
+    {
+        var names = stages
+            .Where(predicate)
+            .Select(stage => stage.Stage)
+            .Take(8)
+            .ToArray();
+        return names.Length == 0 ? "none" : string.Join(",", names);
+    }
+
+    private static int? SnapshotCount(
+        IReadOnlyList<PipelineArtifactSnapshot> snapshots,
+        PlanArtifactKind artifact)
+    {
+        var snapshot = snapshots.FirstOrDefault(item => item.Artifact == artifact);
+        return snapshot?.Count;
+    }
+
+    private static string ArtifactActual(int? beforeCount, int? afterCount, int? delta) =>
+        $"before {CountOrMissing(beforeCount)}, after {CountOrMissing(afterCount)}, delta {CountOrMissing(delta)}";
+
+    private static string CountOrMissing(int? value) =>
+        value?.ToString() ?? "(missing)";
+
+    private static void AddArtifactInventoryAssertions(
+        List<BenchmarkAssertionResult> assertions,
+        BenchmarkExpectations expectations,
+        PlanScanResult result)
+    {
+        foreach (var artifactExpectation in expectations.ArtifactExpectations.Where(item => item.Artifact != PlanArtifactKind.Unknown))
+        {
+            var artifact = artifactExpectation.Artifact;
+            var snapshot = result.Diagnostics.ArtifactInventory.FirstOrDefault(item => item.Artifact == artifact);
+            var count = snapshot?.Count;
+            var prefix = $"artifact_inventory.{artifact}";
+
+            assertions.Add(
+                snapshot is not null
+                    ? Pass(
+                        $"{prefix}.visible",
+                        "visible",
+                        count?.ToString() ?? "(missing)",
+                        $"Artifact '{artifact}' was visible in the final scan inventory.")
+                    : Fail(
+                        $"{prefix}.visible",
+                        "visible",
+                        "(missing)",
+                        $"Artifact '{artifact}' was not present in the final scan inventory."));
+
+            if (snapshot is null)
+            {
+                continue;
+            }
+
+            if (artifactExpectation.RequirePresent is { } requirePresent)
+            {
+                var isPresent = snapshot.Count > 0;
+                assertions.Add(
+                    isPresent == requirePresent
+                        ? Pass(
+                            $"{prefix}.present.required",
+                            requirePresent.ToString(),
+                            isPresent.ToString(),
+                            $"Artifact '{artifact}' presence matched expectation.")
+                        : Fail(
+                            $"{prefix}.present.required",
+                            requirePresent.ToString(),
+                            isPresent.ToString(),
+                            $"Artifact '{artifact}' presence did not match expectation."));
+            }
+
+            AddNullableMin(assertions, $"{prefix}.count.min", artifactExpectation.MinCount, count, "artifact count");
+            AddNullableMax(assertions, $"{prefix}.count.max", artifactExpectation.MaxCount, count, "artifact count");
         }
     }
 
@@ -539,6 +891,130 @@ public static class PlanBenchmarkEvaluator
         }
 
         AddImportIssueCodeAssertions(assertions, expectations, readiness);
+    }
+
+    private static void AddSourceReadinessAssertions(
+        List<BenchmarkAssertionResult> assertions,
+        BenchmarkExpectations expectations,
+        PlanScanResult result)
+    {
+        var readiness = PlanSourceReadiness.From(result.Document.Metadata.Properties);
+        var summary = SourceReadinessSummary(readiness);
+
+        AddRequiredString(assertions, "source_format.required", expectations.RequiredSourceFormat, readiness.SourceFormat, summary);
+        AddRequiredString(assertions, "source_loader.required", expectations.RequiredSourceLoader, readiness.Loader, summary);
+        AddRequiredString(assertions, "source_kind.required", expectations.RequiredSourceKind, readiness.SourceKind, summary);
+        AddRequiredString(assertions, "source_effective_kind.required", expectations.RequiredEffectiveSourceKind, readiness.EffectiveSourceKind, summary);
+        AddRequiredString(assertions, "source_ingestion_path.required", expectations.RequiredSourceIngestionPath, readiness.IngestionPath, summary);
+        AddRequiredString(assertions, "source_readiness_status.required", expectations.RequiredSourceReadinessStatus, readiness.Status, summary);
+        AddRequiredString(assertions, "source_geometry_basis.required", expectations.RequiredSourceGeometryBasis, readiness.GeometryBasis, summary);
+
+        AddRequiredBool(
+            assertions,
+            "source_vector_geometry_ready.required",
+            expectations.RequireSourceVectorGeometryReady,
+            readiness.CanUseVectorGeometry,
+            summary);
+        AddRequiredBool(
+            assertions,
+            "source_external_adapter.required",
+            expectations.RequireSourceExternalAdapter,
+            readiness.RequiresExternalAdapter,
+            summary);
+        AddRequiredBool(
+            assertions,
+            "source_ocr.required",
+            expectations.RequireSourceOcr,
+            readiness.RequiresOcr,
+            summary);
+        AddRequiredBool(
+            assertions,
+            "source_legal_adapter_backed.required",
+            expectations.RequireSourceLegalAdapterBacked,
+            readiness.IsLegalAdapterBacked,
+            summary);
+        AddRequiredBool(
+            assertions,
+            "source_dwg_derived.required",
+            expectations.RequireDwgDerivedSource,
+            readiness.IsDwgDerived,
+            summary);
+        AddRequiredBool(
+            assertions,
+            "source_raster_derived.required",
+            expectations.RequireRasterDerivedSource,
+            readiness.IsRasterDerived,
+            summary);
+
+        AddSourceEvidenceContainsAssertions(
+            assertions,
+            "source_evidence.required",
+            expectations.RequiredSourceEvidenceContains,
+            readiness.Evidence,
+            shouldBePresent: true);
+        AddSourceEvidenceContainsAssertions(
+            assertions,
+            "source_evidence.forbidden",
+            expectations.ForbiddenSourceEvidenceContains,
+            readiness.Evidence,
+            shouldBePresent: false);
+    }
+
+    private static void AddRequiredString(
+        List<BenchmarkAssertionResult> assertions,
+        string name,
+        string? expected,
+        string? actual,
+        string detail)
+    {
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            return;
+        }
+
+        var expectedClean = expected.Trim();
+        var actualClean = string.IsNullOrWhiteSpace(actual) ? string.Empty : actual.Trim();
+        assertions.Add(
+            string.Equals(actualClean, expectedClean, StringComparison.OrdinalIgnoreCase)
+                ? Pass(name, expectedClean, actualClean, $"{name} matched expectation: {detail}.")
+                : Fail(name, expectedClean, actualClean, $"{name} did not match expectation: {detail}."));
+    }
+
+    private static void AddSourceEvidenceContainsAssertions(
+        List<BenchmarkAssertionResult> assertions,
+        string assertionPrefix,
+        IReadOnlyList<string> expectations,
+        IReadOnlyList<string> evidence,
+        bool shouldBePresent)
+    {
+        var cleaned = expectations
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        for (var index = 0; index < cleaned.Length; index++)
+        {
+            var expected = cleaned[index];
+            var found = evidence.Any(item => item.Contains(expected, StringComparison.OrdinalIgnoreCase));
+            var assertionName = $"{assertionPrefix}.{index + 1}";
+            assertions.Add(
+                found == shouldBePresent
+                    ? Pass(
+                        assertionName,
+                        shouldBePresent ? $"contains {expected}" : $"does not contain {expected}",
+                        EvidenceSummary(evidence),
+                        shouldBePresent
+                            ? $"Source readiness evidence contains '{expected}'."
+                            : $"Source readiness evidence does not contain forbidden text '{expected}'.")
+                    : Fail(
+                        assertionName,
+                        shouldBePresent ? $"contains {expected}" : $"does not contain {expected}",
+                        EvidenceSummary(evidence),
+                        shouldBePresent
+                            ? $"Source readiness evidence did not contain '{expected}'."
+                            : $"Source readiness evidence contained forbidden text '{expected}'."));
+        }
     }
 
     private static void AddMinImportReadinessGrade(
@@ -1521,6 +1997,30 @@ public static class PlanBenchmarkEvaluator
                 : Fail(name, $">= {expected}", actual.ToString(), $"{name} was below minimum."));
     }
 
+    private static void AddNullableMin(
+        List<BenchmarkAssertionResult> assertions,
+        string name,
+        int? expected,
+        int? actual,
+        string label)
+    {
+        if (expected is null)
+        {
+            return;
+        }
+
+        if (actual is null)
+        {
+            assertions.Add(Fail(name, $">= {expected}", "(missing)", $"{label} was not available."));
+            return;
+        }
+
+        assertions.Add(
+            actual.Value >= expected.Value
+                ? Pass(name, $">= {expected}", actual.Value.ToString(), $"{label} met minimum.")
+                : Fail(name, $">= {expected}", actual.Value.ToString(), $"{label} was below minimum."));
+    }
+
     private static void AddMax(
         List<BenchmarkAssertionResult> assertions,
         string name,
@@ -1536,6 +2036,30 @@ public static class PlanBenchmarkEvaluator
             actual <= expected.Value
                 ? Pass(name, $"<= {expected}", actual.ToString(), $"{name} met maximum.")
                 : Fail(name, $"<= {expected}", actual.ToString(), $"{name} exceeded maximum."));
+    }
+
+    private static void AddNullableMax(
+        List<BenchmarkAssertionResult> assertions,
+        string name,
+        int? expected,
+        int? actual,
+        string label)
+    {
+        if (expected is null)
+        {
+            return;
+        }
+
+        if (actual is null)
+        {
+            assertions.Add(Fail(name, $"<= {expected}", "(missing)", $"{label} was not available."));
+            return;
+        }
+
+        assertions.Add(
+            actual.Value <= expected.Value
+                ? Pass(name, $"<= {expected}", actual.Value.ToString(), $"{label} met maximum.")
+                : Fail(name, $"<= {expected}", actual.Value.ToString(), $"{label} exceeded maximum."));
     }
 
     private static void AddMaxDuration(
@@ -1735,6 +2259,14 @@ public static class PlanBenchmarkEvaluator
 
     private static string ImportIssueSummary(PlanImportReadiness readiness) =>
         CodeSummary(readiness.BlockingIssueCodes.Concat(readiness.ReviewIssueCodes).ToArray());
+
+    private static string SourceReadinessSummary(PlanSourceReadiness readiness) =>
+        $"status {readiness.Status}, ingestion {readiness.IngestionPath}, format {readiness.SourceFormat ?? "-"}, loader {readiness.Loader ?? "-"}, vector {Ready(readiness.CanUseVectorGeometry)}, adapter {Ready(readiness.RequiresExternalAdapter)}, ocr {Ready(readiness.RequiresOcr)}";
+
+    private static string EvidenceSummary(IReadOnlyList<string> evidence) =>
+        evidence.Count == 0
+            ? "(none)"
+            : string.Join(", ", evidence.Take(8));
 
     private static string Ready(bool value) => value ? "ready" : "not ready";
 

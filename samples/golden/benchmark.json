@@ -25,11 +25,41 @@
         "minOpenings": 1,
         "minObjects": 2,
         "minObjectGroups": 1,
+        "minRoutingItems": 4,
+        "maxRoutingItems": 20,
         "maxDiagnosticErrors": 0,
+        "requirePipelineDependencyReady": true,
+        "maxPipelinePlanIssues": 0,
+        "maxPipelinePlanWarnings": 0,
+        "maxPipelinePlanErrors": 0,
+        "requireAllStagesDependencyReady": true,
+        "requireAllStagesWriteOnlyDeclaredArtifacts": true,
+        "maxTotalUndeclaredChangedArtifacts": 0,
         "minQualityGrade": "Usable",
         "minQualityConfidence": 0.65,
         "maxQualityIssues": 4,
         "maxScanRiskIssues": 0,
+        "requiredSourceFormat": "dxf",
+        "requiredSourceLoader": "DXF/IxMilia",
+        "requiredSourceKind": "Dxf",
+        "requiredEffectiveSourceKind": "Dxf",
+        "requiredSourceIngestionPath": "dxf-vector",
+        "requiredSourceReadinessStatus": "VectorGeometryReady",
+        "requiredSourceGeometryBasis": "dxf-vector-geometry",
+        "requireSourceVectorGeometryReady": true,
+        "requireSourceExternalAdapter": false,
+        "requireSourceOcr": false,
+        "requireSourceLegalAdapterBacked": true,
+        "requireDwgDerivedSource": false,
+        "requireRasterDerivedSource": false,
+        "requiredSourceEvidenceContains": [
+          "format=dxf",
+          "loader=DXF/IxMilia"
+        ],
+        "forbiddenSourceEvidenceContains": [
+          "dwg.converter",
+          "raster.extractor"
+        ],
         "forbiddenQualityIssueCodes": ["quality.scan_risk.sheet_contamination"],
         "requiresReliableCalibration": true,
         "requiredRegionKinds": ["Sheet", "MainFloorPlan"],
@@ -40,6 +70,89 @@
         "requiredObjectCategories": ["HVACEquipment", "GenericSymbol"],
         "requiredRoomLabels": ["OFFICE"],
         "requiredLayerCategories": ["Wall", "Grid", "Dimension", "Text", "HVAC"],
+        "stageExpectations": [
+          {
+            "stage": "wall-graph",
+            "maxDiagnostics": 4,
+            "maxErrors": 0,
+            "requireDependencyReady": true,
+            "maxMissingRequiredReads": 0,
+            "maxMissingOptionalReads": 0,
+            "requireRuntimeRequiredReadsHaveData": true,
+            "requireRuntimeOptionalReadsHaveData": true,
+            "maxEmptyRequiredRuntimeReads": 0,
+            "maxEmptyOptionalRuntimeReads": 0,
+            "requireWritesOnlyDeclaredArtifacts": true,
+            "maxUndeclaredChangedArtifacts": 0,
+            "maxEmptyDeclaredOutputs": 0,
+            "artifactExpectations": [
+              {
+                "artifact": "WallGraph",
+                "minAfterCount": 4,
+                "maxAfterCount": 80,
+                "minDelta": 4,
+                "maxDelta": 80,
+                "requireChanged": true
+              },
+              {
+                "artifact": "TopologySpans",
+                "minAfterCount": 1,
+                "maxAfterCount": 32,
+                "minDelta": 1,
+                "maxDelta": 32,
+                "requireChanged": true
+              }
+            ]
+          },
+          {
+            "stage": "walls",
+            "maxErrors": 0,
+            "artifactExpectations": [
+              {
+                "artifact": "SurfacePatterns",
+                "maxAfterCount": 8,
+                "maxDelta": 8
+              }
+            ]
+          },
+          {
+            "stage": "routing-layer",
+            "maxErrors": 0,
+            "artifactExpectations": [
+              {
+                "artifact": "RoutingBarriers",
+                "minAfterCount": 1,
+                "maxAfterCount": 24,
+                "minDelta": 1,
+                "maxDelta": 24,
+                "requireChanged": true
+              },
+              {
+                "artifact": "RoutingPassages",
+                "minAfterCount": 1,
+                "maxAfterCount": 8,
+                "minDelta": 1,
+                "maxDelta": 8,
+                "requireChanged": true
+              },
+              {
+                "artifact": "RoutingObstacles",
+                "maxAfterCount": 8,
+                "maxDelta": 8
+              },
+              {
+                "artifact": "RoutingRoomUseHints",
+                "maxAfterCount": 8,
+                "maxDelta": 8
+              },
+              {
+                "artifact": "RoutingIgnoredObjects",
+                "maxAfterCount": 8,
+                "maxDelta": 8
+              }
+            ]
+          }
+        ],
         "roomMetrics": {
           "minRecall": 1.0,
           "completeTruthSet": true,

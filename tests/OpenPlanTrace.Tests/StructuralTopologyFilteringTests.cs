@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace OpenPlanTrace.Tests;
 
 public sealed class StructuralTopologyFilteringTests
@@ -32,8 +34,26 @@ public sealed class StructuralTopologyFilteringTests
         Assert.Single(result.Rooms);
         Assert.DoesNotContain(result.Rooms, room => room.WallIds.Intersect(objectLikeWallIds, StringComparer.Ordinal).Any());
         Assert.Contains(result.Diagnostics.Messages, message =>
-            message.Code == "rooms.object_like_wall_components_excluded"
-            && message.Properties["excludedComponentCount"] == "1");
+            message.Code == "rooms.non_structural_wall_components_excluded"
+            && message.Properties["excludedComponentCount"] == "1"
+            && message.Properties["objectLikeIslandCount"] == "1");
+
+        using var placementJson = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(result));
+        var placementObjectLike = placementJson.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("sourcePrimitiveIds")
+                .EnumerateArray()
+                .Any(sourceId => sourceId.GetString() == "fixture-top"));
+        var reliability = placementObjectLike.GetProperty("reliability");
+        var reasons = reliability.GetProperty("reasons")
+            .EnumerateArray()
+            .Select(reason => reason.GetString())
+            .ToArray();
+
+        Assert.True(reliability.GetProperty("requiresReview").GetBoolean());
+        Assert.Contains("wall belongs to compact object-like linework component", reasons);
+        Assert.Contains("wall component excluded from structural topology", reasons);
 
         Assert.Contains(unfiltered.Rooms, room => room.WallIds.Any(objectLikeWallIds.Contains));
     }
@@ -70,10 +90,94 @@ public sealed class StructuralTopologyFilteringTests
             component => component.ExcludedFromStructuralTopology);
         Assert.DoesNotContain(result.Openings, opening => opening.HostWallIds.Intersect(objectLikeWallIds, StringComparer.Ordinal).Any());
         Assert.Contains(result.Diagnostics.Messages, message =>
-            message.Code == "openings.object_like_wall_components_excluded"
-            && message.Properties["excludedComponentCount"] == "1");
+            message.Code == "openings.non_structural_wall_components_excluded"
+            && message.Properties["excludedComponentCount"] == "1"
+            && message.Properties["objectLikeIslandCount"] == "1");
 
         Assert.Contains(unfiltered.Openings, opening => opening.HostWallIds.Intersect(objectLikeWallIds, StringComparer.Ordinal).Any());
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExcludesWeakIsolatedWallFragmentsFromStructuralSolving()
+    {
+        var document = Document(
+            "isolated-fragment-structural-filter",
+            Wall("room-top", new PlanPoint(100, 100), new PlanPoint(430, 100)),
+            Wall("room-right", new PlanPoint(430, 100), new PlanPoint(430, 320)),
+            Wall("room-bottom", new PlanPoint(430, 320), new PlanPoint(100, 320)),
+            Wall("room-left", new PlanPoint(100, 320), new PlanPoint(100, 100)),
+            Wall("detail-fragment", new PlanPoint(520, 160), new PlanPoint(590, 160)));
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            document,
+            new ScannerOptions
+            {
+                ExcludeWeakWallFragmentsFromStructuralTopology = true
+            });
+        var unfiltered = await new OpenPlanTraceScanner().ScanAsync(
+            document,
+            new ScannerOptions
+            {
+                ExcludeWeakWallFragmentsFromStructuralTopology = false
+            });
+
+        var fragment = Assert.Single(result.WallGraph.Components, component => component.Kind == WallGraphComponentKind.IsolatedFragment);
+        var unfilteredFragment = Assert.Single(unfiltered.WallGraph.Components, component => component.Kind == WallGraphComponentKind.IsolatedFragment);
+
+        Assert.True(fragment.ExcludedFromStructuralTopology);
+        Assert.False(unfilteredFragment.ExcludedFromStructuralTopology);
+        Assert.Contains("detail-fragment", fragment.SourcePrimitiveIds);
+        Assert.Contains("excluded from structural room/opening topology solving", fragment.Evidence);
+        Assert.Contains(
+            fragment.Evidence,
+            item => item.Contains("isolated wall fragment with weak topology", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics.Messages, message =>
+            message.Code == "wall_graph.weak_fragments.excluded"
+            && message.Properties["excludedIsolatedFragmentCount"] == "1");
+        Assert.Contains(result.Diagnostics.Messages, message =>
+            message.Code == "rooms.non_structural_wall_components_excluded"
+            && message.Properties["isolatedFragmentCount"] == "1"
+            && message.Properties["excludedWallCount"] == "1");
+
+        using var placementJson = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(result));
+        var placementFragment = placementJson.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("sourcePrimitiveIds")
+                .EnumerateArray()
+                .Any(sourceId => sourceId.GetString() == "detail-fragment"));
+        var reliability = placementFragment.GetProperty("reliability");
+        var reasons = reliability.GetProperty("reasons")
+            .EnumerateArray()
+            .Select(reason => reason.GetString())
+            .ToArray();
+
+        Assert.True(reliability.GetProperty("requiresReview").GetBoolean());
+        Assert.Contains("wall belongs to isolated wall graph fragment", reasons);
+        Assert.Contains("wall component excluded from structural topology", reasons);
+    }
+
+    [Fact]
+    public async Task RoutingLayer_SuppressesUnusedIsolatedWallFragmentsWhenStructuralWallsExist()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            Document(
+                "isolated-fragment-routing-filter",
+                Wall("room-top", new PlanPoint(100, 100), new PlanPoint(430, 100)),
+                Wall("room-right", new PlanPoint(430, 100), new PlanPoint(430, 320)),
+                Wall("room-bottom", new PlanPoint(430, 320), new PlanPoint(100, 320)),
+                Wall("room-left", new PlanPoint(100, 320), new PlanPoint(100, 100)),
+                Wall("detail-fragment", new PlanPoint(520, 160), new PlanPoint(590, 160))));
+
+        var detailWall = Assert.Single(result.Walls, wall => wall.SourcePrimitiveIds.Contains("detail-fragment"));
+        var fragment = Assert.Single(result.WallGraph.Components, component => component.Kind == WallGraphComponentKind.IsolatedFragment);
+
+        Assert.False(fragment.ExcludedFromStructuralTopology);
+        Assert.Contains(detailWall.Id, fragment.WallIds);
+        Assert.DoesNotContain(result.RoutingLayer.Barriers, barrier => barrier.SourceId == detailWall.Id);
+        Assert.Contains(
+            result.RoutingLayer.Evidence,
+            item => item == "unused isolated wall fragments suppressed as routing barriers: 1");
     }
 
     private static PlanDocument Document(string id, params PlanPrimitive[] primitives) =>

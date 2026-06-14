@@ -8,12 +8,35 @@ public sealed class BenchmarkManifestDraftBuilderTests
     {
         using var document = JsonDocument.Parse("""
             {
-              "schemaVersion": "openplantrace.scan.v42",
+              "schemaVersion": "openplantrace.scan.v48",
               "generatedAt": "2026-06-07T12:00:00Z",
               "document": {
                 "id": "industrial-plan",
                 "sourceName": "industrial-plan.pdf",
-                "sourcePath": "C:\\plans\\industrial-plan.pdf"
+                "sourcePath": "C:\\plans\\industrial-plan.pdf",
+                "sourceFormat": "pdf",
+                "loader": "PDF/PdfPig",
+                "sourceKind": "Pdf",
+                "effectiveSourceKind": "Pdf",
+                "isDwgDerived": false,
+                "isRasterDerived": false,
+                "ingestionPath": "pdf-vector",
+                "sourceReadiness": {
+                  "status": "VectorGeometryReady",
+                  "geometryBasis": "pdf-vector-geometry",
+                  "canUseVectorGeometry": true,
+                  "requiresExternalAdapter": false,
+                  "requiresOcr": false,
+                  "isLegalAdapterBacked": true,
+                  "messages": ["PDF vector geometry is available for deterministic scanning."],
+                  "evidence": [
+                    "format=pdf",
+                    "loader=PDF/PdfPig",
+                    "sourceKind=Pdf",
+                    "effectiveSourceKind=Pdf",
+                    "pdf.imageOnlyPageCount=0"
+                  ]
+                }
               },
               "pages": [{ "number": 1, "width": 1000, "height": 800, "primitiveCount": 50 }],
               "regions": [
@@ -325,9 +348,103 @@ public sealed class BenchmarkManifestDraftBuilderTests
                 "outlierCount": 2,
                 "dimensionScaleSpreadRatio": 2.25
               },
-              "diagnostics": {
+                "diagnostics": {
                 "warningCount": 1,
-                "errorCount": 0
+                "errorCount": 0,
+                "executionPlan": {
+                  "isDependencyReady": true,
+                  "issues": []
+                },
+                "artifactInventory": [
+                  {
+                    "artifact": "Walls",
+                    "count": 1
+                  },
+                  {
+                    "artifact": "WallGraph",
+                    "count": 3
+                  },
+                  {
+                    "artifact": "TopologySpans",
+                    "count": 1
+                  },
+                  {
+                    "artifact": "Openings",
+                    "count": 1
+                  },
+                  {
+                    "artifact": "RoutingBarriers",
+                    "count": 1
+                  },
+                  {
+                    "artifact": "Diagnostics",
+                    "count": 2
+                  },
+                  {
+                    "artifact": "SurfacePatterns",
+                    "count": 0
+                  }
+                ],
+                "stages": [
+                  {
+                    "stage": "wall-graph",
+                    "isDependencyReady": true,
+                    "missingRequiredReads": [],
+                    "missingOptionalReads": [],
+                    "diagnosticCount": 1,
+                    "warningCount": 1,
+                    "errorCount": 0,
+                    "runtimeReadiness": {
+                      "requiredReadsHaveData": true,
+                      "hasEmptyRequiredReads": false,
+                      "nonEmptyRequiredReads": ["Walls"],
+                      "emptyRequiredReads": [],
+                      "optionalReadsHaveData": true,
+                      "hasEmptyOptionalReads": false,
+                      "nonEmptyOptionalReads": [],
+                      "emptyOptionalReads": []
+                    },
+                    "contract": {
+                      "writesOnlyDeclaredArtifacts": true,
+                      "declaredWrites": ["WallGraph", "TopologySpans"],
+                      "changedArtifacts": ["WallGraph", "TopologySpans"],
+                      "undeclaredChangedArtifacts": [],
+                      "declaredUnchangedArtifacts": []
+                    },
+                    "artifactDeltas": [
+                      {
+                        "artifact": "WallGraph",
+                        "beforeCount": 0,
+                        "afterCount": 3,
+                        "delta": 3,
+                        "isDeclaredWrite": true,
+                        "isEmptyDeclaredOutput": false
+                      },
+                      {
+                        "artifact": "TopologySpans",
+                        "beforeCount": 0,
+                        "afterCount": 1,
+                        "delta": 1,
+                        "isDeclaredWrite": true,
+                        "isEmptyDeclaredOutput": false
+                      }
+                    ],
+                    "changedArtifacts": [
+                      {
+                        "artifact": "WallGraph",
+                        "beforeCount": 0,
+                        "afterCount": 3,
+                        "delta": 3
+                      },
+                      {
+                        "artifact": "TopologySpans",
+                        "beforeCount": 0,
+                        "afterCount": 1,
+                        "delta": 1
+                      }
+                    ]
+                  }
+                ]
               }
             }
             """);
@@ -348,7 +465,7 @@ public sealed class BenchmarkManifestDraftBuilderTests
         Assert.Equal("industrial-plan.pdf", fixture.Name);
         Assert.Equal("%USERPROFILE%\\Downloads\\industrial-plan.pdf", fixture.SourcePath);
         Assert.Equal("scan-json", fixture.Properties["draftedFrom"]);
-        Assert.Equal("openplantrace.scan.v42", fixture.Properties["scanSchemaVersion"]);
+        Assert.Equal("openplantrace.scan.v48", fixture.Properties["scanSchemaVersion"]);
 
         var expectations = fixture.Expectations;
         Assert.Equal(1, expectations.MinPages);
@@ -373,6 +490,18 @@ public sealed class BenchmarkManifestDraftBuilderTests
         Assert.Equal(1, expectations.MinRoutingSuppressedObjects);
         Assert.Equal(1, expectations.MaxDiagnosticWarnings);
         Assert.Equal(0, expectations.MaxDiagnosticErrors);
+        Assert.True(expectations.RequirePipelineDependencyReady);
+        Assert.Equal(0, expectations.MaxPipelinePlanIssues);
+        Assert.Equal(0, expectations.MaxPipelinePlanWarnings);
+        Assert.Equal(0, expectations.MaxPipelinePlanErrors);
+        Assert.True(expectations.RequireAllStagesDependencyReady);
+        Assert.True(expectations.RequireAllStagesRuntimeRequiredReadsHaveData);
+        Assert.True(expectations.RequireAllStagesRuntimeOptionalReadsHaveData);
+        Assert.Equal(0, expectations.MaxTotalEmptyRequiredRuntimeReads);
+        Assert.Equal(0, expectations.MaxTotalEmptyOptionalRuntimeReads);
+        Assert.True(expectations.RequireAllStagesWriteOnlyDeclaredArtifacts);
+        Assert.Equal(0, expectations.MaxTotalUndeclaredChangedArtifacts);
+        Assert.Equal(0, expectations.MaxTotalEmptyDeclaredOutputs);
         Assert.Equal(PlanScanQualityGrade.Usable, expectations.MinQualityGrade);
         Assert.Equal(0.82, expectations.MinQualityConfidence);
         Assert.Equal(2, expectations.MaxQualityIssues);
@@ -386,12 +515,76 @@ public sealed class BenchmarkManifestDraftBuilderTests
         Assert.True(expectations.RequireMetricImportReady);
         Assert.True(expectations.RequireRoutingImportReady);
         Assert.False(expectations.AllowImportReview);
+        Assert.Equal("pdf", expectations.RequiredSourceFormat);
+        Assert.Equal("PDF/PdfPig", expectations.RequiredSourceLoader);
+        Assert.Equal("Pdf", expectations.RequiredSourceKind);
+        Assert.Equal("Pdf", expectations.RequiredEffectiveSourceKind);
+        Assert.Equal("pdf-vector", expectations.RequiredSourceIngestionPath);
+        Assert.Equal("VectorGeometryReady", expectations.RequiredSourceReadinessStatus);
+        Assert.Equal("pdf-vector-geometry", expectations.RequiredSourceGeometryBasis);
+        Assert.True(expectations.RequireSourceVectorGeometryReady);
+        Assert.False(expectations.RequireSourceExternalAdapter);
+        Assert.False(expectations.RequireSourceOcr);
+        Assert.True(expectations.RequireSourceLegalAdapterBacked);
+        Assert.False(expectations.RequireDwgDerivedSource);
+        Assert.False(expectations.RequireRasterDerivedSource);
+        Assert.Contains("format=pdf", expectations.RequiredSourceEvidenceContains);
+        Assert.Contains("loader=PDF/PdfPig", expectations.RequiredSourceEvidenceContains);
+        Assert.Contains("sourceKind=Pdf", expectations.RequiredSourceEvidenceContains);
+        Assert.DoesNotContain(expectations.RequiredSourceEvidenceContains, item => item.Contains("pdf.imageOnlyPageCount", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("dwg.converter", expectations.ForbiddenSourceEvidenceContains);
+        Assert.Contains("raster.extractor", expectations.ForbiddenSourceEvidenceContains);
         Assert.True(expectations.RequiresReliableCalibration);
         Assert.Equal(5, expectations.MinMeasurementCheckedCount);
         Assert.Equal(3, expectations.MinMeasurementConsistentCount);
         Assert.Equal(2, expectations.MaxMeasurementOutlierCount);
         Assert.Equal(0.4, expectations.MaxMeasurementOutlierRatio);
         Assert.Equal(2.25, expectations.MaxMeasurementScaleSpreadRatio);
+        var stageExpectation = Assert.Single(expectations.StageExpectations);
+        Assert.Equal("wall-graph", stageExpectation.Stage);
+        Assert.Equal(9, stageExpectation.MaxDiagnostics);
+        Assert.Equal(9, stageExpectation.MaxWarnings);
+        Assert.Equal(0, stageExpectation.MaxErrors);
+        Assert.True(stageExpectation.RequireDependencyReady);
+        Assert.Equal(0, stageExpectation.MaxMissingRequiredReads);
+        Assert.Equal(0, stageExpectation.MaxMissingOptionalReads);
+        Assert.True(stageExpectation.RequireRuntimeRequiredReadsHaveData);
+        Assert.True(stageExpectation.RequireRuntimeOptionalReadsHaveData);
+        Assert.Equal(0, stageExpectation.MaxEmptyRequiredRuntimeReads);
+        Assert.Equal(0, stageExpectation.MaxEmptyOptionalRuntimeReads);
+        Assert.True(stageExpectation.RequireWritesOnlyDeclaredArtifacts);
+        Assert.Equal(0, stageExpectation.MaxUndeclaredChangedArtifacts);
+        Assert.Equal(0, stageExpectation.MaxEmptyDeclaredOutputs);
+        Assert.Contains(
+            stageExpectation.ArtifactExpectations,
+            artifact => artifact.Artifact == PlanArtifactKind.WallGraph
+                && artifact.MinAfterCount == 3
+                && artifact.MaxAfterCount == 11
+                && artifact.MinDelta == 1
+                && artifact.MaxDelta == 11
+                && artifact.RequireChanged == true);
+        Assert.Contains(
+            stageExpectation.ArtifactExpectations,
+            artifact => artifact.Artifact == PlanArtifactKind.TopologySpans
+                && artifact.MinAfterCount == 1
+                && artifact.MaxAfterCount == 9
+                && artifact.MinDelta == 1
+                && artifact.MaxDelta == 9
+                && artifact.RequireChanged == true);
+        Assert.Contains(
+            expectations.ArtifactExpectations,
+            artifact => artifact.Artifact == PlanArtifactKind.WallGraph
+                && artifact.MinCount == 3
+                && artifact.MaxCount == 11
+                && artifact.RequirePresent == true);
+        Assert.Contains(
+            expectations.ArtifactExpectations,
+            artifact => artifact.Artifact == PlanArtifactKind.Walls
+                && artifact.MinCount == 1
+                && artifact.MaxCount == 9
+                && artifact.RequirePresent == true);
+        Assert.DoesNotContain(expectations.ArtifactExpectations, artifact => artifact.Artifact == PlanArtifactKind.Diagnostics);
+        Assert.DoesNotContain(expectations.ArtifactExpectations, artifact => artifact.Artifact == PlanArtifactKind.SurfacePatterns);
 
         var regionTarget = Assert.Single(expectations.RegionMetrics.Targets);
         Assert.Equal(RegionKind.MainFloorPlan, regionTarget.RegionKind);
@@ -481,6 +674,11 @@ public sealed class BenchmarkManifestDraftBuilderTests
         Assert.Contains("\"suppressionAction\":\"UseAggregateRoomUseHint\"", manifestJson);
         Assert.Contains("\"routingObstacleKind\":\"HardObstacle\"", manifestJson);
         Assert.Contains("\"roomUseKind\":\"Parking\"", manifestJson);
+        Assert.Contains("\"artifactExpectations\"", manifestJson);
+        Assert.Contains("\"artifact\":\"WallGraph\"", manifestJson);
+        Assert.Contains("\"requirePresent\":true", manifestJson);
+        Assert.Contains("\"requiredSourceReadinessStatus\":\"VectorGeometryReady\"", manifestJson);
+        Assert.Contains("\"requiredSourceEvidenceContains\":[\"format=pdf\",\"loader=PDF/PdfPig\",\"sourceKind=Pdf\",\"effectiveSourceKind=Pdf\"]", manifestJson);
         Assert.Contains("\"sourcePrimitiveIds\":[\"region-src-1\"]", manifestJson);
     }
 
@@ -531,6 +729,11 @@ public sealed class BenchmarkManifestDraftBuilderTests
         var target = Assert.Single(fixture.Expectations.RoomMetrics.Targets);
         Assert.Equal("HIGH", target.Label);
         Assert.Null(target.Bounds);
+        Assert.Null(fixture.Expectations.RequiredSourceFormat);
+        Assert.Null(fixture.Expectations.RequiredSourceReadinessStatus);
+        Assert.Null(fixture.Expectations.RequireSourceVectorGeometryReady);
+        Assert.Empty(fixture.Expectations.RequiredSourceEvidenceContains);
+        Assert.Empty(fixture.Expectations.ForbiddenSourceEvidenceContains);
     }
 
     [Fact]

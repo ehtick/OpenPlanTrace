@@ -8,7 +8,7 @@ public static class PlanPlacementJsonSchema
     public const string CurrentSchemaVersion = PlanPlacementExport.CurrentSchemaVersion;
 
     public const string CurrentResourceName =
-        "OpenPlanTrace.Export.Schemas.openplantrace.placement.v1.schema.json";
+        "OpenPlanTrace.Export.Schemas.openplantrace.placement.v4.schema.json";
 
     public static string ReadCurrent()
     {
@@ -35,4 +35,3 @@ public static class PlanPlacementJsonSchema
                 $"Embedded OpenPlanTrace placement schema resource '{CurrentResourceName}' was not found.");
     }
 }
-

@@ -145,6 +145,67 @@ public sealed class ScanQualityTests
     }
 
     [Fact]
+    public void Analyze_FlagsRoomLinkedOpeningsWithoutSideAwareConnections()
+    {
+        var scenario = CreateTwoRoomOpeningScenario(withSideAwareLinks: false);
+        var result = CreateSyntheticResult(
+            regions: scenario.Regions,
+            walls: scenario.Walls,
+            wallGraph: scenario.WallGraph,
+            rooms: scenario.Rooms,
+            openings: scenario.Openings);
+
+        var quality = PlanScanQualityAnalyzer.Analyze(result);
+
+        var openingIssue = Assert.Single(quality.Issues, issue => issue.Code == "quality.scan_risk.opening_room_side_links_incomplete");
+        Assert.Equal("4", openingIssue.Properties["roomConnectedOpeningCount"]);
+        Assert.Equal("0", openingIssue.Properties["sideAwareConnectedOpeningCount"]);
+        Assert.Equal("0", openingIssue.Properties["sideAwareConnectedOpeningRatio"]);
+
+        var routingIssue = Assert.Single(quality.Issues, issue => issue.Code == "quality.scan_risk.routing_passage_room_side_links_incomplete");
+        Assert.Equal("4", routingIssue.Properties["roomLinkedRoutingPassageCount"]);
+        Assert.Equal("0", routingIssue.Properties["sideAwareRoutingPassageCount"]);
+
+        var readiness = PlanImportReadiness.FromScanResult(result with { Quality = quality });
+
+        Assert.True(readiness.ReadyForGeometryImport);
+        Assert.True(readiness.ReadyForRoutingImport);
+        Assert.True(readiness.RequiresReview);
+        Assert.Equal("ReviewRequired", readiness.Grade);
+        Assert.Contains("quality.scan_risk.opening_room_side_links_incomplete", readiness.ReviewIssueCodes);
+        Assert.Contains("quality.scan_risk.routing_passage_room_side_links_incomplete", readiness.ReviewIssueCodes);
+        Assert.Contains(
+            readiness.RecommendedActions,
+            action => action.Contains("room-side links", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Analyze_AcceptsRoomLinkedOpeningsWithSideAwareConnections()
+    {
+        var scenario = CreateTwoRoomOpeningScenario(withSideAwareLinks: true);
+        var result = CreateSyntheticResult(
+            regions: scenario.Regions,
+            walls: scenario.Walls,
+            wallGraph: scenario.WallGraph,
+            rooms: scenario.Rooms,
+            openings: scenario.Openings);
+
+        var quality = PlanScanQualityAnalyzer.Analyze(result);
+        var openingDetector = Assert.Single(quality.Detectors, detector => detector.Name == "openings");
+
+        Assert.DoesNotContain(quality.Issues, issue => issue.Code == "quality.scan_risk.opening_room_side_links_incomplete");
+        Assert.DoesNotContain(quality.Issues, issue => issue.Code == "quality.scan_risk.routing_passage_room_side_links_incomplete");
+        Assert.Equal(0, openingDetector.ReviewRequiredCount);
+
+        var readiness = PlanImportReadiness.FromScanResult(result with { Quality = quality });
+
+        Assert.True(readiness.ReadyForGeometryImport);
+        Assert.True(readiness.ReadyForRoutingImport);
+        Assert.False(readiness.RequiresReview);
+        Assert.Empty(readiness.ReviewIssueCodes);
+    }
+
+    [Fact]
     public void Analyze_DoesNotFlagFullyCoveredMinorWallGraphIslandsAsFragmentedRisk()
     {
         var walls = Enumerable.Range(0, 10)
@@ -559,7 +620,10 @@ public sealed class ScanQualityTests
             root.GetProperty("walls").EnumerateArray(),
             wall => wall.GetProperty("id").GetString() == "object-wall-1"
                 && wall.GetProperty("excludedFromStructuralTopology").GetBoolean()
-                && !wall.GetProperty("reliability").GetProperty("requiresReview").GetBoolean());
+                && wall.GetProperty("reliability").GetProperty("requiresReview").GetBoolean()
+                && wall.GetProperty("reliability").GetProperty("reasons")
+                    .EnumerateArray()
+                    .Any(reason => reason.GetString() == "wall belongs to compact object-like linework component"));
     }
 
     [Fact]
@@ -888,6 +952,174 @@ public sealed class ScanQualityTests
             }
         };
 
+    private static TwoRoomOpeningScenario CreateTwoRoomOpeningScenario(bool withSideAwareLinks)
+    {
+        var regions = new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 600, 400), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(0, 0, 600, 400), Confidence.High)
+        };
+        var walls = new[]
+        {
+            SyntheticWall("w1", 100, 100, 250, 100),
+            SyntheticWall("w2", 250, 100, 250, 250),
+            SyntheticWall("w3", 250, 250, 100, 250),
+            SyntheticWall("w4", 100, 250, 100, 100),
+            SyntheticWall("w5", 260, 100, 410, 100),
+            SyntheticWall("w6", 410, 100, 410, 250),
+            SyntheticWall("w7", 410, 250, 260, 250),
+            SyntheticWall("w8", 260, 250, 260, 100)
+        };
+        var wallGraph = new WallGraph(
+            [
+                SyntheticNode("n1", 100, 100),
+                SyntheticNode("n2", 250, 100),
+                SyntheticNode("n3", 250, 250),
+                SyntheticNode("n4", 100, 250),
+                SyntheticNode("n5", 260, 100),
+                SyntheticNode("n6", 410, 100),
+                SyntheticNode("n7", 410, 250),
+                SyntheticNode("n8", 260, 250)
+            ],
+            [
+                SyntheticEdge("e1", "n1", "n2", "w1"),
+                SyntheticEdge("e2", "n2", "n3", "w2"),
+                SyntheticEdge("e3", "n3", "n4", "w3"),
+                SyntheticEdge("e4", "n4", "n1", "w4"),
+                SyntheticEdge("e5", "n5", "n6", "w5"),
+                SyntheticEdge("e6", "n6", "n7", "w6"),
+                SyntheticEdge("e7", "n7", "n8", "w7"),
+                SyntheticEdge("e8", "n8", "n5", "w8")
+            ]);
+        var rooms = new[]
+        {
+            SyntheticRoom("r1", new PlanRect(105, 105, 140, 140), ["w1", "w2", "w3", "w4"]),
+            SyntheticRoom("r2", new PlanRect(265, 105, 140, 140), ["w5", "w6", "w7", "w8"])
+        };
+        var openings = Enumerable.Range(0, 4)
+            .Select(index => SyntheticRoomLinkedOpening(index + 1, withSideAwareLinks))
+            .ToArray();
+
+        return new TwoRoomOpeningScenario(regions, walls, wallGraph, rooms, openings);
+    }
+
+    private static OpeningCandidate SyntheticRoomLinkedOpening(int index, bool withSideAwareLinks)
+    {
+        var y = 118 + (index * 28);
+        var centerLine = new PlanLineSegment(new PlanPoint(250, y), new PlanPoint(250, y + 18));
+        var midpoint = centerLine.Midpoint;
+        var adjacencyId = $"adjacency:o{index}:r1-r2";
+        var links = withSideAwareLinks
+            ? new[]
+            {
+                SyntheticRoomConnection(
+                    "r1",
+                    "R1",
+                    adjacencyId,
+                    OpeningRoomSide.NegativeNormalSide,
+                    midpoint.Translate(-18, 0),
+                    midpoint,
+                    -18),
+                SyntheticRoomConnection(
+                    "r2",
+                    "R2",
+                    adjacencyId,
+                    OpeningRoomSide.PositiveNormalSide,
+                    midpoint.Translate(18, 0),
+                    midpoint,
+                    18)
+            }
+            : Array.Empty<OpeningRoomConnection>();
+
+        return new OpeningCandidate(
+            $"o{index}",
+            1,
+            OpeningType.Door,
+            new PlanRect(244, y, 12, 18),
+            Confidence.High)
+        {
+            WallId = "w2",
+            AdjacentWallIds = ["w2", "w8"],
+            HostWallIds = ["w2"],
+            ConnectedRoomIds = ["r1", "r2"],
+            ConnectedRoomLabels = ["R1", "R2"],
+            ConnectedRoomLinks = links,
+            RoomAdjacencyIds = [adjacencyId],
+            CenterLine = centerLine,
+            Orientation = OpeningOrientation.Vertical,
+            Operation = OpeningOperation.PassThrough,
+            Placement = SyntheticPlacement("w2", centerLine),
+            SourcePrimitiveIds = [$"opening-source-{index}"],
+            Evidence = ["synthetic room-linked opening"],
+            WidthMillimeters = 900,
+            MeasurementScaleGroupId = "document:scale-group:1"
+        };
+    }
+
+    private static OpeningRoomConnection SyntheticRoomConnection(
+        string roomId,
+        string roomLabel,
+        string adjacencyId,
+        OpeningRoomSide side,
+        PlanPoint roomSidePoint,
+        PlanPoint nearestBoundaryPoint,
+        double signedDistance) =>
+        new(
+            roomId,
+            roomLabel,
+            RoomUseKind.Unknown,
+            [adjacencyId],
+            side,
+            roomSidePoint,
+            nearestBoundaryPoint,
+            signedDistance,
+            Math.Abs(signedDistance),
+            true,
+            Confidence.High,
+            ["synthetic side-aware opening-room connection"]);
+
+    private static OpeningPlacement SyntheticPlacement(string hostWallId, PlanLineSegment openingLine)
+    {
+        var referenceLine = new PlanLineSegment(new PlanPoint(250, 100), new PlanPoint(250, 250));
+        var startOffset = referenceLine.Start.DistanceTo(openingLine.Start);
+        var endOffset = referenceLine.Start.DistanceTo(openingLine.End);
+        var centerOffset = referenceLine.Start.DistanceTo(openingLine.Midpoint);
+        var footprint = openingLine.Bounds.Inflate(4);
+        return new OpeningPlacement(
+            hostWallId,
+            [hostWallId],
+            referenceLine,
+            openingLine.Start,
+            openingLine.End,
+            startOffset,
+            endOffset,
+            centerOffset,
+            openingLine.Length,
+            footprint,
+            [
+                new PlanPoint(footprint.Left, footprint.Top),
+                new PlanPoint(footprint.Right, footprint.Top),
+                new PlanPoint(footprint.Right, footprint.Bottom),
+                new PlanPoint(footprint.Left, footprint.Bottom)
+            ],
+            new PlanLineSegment(openingLine.Start.Translate(-4, 0), openingLine.Start.Translate(4, 0)),
+            new PlanLineSegment(openingLine.End.Translate(-4, 0), openingLine.End.Translate(4, 0)),
+            8,
+            8,
+            startOffset,
+            endOffset,
+            centerOffset,
+            openingLine.Length,
+            Math.Clamp(startOffset / referenceLine.Length, 0, 1),
+            Math.Clamp(endOffset / referenceLine.Length, 0, 1),
+            Math.Clamp(centerOffset / referenceLine.Length, 0, 1),
+            new PlanVector(0, 1),
+            new PlanVector(1, 0),
+            0,
+            Confidence.High,
+            ["synthetic opening placement"]);
+    }
+
     private static PlanScanResult CreateSyntheticResult(
         IReadOnlyList<SheetRegion>? regions = null,
         IReadOnlyList<WallSegment>? walls = null,
@@ -1028,4 +1260,11 @@ public sealed class ScanQualityTests
             Evidence = ["synthetic room boundary"],
             Label = id.ToUpperInvariant()
         };
+
+    private sealed record TwoRoomOpeningScenario(
+        IReadOnlyList<SheetRegion> Regions,
+        IReadOnlyList<WallSegment> Walls,
+        WallGraph WallGraph,
+        IReadOnlyList<RoomRegion> Rooms,
+        IReadOnlyList<OpeningCandidate> Openings);
 }

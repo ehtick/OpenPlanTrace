@@ -12,17 +12,42 @@ public enum WallGraphRepairAction
     SnapEndpointToEndpoint
 }
 
+public enum WallGraphRepairSeverity
+{
+    Low,
+    Medium,
+    High
+}
+
+public enum WallGraphRepairImportImpact
+{
+    TopologyReviewRequired,
+    TopologyImportBlocked
+}
+
+public enum WallGraphRepairApplicability
+{
+    ReviewAndApplySuggestedSnap,
+    ManualCorrectionRecommended
+}
+
 public sealed record WallGraphRepairCandidate(
     string Id,
     int PageNumber,
     WallGraphRepairCandidateKind Kind,
     WallGraphRepairAction SuggestedAction,
+    WallGraphRepairSeverity Severity,
+    WallGraphRepairImportImpact ImportImpact,
+    WallGraphRepairApplicability Applicability,
     string SourceNodeId,
     PlanPoint SourcePoint,
     PlanPoint TargetPoint,
     string? TargetNodeId,
     string? HostWallId,
     double GapDistance,
+    double SafeSnapDistance,
+    double ReviewDistanceLimit,
+    double ExcessDistanceBeyondSafeSnap,
     PlanLineSegment RepairLine,
     PlanRect Bounds,
     IReadOnlyList<string> WallIds,

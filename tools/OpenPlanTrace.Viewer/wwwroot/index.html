@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenPlanTrace Viewer</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23191a1f'/%3E%3Ctext x='16' y='20' text-anchor='middle' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='white'%3EOPT%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./styles.css?v=49">
 </head>
 <body>
   <main class="app-shell">
@@ -13,14 +14,14 @@
         <div class="mark">OPT</div>
         <div>
           <h1>OpenPlanTrace</h1>
-          <p>PDF, placement, scan, benchmark, and comparison viewer</p>
+          <p>PDF, placement, scan, snapshot, benchmark, and comparison viewer</p>
         </div>
       </header>
 
       <label class="drop-zone" for="pdfInput" id="dropZone">
         <input id="pdfInput" type="file" accept="application/pdf,application/json,.pdf,.json,.jsonl,image/png,image/jpeg,image/webp" multiple>
         <span class="drop-icon">+</span>
-        <span class="drop-title">Drop PDF, placement JSON, scan JSON, benchmark/comparison JSON, or Kvemo JSONL</span>
+        <span class="drop-title">Drop PDF, placement JSON, scan JSON, visual snapshot JSON, benchmark/comparison JSON, or Kvemo JSONL</span>
         <span class="drop-meta" id="fileMeta">No file selected</span>
       </label>
 
@@ -32,7 +33,7 @@
         <label><input type="checkbox" data-layer="gridBays"> Grid bays</label>
         <label><input type="checkbox" data-layer="annotations" checked> Annotations</label>
         <label><input type="checkbox" data-layer="wallComponents"> Wall components</label>
-        <label><input type="checkbox" data-layer="walls" checked> Walls</label>
+        <label><input type="checkbox" data-layer="walls"> Walls</label>
         <label><input type="checkbox" data-layer="nodes"> Nodes</label>
         <label><input type="checkbox" data-layer="rooms" checked> Rooms</label>
         <label><input type="checkbox" data-layer="roomClusters"> Room clusters</label>
@@ -45,7 +46,7 @@
         <label><input type="checkbox" data-layer="wallGraphGaps"> Wall graph gaps</label>
         <label><input type="checkbox" data-layer="wallGraphRepairs"> Wall repairs</label>
         <label><input type="checkbox" data-layer="reviewQueue"> Scan review queue</label>
-        <label><input type="checkbox" data-layer="routingLayer"> Routing layer</label>
+        <label><input type="checkbox" data-layer="routingLayer" checked> Trusted routing layer</label>
         <label><input type="checkbox" data-layer="objects"> Objects</label>
         <label><input type="checkbox" data-layer="benchmarkTargets"> Benchmark targets</label>
         <label><input type="checkbox" data-layer="compare"> Compare deltas</label>
@@ -132,6 +133,7 @@
         <button class="active" type="button" role="tab" aria-selected="true" aria-controls="tabVisualizer" data-workspace-tab="visualizer">Visualizer</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="tabAi" data-workspace-tab="ai">AI</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="tabGeneral" data-workspace-tab="general">General</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="tabPipeline" data-workspace-tab="pipeline">Pipeline</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="tabAdvanced" data-workspace-tab="advanced">Advanced</button>
       </div>
 
@@ -139,7 +141,7 @@
         <section class="workspace-panel visualizer-panel active" id="tabVisualizer" role="tabpanel">
           <div class="canvas-stage" id="stage">
             <div class="empty-state" id="emptyState">
-              <strong>Select a PDF, placement JSON, or scan JSON</strong>
+              <strong>Select a PDF, placement JSON, scan JSON, or visual snapshot JSON</strong>
               <span>The scan overlay will appear here.</span>
             </div>
             <div class="page-frame" id="pageFrame">
@@ -156,6 +158,10 @@
 
         <div class="workspace-panel" id="tabGeneral" role="tabpanel" hidden>
           <div id="generalTabDetails" class="tab-dashboard"></div>
+        </div>
+
+        <div class="workspace-panel" id="tabPipeline" role="tabpanel" hidden>
+          <div id="pipelineTabDetails" class="tab-dashboard"></div>
         </div>
 
         <div class="workspace-panel" id="tabAdvanced" role="tabpanel" hidden>

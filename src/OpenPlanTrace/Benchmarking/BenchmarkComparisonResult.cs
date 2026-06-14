@@ -179,6 +179,14 @@ public sealed record BenchmarkComparisonResult(
             AddDetectorMetricSignals(fixtureId, baseline, candidate, options, caseSignals);
             AddDiagnosticSignals(fixtureId, baseline, candidate, caseSignals);
             AddDurationSignals(fixtureId, baseline, candidate, options, caseSignals);
+            AddFinalArtifactInventorySignals(fixtureId, baseline, candidate, options, caseSignals);
+            AddArtifactPlanSignals(fixtureId, baseline, candidate, caseSignals);
+            AddPipelineHealthSignals(fixtureId, baseline, candidate, options, caseSignals);
+            AddPipelinePlanIssueSignals(fixtureId, baseline, candidate, caseSignals);
+            AddRerunPlanSignals(fixtureId, baseline, candidate, options, caseSignals);
+            AddStageArtifactSignals(fixtureId, baseline, candidate, options, caseSignals);
+            AddStageRuntimeReadinessSignals(fixtureId, baseline, candidate, options, caseSignals);
+            AddStageContractSignals(fixtureId, baseline, candidate, options, caseSignals);
         }
 
         var durationDelta = candidate.DurationMilliseconds - baseline.DurationMilliseconds;
@@ -776,6 +784,882 @@ public sealed record BenchmarkComparisonResult(
         }
     }
 
+    private static void AddStageArtifactSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselineArtifacts = StageArtifacts(baseline);
+        var candidateArtifacts = StageArtifacts(candidate);
+        var keys = baselineArtifacts.Keys
+            .Concat(candidateArtifacts.Keys)
+            .Where(key => IsNoiseSensitiveStageArtifact(key.Artifact))
+            .Distinct()
+            .OrderBy(key => key.Stage, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key.Artifact.ToString(), StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var key in keys)
+        {
+            baselineArtifacts.TryGetValue(key, out var baselineArtifact);
+            candidateArtifacts.TryGetValue(key, out var candidateArtifact);
+            AddStageArtifactGrowthSignal(
+                fixtureId,
+                key,
+                "after",
+                baselineArtifact?.AfterCount,
+                candidateArtifact?.AfterCount,
+                options,
+                signals);
+            AddStageArtifactGrowthSignal(
+                fixtureId,
+                key,
+                "delta",
+                baselineArtifact?.Delta,
+                candidateArtifact?.Delta,
+                options,
+                signals);
+        }
+    }
+
+    private static void AddFinalArtifactInventorySignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselineArtifacts = FinalArtifactStates(baseline);
+        var candidateArtifacts = FinalArtifactStates(candidate);
+        var artifacts = baselineArtifacts.Keys
+            .Concat(candidateArtifacts.Keys)
+            .Where(IsComparedFinalArtifact)
+            .Distinct()
+            .OrderBy(artifact => artifact.ToString(), StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var artifact in artifacts)
+        {
+            baselineArtifacts.TryGetValue(artifact, out var baselineCount);
+            candidateArtifacts.TryGetValue(artifact, out var candidateCount);
+            AddFinalArtifactInventorySignal(
+                fixtureId,
+                artifact,
+                baselineCount?.Count ?? 0,
+                candidateCount?.Count ?? 0,
+                options,
+                signals);
+            AddFinalArtifactStateSignal(
+                fixtureId,
+                artifact,
+                baselineCount,
+                candidateCount,
+                signals);
+        }
+    }
+
+    private static void AddFinalArtifactInventorySignal(
+        string fixtureId,
+        PlanArtifactKind artifact,
+        int baseline,
+        int candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var delta = candidate - baseline;
+        var ratio = baseline > 0
+            ? candidate / (double)baseline
+            : candidate > 0
+                ? double.PositiveInfinity
+                : 1.0;
+        var codeSuffix = CleanDetectorCode(artifact.ToString());
+        var baselineText = FinalArtifactText(artifact, baseline);
+        var candidateText = FinalArtifactText(artifact, candidate);
+
+        if (IsCriticalFinalArtifact(artifact))
+        {
+            if (baseline > 0 && candidate == 0)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_inventory.missing.{codeSuffix}",
+                    $"Candidate final artifact inventory lost required downstream artifact {artifact}.",
+                    baselineText,
+                    candidateText));
+                return;
+            }
+
+            if (baseline == 0 && candidate > 0)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"artifact_inventory.present.{codeSuffix}",
+                    $"Candidate final artifact inventory gained downstream artifact {artifact}.",
+                    baselineText,
+                    candidateText));
+                return;
+            }
+
+            if (-delta >= options.FinalArtifactRegressionMinimumDelta
+                && baseline > 0
+                && ratio <= 1.0 / options.FinalArtifactRegressionRatio)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_inventory.shrink.{codeSuffix}",
+                    $"Candidate final artifact inventory for {artifact} shrank beyond the configured downstream-data threshold.",
+                    baselineText,
+                    candidateText));
+            }
+        }
+
+        if (IsExplosionSensitiveFinalArtifact(artifact)
+            && delta >= options.FinalArtifactRegressionMinimumDelta
+            && (baseline == 0 || ratio >= options.FinalArtifactRegressionRatio))
+        {
+            signals.Add(Regression(
+                fixtureId,
+                $"artifact_inventory.growth.{codeSuffix}",
+                $"Candidate final artifact inventory for {artifact} grew beyond the configured noise threshold.",
+                baselineText,
+                candidateText));
+        }
+        else if (IsNoiseReducibleFinalArtifact(artifact)
+                 && -delta >= options.FinalArtifactRegressionMinimumDelta
+                 && baseline > 0
+                 && ratio <= 1.0 / options.FinalArtifactRegressionRatio)
+        {
+            signals.Add(Improvement(
+                fixtureId,
+                $"artifact_inventory.shrink.{codeSuffix}",
+                $"Candidate final artifact inventory for {artifact} shrank beyond the configured noise threshold.",
+                baselineText,
+                candidateText));
+        }
+    }
+
+    private static void AddFinalArtifactStateSignal(
+        string fixtureId,
+        PlanArtifactKind artifact,
+        ArtifactStateMetric? baseline,
+        ArtifactStateMetric? candidate,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        if (baseline is null || candidate is null)
+        {
+            return;
+        }
+
+        if (baseline.Count != candidate.Count)
+        {
+            return;
+        }
+
+        if (string.Equals(baseline.StateKey, candidate.StateKey, StringComparison.Ordinal)
+            && baseline.Revision == candidate.Revision)
+        {
+            return;
+        }
+
+        signals.Add(Info(
+            fixtureId,
+            $"artifact_inventory.state_key.{CleanDetectorCode(artifact.ToString())}",
+            $"Candidate final artifact inventory state changed for {artifact} while the count stayed the same.",
+            FinalArtifactStateText(artifact, baseline),
+            FinalArtifactStateText(artifact, candidate)));
+    }
+
+    private static void AddArtifactPlanSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselinePlans = ArtifactPlans(baseline);
+        var candidatePlans = ArtifactPlans(candidate);
+        var artifacts = baselinePlans.Keys
+            .Concat(candidatePlans.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var artifact in artifacts)
+        {
+            baselinePlans.TryGetValue(artifact, out var baselinePlan);
+            candidatePlans.TryGetValue(artifact, out var candidatePlan);
+            var codeSuffix = CleanDetectorCode(artifact);
+            if (baselinePlan is null)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"artifact_plan.added.{codeSuffix}",
+                    "Candidate exposes a new artifact dependency plan.",
+                    null,
+                    ArtifactPlanText(candidatePlan)));
+                continue;
+            }
+
+            if (candidatePlan is null)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_plan.removed.{codeSuffix}",
+                    "Candidate is missing an artifact dependency plan that existed in the baseline.",
+                    ArtifactPlanText(baselinePlan),
+                    null));
+                continue;
+            }
+
+            var important = IsImportantArtifactPlan(baselinePlan) || IsImportantArtifactPlan(candidatePlan);
+            if (baselinePlan.IsProducedByStage && !candidatePlan.IsProducedByStage)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_plan.producer_lost.{codeSuffix}",
+                    "Candidate artifact plan lost its stage producer.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+            else if (!baselinePlan.IsProducedByStage && candidatePlan.IsProducedByStage)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"artifact_plan.producer_gained.{codeSuffix}",
+                    "Candidate artifact plan gained a stage producer.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+
+            if (important && baselinePlan.RequiredConsumerStages.Count > candidatePlan.RequiredConsumerStages.Count)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_plan.required_consumers_lost.{codeSuffix}",
+                    "Candidate artifact plan lost required downstream consumers.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+            else if (important && baselinePlan.RequiredConsumerStages.Count < candidatePlan.RequiredConsumerStages.Count)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"artifact_plan.required_consumers_gained.{codeSuffix}",
+                    "Candidate artifact plan gained required downstream consumers.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+
+            if (important && !baselinePlan.IsTerminalArtifact && candidatePlan.IsTerminalArtifact)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_plan.terminal.{codeSuffix}",
+                    "Candidate made an important artifact terminal in the pipeline graph.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+            else if (important && baselinePlan.IsTerminalArtifact && !candidatePlan.IsTerminalArtifact)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"artifact_plan.no_longer_terminal.{codeSuffix}",
+                    "Candidate connects a previously terminal artifact to downstream consumers.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+
+            if (!baselinePlan.HasMultipleProducers && candidatePlan.HasMultipleProducers)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"artifact_plan.multiple_producers.{codeSuffix}",
+                    "Candidate introduced multiple producers for one artifact, which weakens ownership clarity.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+            else if (baselinePlan.HasMultipleProducers && !candidatePlan.HasMultipleProducers)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"artifact_plan.single_producer.{codeSuffix}",
+                    "Candidate resolved multiple producers for one artifact.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+
+            if (!string.Equals(baselinePlan.DependencyRole, candidatePlan.DependencyRole, StringComparison.Ordinal))
+            {
+                signals.Add(Info(
+                    fixtureId,
+                    $"artifact_plan.role.{codeSuffix}",
+                    "Candidate artifact dependency role changed.",
+                    ArtifactPlanText(baselinePlan),
+                    ArtifactPlanText(candidatePlan)));
+            }
+        }
+    }
+
+    private static void AddStageArtifactGrowthSignal(
+        string fixtureId,
+        StageArtifactKey key,
+        string metric,
+        int? baseline,
+        int? candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        if (baseline is null || candidate is null || baseline.Value < 0 || candidate.Value < 0)
+        {
+            return;
+        }
+
+        var delta = candidate.Value - baseline.Value;
+        var ratio = baseline.Value > 0
+            ? candidate.Value / (double)baseline.Value
+            : candidate.Value > 0
+                ? double.PositiveInfinity
+                : 1.0;
+        var code = $"stage_artifact.{metric}.{CleanDetectorCode(key.Stage)}.{CleanDetectorCode(key.Artifact.ToString())}";
+        var label = $"{key.Stage}/{key.Artifact} {metric}";
+
+        if (delta >= options.StageArtifactRegressionMinimumDelta
+            && (baseline.Value == 0 || ratio >= options.StageArtifactRegressionRatio))
+        {
+            signals.Add(Regression(
+                fixtureId,
+                code,
+                $"Candidate stage artifact {label} grew beyond the configured noise threshold.",
+                StageArtifactMetricText(key, metric, baseline.Value),
+                StageArtifactMetricText(key, metric, candidate.Value)));
+        }
+        else if (-delta >= options.StageArtifactRegressionMinimumDelta
+                 && baseline.Value > 0
+                 && ratio <= 1.0 / options.StageArtifactRegressionRatio)
+        {
+            signals.Add(Improvement(
+                fixtureId,
+                code,
+                $"Candidate stage artifact {label} shrank beyond the configured noise threshold.",
+                StageArtifactMetricText(key, metric, baseline.Value),
+                StageArtifactMetricText(key, metric, candidate.Value)));
+        }
+    }
+
+    private static void AddStageRuntimeReadinessSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselineReadiness = StageRuntimeReadiness(baseline);
+        var candidateReadiness = StageRuntimeReadiness(candidate);
+        var stages = baselineReadiness.Keys
+            .Concat(candidateReadiness.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var stage in stages)
+        {
+            baselineReadiness.TryGetValue(stage, out var baselineStage);
+            candidateReadiness.TryGetValue(stage, out var candidateStage);
+            AddStageRuntimeReadinessSignal(
+                fixtureId,
+                stage,
+                "empty_required_reads",
+                baselineStage?.EmptyRequiredReadCount,
+                candidateStage?.EmptyRequiredReadCount,
+                options.StageRuntimeEmptyRequiredReadRegressionMinimumDelta,
+                "Candidate stage has more empty required runtime reads.",
+                "Candidate stage has fewer empty required runtime reads.",
+                signals);
+            AddStageRuntimeReadinessSignal(
+                fixtureId,
+                stage,
+                "empty_optional_reads",
+                baselineStage?.EmptyOptionalReadCount,
+                candidateStage?.EmptyOptionalReadCount,
+                options.StageRuntimeEmptyOptionalReadRegressionMinimumDelta,
+                "Candidate stage has more empty optional runtime reads.",
+                "Candidate stage has fewer empty optional runtime reads.",
+                signals);
+        }
+    }
+
+    private static void AddPipelineHealthSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselineHealth = PipelineHealth(baseline);
+        var candidateHealth = PipelineHealth(candidate);
+        if (baselineHealth is null || candidateHealth is null)
+        {
+            return;
+        }
+
+        AddPipelineHealthSignal(
+            fixtureId,
+            "not_dependency_ready_stages",
+            baselineHealth.NotDependencyReadyStageCount,
+            candidateHealth.NotDependencyReadyStageCount,
+            1,
+            "Candidate has more dependency-not-ready pipeline stages.",
+            "Candidate has fewer dependency-not-ready pipeline stages.",
+            signals);
+        AddPipelineHealthSignal(
+            fixtureId,
+            "empty_required_runtime_reads",
+            baselineHealth.EmptyRequiredReadCount,
+            candidateHealth.EmptyRequiredReadCount,
+            options.StageRuntimeEmptyRequiredReadRegressionMinimumDelta,
+            "Candidate has more empty required runtime reads across the pipeline.",
+            "Candidate has fewer empty required runtime reads across the pipeline.",
+            signals);
+        AddPipelineHealthSignal(
+            fixtureId,
+            "empty_optional_runtime_reads",
+            baselineHealth.EmptyOptionalReadCount,
+            candidateHealth.EmptyOptionalReadCount,
+            options.StageRuntimeEmptyOptionalReadRegressionMinimumDelta,
+            "Candidate has more empty optional runtime reads across the pipeline.",
+            "Candidate has fewer empty optional runtime reads across the pipeline.",
+            signals);
+        AddPipelineHealthSignal(
+            fixtureId,
+            "contract_violation_stages",
+            baselineHealth.ContractViolationStageCount,
+            candidateHealth.ContractViolationStageCount,
+            1,
+            "Candidate has more stages changing undeclared artifacts.",
+            "Candidate has fewer stages changing undeclared artifacts.",
+            signals);
+        AddPipelineHealthSignal(
+            fixtureId,
+            "undeclared_changed_artifacts",
+            baselineHealth.UndeclaredChangedArtifactCount,
+            candidateHealth.UndeclaredChangedArtifactCount,
+            options.StageContractUndeclaredChangeRegressionMinimumDelta,
+            "Candidate has more undeclared changed artifacts across the pipeline.",
+            "Candidate has fewer undeclared changed artifacts across the pipeline.",
+            signals);
+        AddPipelineHealthSignal(
+            fixtureId,
+            "empty_declared_outputs",
+            baselineHealth.EmptyDeclaredOutputCount,
+            candidateHealth.EmptyDeclaredOutputCount,
+            options.StageContractEmptyDeclaredOutputRegressionMinimumDelta,
+            "Candidate has more empty declared stage outputs across the pipeline.",
+            "Candidate has fewer empty declared stage outputs across the pipeline.",
+            signals);
+    }
+
+    private static void AddPipelineHealthSignal(
+        string fixtureId,
+        string metric,
+        int baseline,
+        int candidate,
+        int threshold,
+        string regressionMessage,
+        string improvementMessage,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var effectiveThreshold = Math.Max(1, threshold);
+        var delta = candidate - baseline;
+        var code = $"pipeline_health.{metric}";
+        if (delta >= effectiveThreshold)
+        {
+            signals.Add(Regression(
+                fixtureId,
+                code,
+                regressionMessage,
+                PipelineHealthText(metric, baseline),
+                PipelineHealthText(metric, candidate)));
+        }
+        else if (-delta >= effectiveThreshold)
+        {
+            signals.Add(Improvement(
+                fixtureId,
+                code,
+                improvementMessage,
+                PipelineHealthText(metric, baseline),
+                PipelineHealthText(metric, candidate)));
+        }
+    }
+
+    private static void AddPipelinePlanIssueSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselineIssues = PipelinePlanIssues(baseline);
+        var candidateIssues = PipelinePlanIssues(candidate);
+        var keys = baselineIssues.Keys
+            .Concat(candidateIssues.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var key in keys)
+        {
+            baselineIssues.TryGetValue(key, out var baselineIssue);
+            candidateIssues.TryGetValue(key, out var candidateIssue);
+            var codeSuffix = CleanDetectorCode(key);
+            if (baselineIssue is null)
+            {
+                signals.Add(new BenchmarkComparisonSignal(
+                    fixtureId,
+                    $"pipeline_plan_issue.added.{codeSuffix}",
+                    PlanIssueSignalSeverity(candidateIssue!.Severity, added: true),
+                    "Candidate introduced a new pipeline plan issue.",
+                    null,
+                    PipelinePlanIssueText(candidateIssue)));
+                continue;
+            }
+
+            if (candidateIssue is null)
+            {
+                signals.Add(new BenchmarkComparisonSignal(
+                    fixtureId,
+                    $"pipeline_plan_issue.removed.{codeSuffix}",
+                    PlanIssueSignalSeverity(baselineIssue.Severity, added: false),
+                    "Candidate removed a pipeline plan issue.",
+                    PipelinePlanIssueText(baselineIssue),
+                    null));
+                continue;
+            }
+
+            var baselineSeverity = SeverityRank(baselineIssue.Severity);
+            var candidateSeverity = SeverityRank(candidateIssue.Severity);
+            if (candidateSeverity > baselineSeverity)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"pipeline_plan_issue.severity.{codeSuffix}",
+                    "Candidate pipeline plan issue became more severe.",
+                    PipelinePlanIssueText(baselineIssue),
+                    PipelinePlanIssueText(candidateIssue)));
+            }
+            else if (candidateSeverity < baselineSeverity)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"pipeline_plan_issue.severity.{codeSuffix}",
+                    "Candidate pipeline plan issue became less severe.",
+                    PipelinePlanIssueText(baselineIssue),
+                    PipelinePlanIssueText(candidateIssue)));
+            }
+            else if (!string.Equals(baselineIssue.Message, candidateIssue.Message, StringComparison.Ordinal))
+            {
+                signals.Add(Info(
+                    fixtureId,
+                    $"pipeline_plan_issue.message.{codeSuffix}",
+                    "Candidate pipeline plan issue message changed.",
+                    PipelinePlanIssueText(baselineIssue),
+                    PipelinePlanIssueText(candidateIssue)));
+            }
+        }
+    }
+
+    private static void AddRerunPlanSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselinePlans = RerunPlans(baseline);
+        var candidatePlans = RerunPlans(candidate);
+        var planIds = baselinePlans.Keys
+            .Concat(candidatePlans.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var planId in planIds)
+        {
+            baselinePlans.TryGetValue(planId, out var baselinePlan);
+            candidatePlans.TryGetValue(planId, out var candidatePlan);
+            var codeSuffix = CleanDetectorCode(planId);
+            if (baselinePlan is null)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"rerun_plan.added.{codeSuffix}",
+                    "Candidate exposes an additional rerun plan for partial rescans.",
+                    null,
+                    RerunPlanText(candidatePlan)));
+                continue;
+            }
+
+            if (candidatePlan is null)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"rerun_plan.removed.{codeSuffix}",
+                    "Candidate is missing a rerun plan that existed in the baseline.",
+                    RerunPlanText(baselinePlan),
+                    null));
+                continue;
+            }
+
+            AddRerunPlanCountSignal(
+                fixtureId,
+                planId,
+                "rerun_stages",
+                baselinePlan.RerunStageCount,
+                candidatePlan.RerunStageCount,
+                options.RerunPlanScopeRegressionMinimumDelta,
+                "Candidate rerun plan touches more stages.",
+                "Candidate rerun plan touches fewer stages.",
+                signals);
+            AddRerunPlanCountSignal(
+                fixtureId,
+                planId,
+                "affected_artifacts",
+                baselinePlan.AffectedArtifactCount,
+                candidatePlan.AffectedArtifactCount,
+                options.RerunPlanScopeRegressionMinimumDelta,
+                "Candidate rerun plan affects more artifact kinds.",
+                "Candidate rerun plan affects fewer artifact kinds.",
+                signals);
+            AddRerunPlanCountSignal(
+                fixtureId,
+                planId,
+                "wave_span",
+                RerunPlanWaveSpan(baselinePlan),
+                RerunPlanWaveSpan(candidatePlan),
+                options.RerunPlanScopeRegressionMinimumDelta,
+                "Candidate rerun plan spans more execution waves.",
+                "Candidate rerun plan spans fewer execution waves.",
+                signals);
+
+            var baselineHasWork = baselinePlan.HasWork ? 1 : 0;
+            var candidateHasWork = candidatePlan.HasWork ? 1 : 0;
+            if (candidateHasWork > baselineHasWork)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"rerun_plan.has_work.{codeSuffix}",
+                    "Candidate rerun plan now requires work where the baseline had no rerun work.",
+                    RerunPlanText(baselinePlan),
+                    RerunPlanText(candidatePlan)));
+            }
+            else if (candidateHasWork < baselineHasWork)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"rerun_plan.has_work.{codeSuffix}",
+                    "Candidate rerun plan no longer requires work.",
+                    RerunPlanText(baselinePlan),
+                    RerunPlanText(candidatePlan)));
+            }
+
+            var baselineModeRank = RerunPlanModeRank(baselinePlan.RecommendedExecutionMode);
+            var candidateModeRank = RerunPlanModeRank(candidatePlan.RecommendedExecutionMode);
+            if (candidateModeRank < baselineModeRank)
+            {
+                signals.Add(Regression(
+                    fixtureId,
+                    $"rerun_plan.execution_mode.{codeSuffix}",
+                    "Candidate rerun plan lost parallel execution readiness.",
+                    RerunPlanText(baselinePlan),
+                    RerunPlanText(candidatePlan)));
+            }
+            else if (candidateModeRank > baselineModeRank)
+            {
+                signals.Add(Improvement(
+                    fixtureId,
+                    $"rerun_plan.execution_mode.{codeSuffix}",
+                    "Candidate rerun plan gained parallel execution readiness.",
+                    RerunPlanText(baselinePlan),
+                    RerunPlanText(candidatePlan)));
+            }
+        }
+    }
+
+    private static void AddRerunPlanCountSignal(
+        string fixtureId,
+        string planId,
+        string metric,
+        int baseline,
+        int candidate,
+        int threshold,
+        string regressionMessage,
+        string improvementMessage,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var effectiveThreshold = Math.Max(1, threshold);
+        var delta = candidate - baseline;
+        var code = $"rerun_plan.{metric}.{CleanDetectorCode(planId)}";
+        if (delta >= effectiveThreshold)
+        {
+            signals.Add(Regression(
+                fixtureId,
+                code,
+                regressionMessage,
+                RerunPlanMetricText(planId, metric, baseline),
+                RerunPlanMetricText(planId, metric, candidate)));
+        }
+        else if (-delta >= effectiveThreshold)
+        {
+            signals.Add(Improvement(
+                fixtureId,
+                code,
+                improvementMessage,
+                RerunPlanMetricText(planId, metric, baseline),
+                RerunPlanMetricText(planId, metric, candidate)));
+        }
+    }
+
+    private static void AddStageRuntimeReadinessSignal(
+        string fixtureId,
+        string stage,
+        string metric,
+        int? baseline,
+        int? candidate,
+        int threshold,
+        string regressionMessage,
+        string improvementMessage,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        if (baseline is null || candidate is null)
+        {
+            return;
+        }
+
+        var effectiveThreshold = Math.Max(1, threshold);
+        var delta = candidate.Value - baseline.Value;
+        var code = $"stage_runtime_readiness.{metric}.{CleanDetectorCode(stage)}";
+        if (delta >= effectiveThreshold)
+        {
+            signals.Add(Regression(
+                fixtureId,
+                code,
+                regressionMessage,
+                StageRuntimeReadinessText(stage, metric, baseline.Value),
+                StageRuntimeReadinessText(stage, metric, candidate.Value)));
+        }
+        else if (-delta >= effectiveThreshold)
+        {
+            signals.Add(Improvement(
+                fixtureId,
+                code,
+                improvementMessage,
+                StageRuntimeReadinessText(stage, metric, baseline.Value),
+                StageRuntimeReadinessText(stage, metric, candidate.Value)));
+        }
+    }
+
+    private static void AddStageContractSignals(
+        string fixtureId,
+        BenchmarkCaseResult baseline,
+        BenchmarkCaseResult candidate,
+        BenchmarkComparisonOptions options,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        var baselineContracts = StageContracts(baseline);
+        var candidateContracts = StageContracts(candidate);
+        var stages = baselineContracts.Keys
+            .Concat(candidateContracts.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var stage in stages)
+        {
+            baselineContracts.TryGetValue(stage, out var baselineStage);
+            candidateContracts.TryGetValue(stage, out var candidateStage);
+            if (baselineStage is not null && candidateStage is not null)
+            {
+                if (baselineStage.WritesOnlyDeclaredArtifacts && !candidateStage.WritesOnlyDeclaredArtifacts)
+                {
+                    signals.Add(Regression(
+                        fixtureId,
+                        $"stage_contract.writes_only_declared.{CleanDetectorCode(stage)}",
+                        "Candidate stage changed artifacts outside its declared writes.",
+                        StageContractText(stage, "writes only declared", 1),
+                        StageContractText(stage, "writes only declared", 0)));
+                }
+                else if (!baselineStage.WritesOnlyDeclaredArtifacts && candidateStage.WritesOnlyDeclaredArtifacts)
+                {
+                    signals.Add(Improvement(
+                        fixtureId,
+                        $"stage_contract.writes_only_declared.{CleanDetectorCode(stage)}",
+                        "Candidate stage no longer changes artifacts outside its declared writes.",
+                        StageContractText(stage, "writes only declared", 0),
+                        StageContractText(stage, "writes only declared", 1)));
+                }
+            }
+
+            AddStageContractCountSignal(
+                fixtureId,
+                stage,
+                "undeclared_changed_artifacts",
+                baselineStage?.UndeclaredChangedArtifactCount,
+                candidateStage?.UndeclaredChangedArtifactCount,
+                options.StageContractUndeclaredChangeRegressionMinimumDelta,
+                "Candidate stage has more undeclared changed artifacts.",
+                "Candidate stage has fewer undeclared changed artifacts.",
+                signals);
+            AddStageContractCountSignal(
+                fixtureId,
+                stage,
+                "empty_declared_outputs",
+                baselineStage?.EmptyDeclaredOutputCount,
+                candidateStage?.EmptyDeclaredOutputCount,
+                options.StageContractEmptyDeclaredOutputRegressionMinimumDelta,
+                "Candidate stage has more empty declared outputs.",
+                "Candidate stage has fewer empty declared outputs.",
+                signals);
+        }
+    }
+
+    private static void AddStageContractCountSignal(
+        string fixtureId,
+        string stage,
+        string metric,
+        int? baseline,
+        int? candidate,
+        int threshold,
+        string regressionMessage,
+        string improvementMessage,
+        ICollection<BenchmarkComparisonSignal> signals)
+    {
+        if (baseline is null || candidate is null)
+        {
+            return;
+        }
+
+        var effectiveThreshold = Math.Max(1, threshold);
+        var delta = candidate.Value - baseline.Value;
+        var code = $"stage_contract.{metric}.{CleanDetectorCode(stage)}";
+        if (delta >= effectiveThreshold)
+        {
+            signals.Add(Regression(
+                fixtureId,
+                code,
+                regressionMessage,
+                StageContractText(stage, metric, baseline.Value),
+                StageContractText(stage, metric, candidate.Value)));
+        }
+        else if (-delta >= effectiveThreshold)
+        {
+            signals.Add(Improvement(
+                fixtureId,
+                code,
+                improvementMessage,
+                StageContractText(stage, metric, baseline.Value),
+                StageContractText(stage, metric, candidate.Value)));
+        }
+    }
+
     private static void AddScoreboardSignals(
         BenchmarkRunResult baseline,
         BenchmarkRunResult candidate,
@@ -947,6 +1831,14 @@ public sealed record BenchmarkComparisonResult(
         Add(deltas, "measurementOutliers", baseline?.Counts.MeasurementOutlierCount, candidate?.Counts.MeasurementOutlierCount);
         Add(deltas, "scanReviewQueueItems", baseline?.ScanReviewQueue.Count, candidate?.ScanReviewQueue.Count);
         AddReviewKindDeltas(deltas, baseline?.ScanReviewQueue, candidate?.ScanReviewQueue);
+        AddFinalArtifactDeltas(deltas, baseline, candidate);
+        AddArtifactPlanDeltas(deltas, baseline, candidate);
+        AddPipelineHealthDeltas(deltas, baseline, candidate);
+        AddPipelinePlanIssueDeltas(deltas, baseline, candidate);
+        AddRerunPlanDeltas(deltas, baseline, candidate);
+        AddStageArtifactDeltas(deltas, baseline, candidate);
+        AddStageRuntimeReadinessDeltas(deltas, baseline, candidate);
+        AddStageContractDeltas(deltas, baseline, candidate);
         Add(deltas, "passedAssertions", baseline?.PassedAssertionCount, candidate?.PassedAssertionCount);
         Add(deltas, "failedAssertions", baseline?.FailedAssertionCount, candidate?.FailedAssertionCount);
         return deltas;
@@ -973,6 +1865,247 @@ public sealed record BenchmarkComparisonResult(
         }
     }
 
+    private static void AddFinalArtifactDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineArtifacts = FinalArtifactStates(baseline);
+        var candidateArtifacts = FinalArtifactStates(candidate);
+        var artifacts = baselineArtifacts.Keys
+            .Concat(candidateArtifacts.Keys)
+            .Where(IsComparedFinalArtifact)
+            .Distinct()
+            .OrderBy(artifact => artifact.ToString(), StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var artifact in artifacts)
+        {
+            Add(
+                deltas,
+                $"artifact.{artifact}.count",
+                baseline is null ? null : FinalArtifactCount(baselineArtifacts, artifact),
+                candidate is null ? null : FinalArtifactCount(candidateArtifacts, artifact));
+            Add(
+                deltas,
+                $"artifact.{artifact}.revision",
+                baseline is null ? null : FinalArtifactRevision(baselineArtifacts, artifact),
+                candidate is null ? null : FinalArtifactRevision(candidateArtifacts, artifact));
+        }
+    }
+
+    private static void AddArtifactPlanDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineTotals = ArtifactPlanTotals(baseline);
+        var candidateTotals = ArtifactPlanTotals(candidate);
+        Add(deltas, "artifactPlan.planCount", baselineTotals?.PlanCount, candidateTotals?.PlanCount);
+        Add(deltas, "artifactPlan.sourceCount", baselineTotals?.SourceCount, candidateTotals?.SourceCount);
+        Add(deltas, "artifactPlan.producedCount", baselineTotals?.ProducedCount, candidateTotals?.ProducedCount);
+        Add(deltas, "artifactPlan.consumedCount", baselineTotals?.ConsumedCount, candidateTotals?.ConsumedCount);
+        Add(deltas, "artifactPlan.terminalCount", baselineTotals?.TerminalCount, candidateTotals?.TerminalCount);
+        Add(deltas, "artifactPlan.multiProducerCount", baselineTotals?.MultiProducerCount, candidateTotals?.MultiProducerCount);
+        Add(deltas, "artifactPlan.requiredConsumerEdges", baselineTotals?.RequiredConsumerEdgeCount, candidateTotals?.RequiredConsumerEdgeCount);
+
+        var baselinePlans = ArtifactPlans(baseline);
+        var candidatePlans = ArtifactPlans(candidate);
+        var artifacts = baselinePlans.Keys
+            .Concat(candidatePlans.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var artifact in artifacts)
+        {
+            baselinePlans.TryGetValue(artifact, out var baselinePlan);
+            candidatePlans.TryGetValue(artifact, out var candidatePlan);
+            Add(deltas, $"artifactPlan.{artifact}.producerCount", baselinePlan?.ProducerCount, candidatePlan?.ProducerCount);
+            Add(deltas, $"artifactPlan.{artifact}.consumerCount", baselinePlan?.ConsumerCount, candidatePlan?.ConsumerCount);
+            Add(deltas, $"artifactPlan.{artifact}.requiredConsumerCount", baselinePlan?.RequiredConsumerStages.Count, candidatePlan?.RequiredConsumerStages.Count);
+            Add(deltas, $"artifactPlan.{artifact}.terminal", baselinePlan is null ? null : baselinePlan.IsTerminalArtifact ? 1 : 0, candidatePlan is null ? null : candidatePlan.IsTerminalArtifact ? 1 : 0);
+            Add(deltas, $"artifactPlan.{artifact}.multipleProducers", baselinePlan is null ? null : baselinePlan.HasMultipleProducers ? 1 : 0, candidatePlan is null ? null : candidatePlan.HasMultipleProducers ? 1 : 0);
+            Add(deltas, $"artifactPlan.{artifact}.roleRank", baselinePlan is null ? null : ArtifactPlanRoleRank(baselinePlan), candidatePlan is null ? null : ArtifactPlanRoleRank(candidatePlan));
+        }
+    }
+
+    private static void AddPipelineHealthDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineHealth = PipelineHealth(baseline);
+        var candidateHealth = PipelineHealth(candidate);
+        Add(deltas, "pipelineHealth.notDependencyReadyStages", baselineHealth?.NotDependencyReadyStageCount, candidateHealth?.NotDependencyReadyStageCount);
+        Add(deltas, "pipelineHealth.emptyRequiredRuntimeReads", baselineHealth?.EmptyRequiredReadCount, candidateHealth?.EmptyRequiredReadCount);
+        Add(deltas, "pipelineHealth.emptyOptionalRuntimeReads", baselineHealth?.EmptyOptionalReadCount, candidateHealth?.EmptyOptionalReadCount);
+        Add(deltas, "pipelineHealth.contractViolationStages", baselineHealth?.ContractViolationStageCount, candidateHealth?.ContractViolationStageCount);
+        Add(deltas, "pipelineHealth.undeclaredChangedArtifacts", baselineHealth?.UndeclaredChangedArtifactCount, candidateHealth?.UndeclaredChangedArtifactCount);
+        Add(deltas, "pipelineHealth.emptyDeclaredOutputs", baselineHealth?.EmptyDeclaredOutputCount, candidateHealth?.EmptyDeclaredOutputCount);
+    }
+
+    private static void AddPipelinePlanIssueDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineTotals = PipelinePlanIssueTotals(baseline);
+        var candidateTotals = PipelinePlanIssueTotals(candidate);
+        Add(deltas, "planIssue.totalCount", baselineTotals?.TotalCount, candidateTotals?.TotalCount);
+        Add(deltas, "planIssue.infoCount", baselineTotals?.InfoCount, candidateTotals?.InfoCount);
+        Add(deltas, "planIssue.warningCount", baselineTotals?.WarningCount, candidateTotals?.WarningCount);
+        Add(deltas, "planIssue.errorCount", baselineTotals?.ErrorCount, candidateTotals?.ErrorCount);
+
+        var baselineByCode = PipelinePlanIssueCodeCounts(baseline);
+        var candidateByCode = PipelinePlanIssueCodeCounts(candidate);
+        var codes = baselineByCode.Keys
+            .Concat(candidateByCode.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var code in codes)
+        {
+            Add(
+                deltas,
+                $"planIssue.{CleanDetectorCode(code)}.count",
+                baselineByCode.TryGetValue(code, out var baselineCount) ? baselineCount : 0,
+                candidateByCode.TryGetValue(code, out var candidateCount) ? candidateCount : 0);
+        }
+    }
+
+    private static void AddRerunPlanDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineTotals = RerunPlanTotals(baseline);
+        var candidateTotals = RerunPlanTotals(candidate);
+        Add(deltas, "rerunPlan.planCount", baselineTotals?.PlanCount, candidateTotals?.PlanCount);
+        Add(deltas, "rerunPlan.workPlanCount", baselineTotals?.WorkPlanCount, candidateTotals?.WorkPlanCount);
+        Add(deltas, "rerunPlan.totalRerunStages", baselineTotals?.TotalRerunStageCount, candidateTotals?.TotalRerunStageCount);
+        Add(deltas, "rerunPlan.totalAffectedArtifacts", baselineTotals?.TotalAffectedArtifactCount, candidateTotals?.TotalAffectedArtifactCount);
+        Add(deltas, "rerunPlan.parallelCandidatePlans", baselineTotals?.ParallelCandidatePlanCount, candidateTotals?.ParallelCandidatePlanCount);
+        Add(deltas, "rerunPlan.sequentialWorkPlans", baselineTotals?.SequentialWorkPlanCount, candidateTotals?.SequentialWorkPlanCount);
+
+        var baselinePlans = RerunPlans(baseline);
+        var candidatePlans = RerunPlans(candidate);
+        var planIds = baselinePlans.Keys
+            .Concat(candidatePlans.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var planId in planIds)
+        {
+            baselinePlans.TryGetValue(planId, out var baselinePlan);
+            candidatePlans.TryGetValue(planId, out var candidatePlan);
+            Add(deltas, $"rerunPlan.{planId}.hasWork", baselinePlan is null ? null : baselinePlan.HasWork ? 1 : 0, candidatePlan is null ? null : candidatePlan.HasWork ? 1 : 0);
+            Add(deltas, $"rerunPlan.{planId}.rerunStages", baselinePlan?.RerunStageCount, candidatePlan?.RerunStageCount);
+            Add(deltas, $"rerunPlan.{planId}.affectedArtifacts", baselinePlan?.AffectedArtifactCount, candidatePlan?.AffectedArtifactCount);
+            Add(deltas, $"rerunPlan.{planId}.waveSpan", baselinePlan is null ? null : RerunPlanWaveSpan(baselinePlan), candidatePlan is null ? null : RerunPlanWaveSpan(candidatePlan));
+            Add(deltas, $"rerunPlan.{planId}.modeRank", baselinePlan is null ? null : RerunPlanModeRank(baselinePlan.RecommendedExecutionMode), candidatePlan is null ? null : RerunPlanModeRank(candidatePlan.RecommendedExecutionMode));
+        }
+    }
+
+    private static void AddStageArtifactDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineArtifacts = StageArtifacts(baseline);
+        var candidateArtifacts = StageArtifacts(candidate);
+        var keys = baselineArtifacts.Keys
+            .Concat(candidateArtifacts.Keys)
+            .Where(key => IsNoiseSensitiveStageArtifact(key.Artifact))
+            .Distinct()
+            .OrderBy(key => key.Stage, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key.Artifact.ToString(), StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var key in keys)
+        {
+            baselineArtifacts.TryGetValue(key, out var baselineArtifact);
+            candidateArtifacts.TryGetValue(key, out var candidateArtifact);
+            Add(
+                deltas,
+                $"stage.{key.Stage}.{key.Artifact}.after",
+                baselineArtifact?.AfterCount,
+                candidateArtifact?.AfterCount);
+            Add(
+                deltas,
+                $"stage.{key.Stage}.{key.Artifact}.delta",
+                baselineArtifact?.Delta,
+                candidateArtifact?.Delta);
+        }
+    }
+
+    private static void AddStageRuntimeReadinessDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineReadiness = StageRuntimeReadiness(baseline);
+        var candidateReadiness = StageRuntimeReadiness(candidate);
+        var stages = baselineReadiness.Keys
+            .Concat(candidateReadiness.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var stage in stages)
+        {
+            baselineReadiness.TryGetValue(stage, out var baselineStage);
+            candidateReadiness.TryGetValue(stage, out var candidateStage);
+            Add(
+                deltas,
+                $"stage.{stage}.runtimeReadiness.emptyRequiredReads",
+                baselineStage?.EmptyRequiredReadCount,
+                candidateStage?.EmptyRequiredReadCount);
+            Add(
+                deltas,
+                $"stage.{stage}.runtimeReadiness.emptyOptionalReads",
+                baselineStage?.EmptyOptionalReadCount,
+                candidateStage?.EmptyOptionalReadCount);
+        }
+    }
+
+    private static void AddStageContractDeltas(
+        ICollection<BenchmarkCountDelta> deltas,
+        BenchmarkCaseResult? baseline,
+        BenchmarkCaseResult? candidate)
+    {
+        var baselineContracts = StageContracts(baseline);
+        var candidateContracts = StageContracts(candidate);
+        var stages = baselineContracts.Keys
+            .Concat(candidateContracts.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var stage in stages)
+        {
+            baselineContracts.TryGetValue(stage, out var baselineStage);
+            candidateContracts.TryGetValue(stage, out var candidateStage);
+            Add(
+                deltas,
+                $"stage.{stage}.contract.writesOnlyDeclaredArtifacts",
+                baselineStage is null ? null : baselineStage.WritesOnlyDeclaredArtifacts ? 1 : 0,
+                candidateStage is null ? null : candidateStage.WritesOnlyDeclaredArtifacts ? 1 : 0);
+            Add(
+                deltas,
+                $"stage.{stage}.contract.undeclaredChangedArtifacts",
+                baselineStage?.UndeclaredChangedArtifactCount,
+                candidateStage?.UndeclaredChangedArtifactCount);
+            Add(
+                deltas,
+                $"stage.{stage}.contract.emptyDeclaredOutputs",
+                baselineStage?.EmptyDeclaredOutputCount,
+                candidateStage?.EmptyDeclaredOutputCount);
+        }
+    }
+
     private static void Add(
         ICollection<BenchmarkCountDelta> deltas,
         string name,
@@ -984,6 +2117,447 @@ public sealed record BenchmarkComparisonResult(
             : candidate.Value - baseline.Value;
         deltas.Add(new BenchmarkCountDelta(name, baseline, candidate, delta));
     }
+
+    private static IReadOnlyDictionary<StageArtifactKey, StageArtifactMetric> StageArtifacts(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.Stages.Count == 0)
+        {
+            return new Dictionary<StageArtifactKey, StageArtifactMetric>();
+        }
+
+        var values = new Dictionary<StageArtifactKey, StageArtifactMetric>();
+        foreach (var stage in result.Stages)
+        {
+            if (string.IsNullOrWhiteSpace(stage.Stage))
+            {
+                continue;
+            }
+
+            var artifacts = stage.InputArtifacts
+                .Select(item => item.Artifact)
+                .Concat(stage.OutputArtifacts.Select(item => item.Artifact))
+                .Concat(stage.ChangedArtifacts.Select(item => item.Artifact))
+                .Concat(stage.ArtifactDeltas.Select(item => item.Artifact))
+                .Where(artifact => artifact != PlanArtifactKind.Unknown)
+                .Distinct()
+                .ToArray();
+
+            foreach (var artifact in artifacts)
+            {
+                var key = new StageArtifactKey(stage.Stage, artifact);
+                var lifecycle = stage.ArtifactDeltas.FirstOrDefault(item => item.Artifact == artifact);
+                var change = stage.ChangedArtifacts.FirstOrDefault(item => item.Artifact == artifact);
+                var input = stage.InputArtifacts.FirstOrDefault(item => item.Artifact == artifact);
+                var output = stage.OutputArtifacts.FirstOrDefault(item => item.Artifact == artifact);
+                var before = lifecycle?.BeforeCount ?? change?.BeforeCount ?? input?.Count ?? output?.Count;
+                var after = lifecycle?.AfterCount ?? change?.AfterCount ?? output?.Count ?? input?.Count;
+                var delta = lifecycle?.Delta ?? change?.Delta;
+                if (delta is null && before is not null && after is not null)
+                {
+                    delta = after.Value - before.Value;
+                }
+
+                values[key] = new StageArtifactMetric(before, after, delta);
+            }
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyDictionary<string, StageRuntimeReadinessMetric> StageRuntimeReadiness(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.Stages.Count == 0)
+        {
+            return new Dictionary<string, StageRuntimeReadinessMetric>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var values = new Dictionary<string, StageRuntimeReadinessMetric>(StringComparer.OrdinalIgnoreCase);
+        foreach (var stage in result.Stages)
+        {
+            if (string.IsNullOrWhiteSpace(stage.Stage))
+            {
+                continue;
+            }
+
+            var readiness = stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty;
+            values[stage.Stage] = new StageRuntimeReadinessMetric(
+                readiness.EmptyRequiredReads.Count,
+                readiness.EmptyOptionalReads.Count);
+        }
+
+        return values;
+    }
+
+    private static IReadOnlyDictionary<string, BenchmarkRerunPlanSummary> RerunPlans(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.RerunPlans.Count == 0)
+        {
+            return new Dictionary<string, BenchmarkRerunPlanSummary>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return result.RerunPlans
+            .Where(plan => !string.IsNullOrWhiteSpace(plan.PlanId))
+            .GroupBy(plan => plan.PlanId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(plan => plan.HasWork)
+                    .ThenByDescending(plan => plan.RerunStageCount)
+                    .ThenByDescending(plan => plan.AffectedArtifactCount)
+                    .First(),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyDictionary<string, BenchmarkArtifactPlanSummary> ArtifactPlans(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.ArtifactPlans.Count == 0)
+        {
+            return new Dictionary<string, BenchmarkArtifactPlanSummary>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return result.ArtifactPlans
+            .Where(plan => !string.IsNullOrWhiteSpace(plan.Artifact))
+            .GroupBy(plan => plan.Artifact, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(plan => plan.IsProducedByStage)
+                    .ThenByDescending(plan => plan.IsConsumedByStage)
+                    .ThenByDescending(plan => plan.ConsumerCount)
+                    .First(),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static ArtifactPlanTotalsMetric? ArtifactPlanTotals(BenchmarkCaseResult? result)
+    {
+        if (result is null)
+        {
+            return null;
+        }
+
+        var plans = result.ArtifactPlans;
+        return new ArtifactPlanTotalsMetric(
+            plans.Count,
+            plans.Count(plan => plan.IsSourceArtifact),
+            plans.Count(plan => plan.IsProducedByStage),
+            plans.Count(plan => plan.IsConsumedByStage),
+            plans.Count(plan => plan.IsTerminalArtifact),
+            plans.Count(plan => plan.HasMultipleProducers),
+            plans.Sum(plan => plan.RequiredConsumerStages.Count));
+    }
+
+    private static IReadOnlyDictionary<string, BenchmarkPipelinePlanIssueSummary> PipelinePlanIssues(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.PlanIssues.Count == 0)
+        {
+            return new Dictionary<string, BenchmarkPipelinePlanIssueSummary>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return result.PlanIssues
+            .Where(issue => !string.IsNullOrWhiteSpace(issue.Code))
+            .GroupBy(PipelinePlanIssueKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(issue => SeverityRank(issue.Severity))
+                    .ThenBy(issue => issue.Stage, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(issue => issue.Message, StringComparer.OrdinalIgnoreCase)
+                    .First(),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyDictionary<string, int> PipelinePlanIssueCodeCounts(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.PlanIssues.Count == 0)
+        {
+            return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return result.PlanIssues
+            .Where(issue => !string.IsNullOrWhiteSpace(issue.Code))
+            .GroupBy(issue => issue.Code, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static PipelinePlanIssueTotalsMetric? PipelinePlanIssueTotals(BenchmarkCaseResult? result)
+    {
+        if (result is null)
+        {
+            return null;
+        }
+
+        return new PipelinePlanIssueTotalsMetric(
+            result.PlanIssues.Count,
+            result.PlanIssues.Count(issue => SeverityRank(issue.Severity) == (int)DiagnosticSeverity.Info),
+            result.PlanIssues.Count(issue => SeverityRank(issue.Severity) == (int)DiagnosticSeverity.Warning),
+            result.PlanIssues.Count(issue => SeverityRank(issue.Severity) >= (int)DiagnosticSeverity.Error));
+    }
+
+    private static string PipelinePlanIssueKey(BenchmarkPipelinePlanIssueSummary issue)
+    {
+        var artifacts = issue.Artifacts.Count == 0
+            ? "-"
+            : string.Join("/", issue.Artifacts.Order(StringComparer.OrdinalIgnoreCase));
+        return $"{issue.Code}|{issue.Stage}|{artifacts}";
+    }
+
+    private static RerunPlanTotalsMetric? RerunPlanTotals(BenchmarkCaseResult? result)
+    {
+        if (result is null)
+        {
+            return null;
+        }
+
+        var plans = result.RerunPlans;
+        return new RerunPlanTotalsMetric(
+            plans.Count,
+            plans.Count(plan => plan.HasWork),
+            plans.Where(plan => plan.HasWork).Sum(plan => Math.Max(0, plan.RerunStageCount)),
+            plans.Where(plan => plan.HasWork).Sum(plan => Math.Max(0, plan.AffectedArtifactCount)),
+            plans.Count(plan => plan.HasWork && RerunPlanModeRank(plan.RecommendedExecutionMode) >= 2),
+            plans.Count(plan => plan.HasWork && RerunPlanModeRank(plan.RecommendedExecutionMode) == 1));
+    }
+
+    private static int RerunPlanWaveSpan(BenchmarkRerunPlanSummary plan)
+    {
+        if (!plan.HasWork)
+        {
+            return 0;
+        }
+
+        if (plan.RerunWaves.Count > 0)
+        {
+            return plan.RerunWaves.Distinct().Count();
+        }
+
+        return plan.FirstRerunWave >= 0 && plan.LastRerunWave >= plan.FirstRerunWave
+            ? plan.LastRerunWave - plan.FirstRerunWave + 1
+            : 0;
+    }
+
+    private static int RerunPlanModeRank(string? mode) =>
+        mode switch
+        {
+            "WaveOrderedWithParallelCandidates" => 2,
+            "Parallel" => 2,
+            "WaveOrderedSequential" => 1,
+            "Sequential" => 1,
+            _ => 0
+        };
+
+    private static int ArtifactPlanRoleRank(BenchmarkArtifactPlanSummary plan) =>
+        plan.DependencyRole switch
+        {
+            "SourceInput" => 4,
+            "ProducedAndConsumed" => 3,
+            "SourceTerminal" => 2,
+            "ProducedTerminal" => 1,
+            "UnproducedRead" => 0,
+            _ => plan.IsConsumedByStage ? 2 : plan.IsProducedByStage ? 1 : 0
+        };
+
+    private static PipelineHealthMetric? PipelineHealth(BenchmarkCaseResult? result)
+    {
+        if (result is null)
+        {
+            return null;
+        }
+
+        if (result.PipelineHealth.StageCount > 0 || result.Stages.Count == 0)
+        {
+            return new PipelineHealthMetric(
+                result.PipelineHealth.NotDependencyReadyStageCount,
+                result.PipelineHealth.EmptyRequiredRuntimeReadCount,
+                result.PipelineHealth.EmptyOptionalRuntimeReadCount,
+                result.PipelineHealth.ContractViolationStageCount,
+                result.PipelineHealth.UndeclaredChangedArtifactCount,
+                result.PipelineHealth.EmptyDeclaredOutputCount);
+        }
+
+        var stages = result.Stages;
+        return new PipelineHealthMetric(
+            stages.Count(stage => !stage.IsDependencyReady),
+            stages.Sum(stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).EmptyRequiredReads.Count),
+            stages.Sum(stage => (stage.RuntimeReadiness ?? PipelineStageRuntimeReadiness.Empty).EmptyOptionalReads.Count),
+            stages.Count(stage => !(stage.Contract ?? PipelineStageContract.Empty).WritesOnlyDeclaredArtifacts),
+            stages.Sum(stage => (stage.Contract ?? PipelineStageContract.Empty).UndeclaredChangedArtifacts.Count),
+            stages.Sum(EmptyDeclaredOutputCount));
+    }
+
+    private static IReadOnlyDictionary<string, StageContractMetric> StageContracts(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.Stages.Count == 0)
+        {
+            return new Dictionary<string, StageContractMetric>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var values = new Dictionary<string, StageContractMetric>(StringComparer.OrdinalIgnoreCase);
+        foreach (var stage in result.Stages)
+        {
+            if (string.IsNullOrWhiteSpace(stage.Stage))
+            {
+                continue;
+            }
+
+            var contract = stage.Contract ?? PipelineStageContract.Empty;
+            values[stage.Stage] = new StageContractMetric(
+                contract.WritesOnlyDeclaredArtifacts,
+                contract.UndeclaredChangedArtifacts.Count,
+                EmptyDeclaredOutputCount(stage));
+        }
+
+        return values;
+    }
+
+    private static int EmptyDeclaredOutputCount(BenchmarkStageSummary stage)
+    {
+        var readiness = stage.OutputReadiness ?? PipelineStageOutputReadiness.Empty;
+        return readiness.IsAvailable
+            ? readiness.EmptyDeclaredOutputs.Count
+            : stage.ArtifactDeltas.Count(delta => delta.IsEmptyDeclaredOutput);
+    }
+
+    private static IReadOnlyDictionary<PlanArtifactKind, ArtifactStateMetric> FinalArtifactStates(BenchmarkCaseResult? result)
+    {
+        if (result is null || result.ArtifactInventory.Count == 0)
+        {
+            return new Dictionary<PlanArtifactKind, ArtifactStateMetric>();
+        }
+
+        return result.ArtifactInventory
+            .Where(item => item.Artifact != PlanArtifactKind.Unknown)
+            .GroupBy(item => item.Artifact)
+            .ToDictionary(group => group.Key, ArtifactStateMetric.From);
+    }
+
+    private static int FinalArtifactCount(
+        IReadOnlyDictionary<PlanArtifactKind, ArtifactStateMetric> artifacts,
+        PlanArtifactKind artifact) =>
+        artifacts.TryGetValue(artifact, out var metric) ? metric.Count : 0;
+
+    private static int FinalArtifactRevision(
+        IReadOnlyDictionary<PlanArtifactKind, ArtifactStateMetric> artifacts,
+        PlanArtifactKind artifact) =>
+        artifacts.TryGetValue(artifact, out var metric) ? metric.Revision : 0;
+
+    private static bool IsComparedFinalArtifact(PlanArtifactKind artifact) =>
+        IsCriticalFinalArtifact(artifact)
+        || IsExplosionSensitiveFinalArtifact(artifact)
+        || IsNoiseReducibleFinalArtifact(artifact);
+
+    private static bool IsCriticalFinalArtifact(PlanArtifactKind artifact) =>
+        artifact is PlanArtifactKind.Walls
+            or PlanArtifactKind.WallGraph
+            or PlanArtifactKind.TopologySpans
+            or PlanArtifactKind.Rooms
+            or PlanArtifactKind.Openings
+            or PlanArtifactKind.RoutingBarriers
+            or PlanArtifactKind.RoutingPassages;
+
+    private static bool IsExplosionSensitiveFinalArtifact(PlanArtifactKind artifact) =>
+        artifact is PlanArtifactKind.Walls
+            or PlanArtifactKind.WallGraph
+            or PlanArtifactKind.TopologySpans
+            or PlanArtifactKind.SurfacePatterns
+            or PlanArtifactKind.RoomAdjacency
+            or PlanArtifactKind.ObjectCandidates
+            or PlanArtifactKind.ObjectGroups
+            or PlanArtifactKind.ObjectAggregates
+            or PlanArtifactKind.RoutingBarriers
+            or PlanArtifactKind.RoutingPassages
+            or PlanArtifactKind.RoutingObstacles
+            or PlanArtifactKind.RoutingRoomUseHints
+            or PlanArtifactKind.RoutingSuppressedObjects
+            or PlanArtifactKind.RoutingIgnoredObjects;
+
+    private static bool IsNoiseReducibleFinalArtifact(PlanArtifactKind artifact) =>
+        artifact is PlanArtifactKind.SurfacePatterns
+            or PlanArtifactKind.ObjectCandidates
+            or PlanArtifactKind.ObjectGroups
+            or PlanArtifactKind.RoutingObstacles
+            or PlanArtifactKind.RoutingRoomUseHints
+            or PlanArtifactKind.RoutingSuppressedObjects
+            or PlanArtifactKind.RoutingIgnoredObjects;
+
+    private static bool IsNoiseSensitiveStageArtifact(PlanArtifactKind artifact) =>
+        artifact is PlanArtifactKind.Walls
+            or PlanArtifactKind.WallGraph
+            or PlanArtifactKind.TopologySpans
+            or PlanArtifactKind.SurfacePatterns
+            or PlanArtifactKind.RoomAdjacency
+            or PlanArtifactKind.ObjectCandidates
+            or PlanArtifactKind.ObjectGroups
+            or PlanArtifactKind.ObjectAggregates
+            or PlanArtifactKind.RoutingBarriers
+            or PlanArtifactKind.RoutingPassages
+            or PlanArtifactKind.RoutingObstacles
+            or PlanArtifactKind.RoutingRoomUseHints
+            or PlanArtifactKind.RoutingSuppressedObjects
+            or PlanArtifactKind.RoutingIgnoredObjects;
+
+    private static bool IsImportantArtifactPlan(BenchmarkArtifactPlanSummary plan) =>
+        Enum.TryParse<PlanArtifactKind>(plan.Artifact, ignoreCase: true, out var artifact)
+            ? IsCriticalFinalArtifact(artifact)
+            : plan.HasRequiredConsumers || plan.IsProducedByStage;
+
+    private static BenchmarkComparisonSignalSeverity PlanIssueSignalSeverity(string severity, bool added)
+    {
+        var rank = SeverityRank(severity);
+        if (rank < (int)DiagnosticSeverity.Warning)
+        {
+            return BenchmarkComparisonSignalSeverity.Info;
+        }
+
+        return added
+            ? BenchmarkComparisonSignalSeverity.Regression
+            : BenchmarkComparisonSignalSeverity.Improvement;
+    }
+
+    private static int SeverityRank(string severity) =>
+        Enum.TryParse<DiagnosticSeverity>(severity, ignoreCase: true, out var parsed)
+            ? (int)parsed
+            : 0;
+
+    private static string StageArtifactMetricText(StageArtifactKey key, string metric, int value) =>
+        $"{key.Stage}/{key.Artifact} {metric} {value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string StageRuntimeReadinessText(string stage, string metric, int value) =>
+        $"{stage} {metric.Replace('_', ' ')} {value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string StageContractText(string stage, string metric, int value) =>
+        $"{stage} {metric.Replace('_', ' ')} {value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string PipelineHealthText(string metric, int value) =>
+        $"pipeline {metric.Replace('_', ' ')} {value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string PipelinePlanIssueText(BenchmarkPipelinePlanIssueSummary issue)
+    {
+        var artifacts = issue.Artifacts.Count == 0
+            ? "-"
+            : string.Join("/", issue.Artifacts);
+        return $"{issue.Code} {issue.Severity}, stage {issue.Stage}, artifacts {artifacts}";
+    }
+
+    private static string RerunPlanMetricText(string planId, string metric, int value) =>
+        $"{planId} {metric.Replace('_', ' ')} {value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string RerunPlanText(BenchmarkRerunPlanSummary? plan) =>
+        plan is null
+            ? "-"
+            : $"{plan.PlanId} {plan.RecommendedExecutionMode}, stages {plan.RerunStageCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, artifacts {plan.AffectedArtifactCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, waves {RerunPlanWaveSpan(plan).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string ArtifactPlanText(BenchmarkArtifactPlanSummary? plan) =>
+        plan is null
+            ? "-"
+            : $"{plan.Artifact} {plan.DependencyRole}, producers {plan.ProducerCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, consumers {plan.ConsumerCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, required {plan.RequiredConsumerStages.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}, terminal {YesNo(plan.IsTerminalArtifact)}, multi-producer {YesNo(plan.HasMultipleProducers)}";
+
+    private static string FinalArtifactText(PlanArtifactKind artifact, int count) =>
+        $"{artifact} {count.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+    private static string FinalArtifactStateText(PlanArtifactKind artifact, ArtifactStateMetric metric) =>
+        $"{artifact} count {metric.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}, revision {metric.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture)}, state {metric.StateKey}";
+
+    private static string YesNo(bool value) => value ? "yes" : "no";
 
     private static BenchmarkComparisonSignal Regression(
         string fixtureId,
@@ -1000,6 +2574,14 @@ public sealed record BenchmarkComparisonResult(
         string? baseline,
         string? candidate) =>
         new(fixtureId, code, BenchmarkComparisonSignalSeverity.Improvement, message, baseline, candidate);
+
+    private static BenchmarkComparisonSignal Info(
+        string fixtureId,
+        string code,
+        string message,
+        string? baseline,
+        string? candidate) =>
+        new(fixtureId, code, BenchmarkComparisonSignalSeverity.Info, message, baseline, candidate);
 
     private static string Format(double value) =>
         value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
@@ -1072,6 +2654,73 @@ public sealed record BenchmarkComparisonResult(
 
     private static string FormatMilliseconds(double value) =>
         $"{Format(value)} ms";
+
+    private sealed record StageArtifactKey(string Stage, PlanArtifactKind Artifact);
+
+    private sealed record StageArtifactMetric(int? BeforeCount, int? AfterCount, int? Delta);
+
+    private sealed record StageRuntimeReadinessMetric(int EmptyRequiredReadCount, int EmptyOptionalReadCount);
+
+    private sealed record PipelineHealthMetric(
+        int NotDependencyReadyStageCount,
+        int EmptyRequiredReadCount,
+        int EmptyOptionalReadCount,
+        int ContractViolationStageCount,
+        int UndeclaredChangedArtifactCount,
+        int EmptyDeclaredOutputCount);
+
+    private sealed record ArtifactStateMetric(
+        int Count,
+        string StateKey,
+        int Revision)
+    {
+        public static ArtifactStateMetric From(IGrouping<PlanArtifactKind, PipelineArtifactSnapshot> group)
+        {
+            var snapshots = group
+                .OrderBy(item => item.StateKey, StringComparer.Ordinal)
+                .ThenBy(item => item.Revision)
+                .ToArray();
+            var count = snapshots.Sum(item => Math.Max(0, item.Count));
+            var stateKey = snapshots.Length == 1
+                ? snapshots[0].StateKey
+                : string.Join("|", snapshots.Select(item => item.StateKey));
+            var revision = snapshots.Length == 1
+                ? snapshots[0].Revision
+                : snapshots
+                    .Select(item => item.Revision)
+                    .Aggregate(17, (hash, revisionValue) => unchecked((hash * 31) + revisionValue));
+
+            return new ArtifactStateMetric(count, stateKey, revision < 0 ? -revision : revision);
+        }
+    }
+
+    private sealed record RerunPlanTotalsMetric(
+        int PlanCount,
+        int WorkPlanCount,
+        int TotalRerunStageCount,
+        int TotalAffectedArtifactCount,
+        int ParallelCandidatePlanCount,
+        int SequentialWorkPlanCount);
+
+    private sealed record ArtifactPlanTotalsMetric(
+        int PlanCount,
+        int SourceCount,
+        int ProducedCount,
+        int ConsumedCount,
+        int TerminalCount,
+        int MultiProducerCount,
+        int RequiredConsumerEdgeCount);
+
+    private sealed record PipelinePlanIssueTotalsMetric(
+        int TotalCount,
+        int InfoCount,
+        int WarningCount,
+        int ErrorCount);
+
+    private sealed record StageContractMetric(
+        bool WritesOnlyDeclaredArtifacts,
+        int UndeclaredChangedArtifactCount,
+        int EmptyDeclaredOutputCount);
 }
 
 public sealed record BenchmarkCaseComparison(

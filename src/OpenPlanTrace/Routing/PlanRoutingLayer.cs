@@ -102,7 +102,12 @@ public sealed record RoutingPassage(
     IReadOnlyList<string> HostWallIds,
     IReadOnlyList<string> ConnectedRoomIds,
     IReadOnlyList<string> ConnectedRoomLabels,
+    IReadOnlyList<OpeningRoomConnection> ConnectedRoomLinks,
+    IReadOnlyList<string> RoomAdjacencyIds,
     OpeningPlacement? Placement,
+    bool ReadyForCoordinatePlacement,
+    bool RequiresReview,
+    IReadOnlyList<string> ReviewReasons,
     Confidence Confidence,
     IReadOnlyList<string> SourcePrimitiveIds,
     IReadOnlyList<string> Evidence);
@@ -180,6 +185,21 @@ public sealed record RoutingIgnoredObject(
     string? SuppressedObjectId,
     string? SuppressedByAggregateId,
     string? RoomUseHintId,
+    Confidence Confidence,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> Evidence);
+
+public sealed record RoutingDenseMinorDetailPattern(
+    string Id,
+    int PageNumber,
+    string HostWallId,
+    string? HostWallComponentId,
+    WallGraphComponentKind? HostWallComponentKind,
+    IReadOnlyList<string> IncidentWallIds,
+    IReadOnlyList<string> WallIds,
+    PlanRect Bounds,
+    int MinorJunctionCount,
+    int MinorDetailWallCount,
     Confidence Confidence,
     IReadOnlyList<string> SourcePrimitiveIds,
     IReadOnlyList<string> Evidence);
