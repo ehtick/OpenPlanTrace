@@ -3,13 +3,13 @@
   "name": "OpenPlanTrace provided PDF fixture corpus",
   "fixtures": [
     {
-      "id": "blyverket-a20-1-plan-1",
-      "name": "Blyverket A20-1 Plan 1. etasje",
-      "sourcePath": "%USERPROFILE%\\Downloads\\Blyverket A20-1 Plan 1. etasje.pdf",
+      "id": "pdf-light",
+      "name": "PDF fixture - light",
+      "sourcePath": "%OPENPLANTRACE_PDF_CORPUS%\\light.pdf",
       "optional": true,
-      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in Downloads or edit sourcePath.",
+      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in the configured corpus directory or edit sourcePath.",
       "properties": {
-        "difficulty": "easy",
+        "difficulty": "light",
         "planType": "architectural",
         "sourceFormat": "pdf",
         "fixtureSet": "provided-pdfs"
@@ -106,11 +106,11 @@
       }
     },
     {
-      "id": "a13-2-plan-2",
-      "name": "A13.2 2. etasje",
-      "sourcePath": "%USERPROFILE%\\Downloads\\A13.2 2. etasje.pdf",
+      "id": "pdf-medium",
+      "name": "PDF fixture - medium",
+      "sourcePath": "%OPENPLANTRACE_PDF_CORPUS%\\medium.pdf",
       "optional": true,
-      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in Downloads or edit sourcePath.",
+      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in the configured corpus directory or edit sourcePath.",
       "properties": {
         "difficulty": "medium",
         "planType": "architectural",
@@ -209,13 +209,13 @@
       }
     },
     {
-      "id": "a11-3-plan-1",
-      "name": "A11.3 Plan 1.etasje",
-      "sourcePath": "%USERPROFILE%\\Downloads\\A11.3 Plan 1.etasje.pdf",
+      "id": "pdf-intermediate",
+      "name": "PDF fixture - intermediate",
+      "sourcePath": "%OPENPLANTRACE_PDF_CORPUS%\\intermediate.pdf",
       "optional": true,
-      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in Downloads or edit sourcePath.",
+      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in the configured corpus directory or edit sourcePath.",
       "properties": {
-        "difficulty": "medium",
+        "difficulty": "intermediate",
         "planType": "architectural",
         "sourceFormat": "pdf",
         "fixtureSet": "provided-pdfs"
@@ -322,13 +322,13 @@
       }
     },
     {
-      "id": "industrial-plan-1-etasje",
-      "name": "01-A-200-21-001-I Plan 1. Etasje",
-      "sourcePath": "%USERPROFILE%\\Downloads\\01-A-200-21-001-I Plan 1. Etasje.pdf",
+      "id": "pdf-extreme",
+      "name": "PDF fixture - extreme",
+      "sourcePath": "%OPENPLANTRACE_PDF_CORPUS%\\extreme.pdf",
       "optional": true,
-      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in Downloads or edit sourcePath.",
+      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in the configured corpus directory or edit sourcePath.",
       "properties": {
-        "difficulty": "hard",
+        "difficulty": "extreme",
         "planType": "industrial",
         "sourceFormat": "pdf",
         "fixtureSet": "provided-pdfs"
@@ -486,11 +486,11 @@
       }
     },
     {
-      "id": "a13-4-kjeller",
-      "name": "A13.4 Kjeller",
-      "sourcePath": "%USERPROFILE%\\Downloads\\A13.4 Kjeller.pdf",
+      "id": "pdf-medium-detail",
+      "name": "PDF fixture - medium detail",
+      "sourcePath": "%OPENPLANTRACE_PDF_CORPUS%\\medium-detail.pdf",
       "optional": true,
-      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in Downloads or edit sourcePath.",
+      "skipReason": "Provided local PDF fixture is unavailable. Place the PDF in the configured corpus directory or edit sourcePath.",
       "properties": {
         "difficulty": "medium",
         "planType": "architectural",

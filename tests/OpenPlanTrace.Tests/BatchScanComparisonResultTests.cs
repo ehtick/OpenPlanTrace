@@ -77,7 +77,7 @@ public sealed class BatchScanComparisonResultTests
 
         var item = Assert.Single(comparison.Items);
         Assert.Equal(BatchScanComparisonItemStatus.Removed, item.Status);
-        Assert.Equal("Blyverket A20-1 Plan 1. etasje.pdf", item.Key);
+        Assert.Equal("light.pdf", item.Key);
         Assert.Null(item.CandidateInputPath);
         Assert.Equal("item.removed", Assert.Single(item.Signals).Code);
     }
@@ -135,8 +135,8 @@ public sealed class BatchScanComparisonResultTests
         string? overlayDirectory = null) =>
         new(
             ItemNumber: 1,
-            InputPath: @"C:\plans\Blyverket A20-1 Plan 1. etasje.pdf",
-            FileName: "Blyverket A20-1 Plan 1. etasje.pdf",
+            InputPath: @"C:\plans\light.pdf",
+            FileName: "light.pdf",
             SourceKind: PlanSourceKind.Pdf,
             EffectiveSourceKind: PlanSourceKind.Pdf,
             Status: BatchScanItemStatus.Succeeded,

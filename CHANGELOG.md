@@ -6,6 +6,18 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.015] - 2026-06-15
+
+### Changed
+- Removed private project-specific PDF naming from public docs, tests, and
+  provided benchmark examples.
+- Standardized public provided-PDF fixture labels around neutral difficulty
+  tiers: `light`, `medium`, `intermediate`, and `extreme`.
+
+### Verified
+- Repo search confirmed the private PDF/project name no longer appears in
+  tracked files.
+
 ## [0.02.014] - 2026-06-15
 
 ### Added
@@ -29,7 +41,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused wall readiness, structural-topology, and export tests passed with
   `26` tests.
 - Full solution test suite passed with `459` tests.
-- Easy Blyverket PDF scan stayed stable with `52` walls, `5` rooms, and `26`
+- Light PDF scan stayed stable with `52` walls, `5` rooms, and `26`
   openings; `47` walls are coordinate-ready and `5` are blocked/review-required.
 - Hard industrial PDF scan stayed stable with `49` walls, `10` rooms, and `42`
   openings; `27` walls are coordinate-ready and `22` are blocked/review-required.
@@ -63,7 +75,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused export, wall-pair, and schema tests passed with `81` tests.
 - Full solution test suite passed with `456` tests.
 - Viewer JavaScript parse check passed with bundled Node.js.
-- Easy Blyverket PDF scan stayed stable with `52` walls, `5` rooms, and `26`
+- Light PDF scan stayed stable with `52` walls, `5` rooms, and `26`
   openings; all `52` walls exported evidence assessments.
 - Hard industrial PDF scan stayed stable with `49` walls, `10` rooms, and `42`
   openings; all `49` walls exported evidence assessments.
@@ -100,7 +112,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Targeted wall-pair, wall-layer filtering, pipeline, and schema contract tests
   passed with `91` tests.
 - Full solution test suite passed with `455` tests.
-- Easy Blyverket PDF scan stayed stable with `52` walls, `5` rooms, and `26`
+- Light PDF scan stayed stable with `52` walls, `5` rooms, and `26`
   openings while adding the new wall evidence artifact.
 - Hard industrial PDF scan stayed stable with `49` walls, `10` rooms, and `42`
   openings after making recovery/noise deletion opt-in.
@@ -122,7 +134,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 
 ### Verified
 - Full solution test suite passed with `455` tests.
-- Easy Blyverket PDF scan passed with `52` walls, `5` rooms, `26` openings,
+- Light PDF scan passed with `52` walls, `5` rooms, `26` openings,
   `11` pre-seed door/detail primitives filtered, and `1` short post-merge
   door/detail wall removed.
 - Hard industrial PDF scan stayed stable with `49` walls, `10` rooms, and
@@ -151,7 +163,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused wall filtering, wall-pair, and structural-topology tests passed with
   `42` tests.
 - Full solution test suite passed with `453` tests.
-- Easy Blyverket PDF scan passed with `53` walls, `5` rooms, `25` openings,
+- Light PDF scan passed with `53` walls, `5` rooms, `25` openings,
   and `2` conservative dimension-fragment runs filtered before wall
   reconstruction.
 - Hard industrial PDF scan passed with `49` walls, `10` rooms, `42` openings,
@@ -188,7 +200,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused topology/wall regression tests passed with `26` tests after routing
   suppression was added.
 - Full solution test suite passed with `451` tests.
-- Easy Blyverket PDF scan/export validation passed with `53` walls, `5` rooms,
+- Light PDF scan/export validation passed with `53` walls, `5` rooms,
   `25` openings, `2` fragment-review walls, and `0` fragment-review walls
   remaining as routing barriers.
 - Hard industrial PDF scan/export validation passed with `49` walls,
@@ -218,7 +230,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused structural-topology regression tests passed with `5` tests,
   including a new door-fragment keeper case.
 - Full solution test suite passed with `449` tests.
-- Easy Blyverket PDF scan/export validation passed with `53` walls,
+- Light PDF scan/export validation passed with `53` walls,
   `25` openings, `5` rooms, and no topology-excluded walls.
 - Hard industrial PDF scan/export validation passed with `49` walls,
   `42` openings, `10` rooms, and `8` topology-excluded wall components hidden
@@ -250,7 +262,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 ### Verified
 - Focused wall-pair and scanner-pipeline tests passed with `28` tests.
 - Full solution test suite passed with `448` tests.
-- Easy Blyverket PDF scan/export validation passed with `53` walls and wall
+- Light PDF scan/export validation passed with `53` walls and wall
   type counts of `10` exterior, `42` interior, and `1` unknown.
 - Hard industrial PDF scan/export validation passed with `49` walls and wall
   type counts of `19` exterior, `29` interior, and `1` unknown.
@@ -271,7 +283,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 ### Verified
 - Focused wall, export, and schema contract tests passed with `79` tests.
 - Full solution test suite passed with `448` tests.
-- Easy Blyverket PDF scan/export validation passed with `53` walls and wall
+- Light PDF scan/export validation passed with `53` walls and wall
   type counts of `4` exterior, `48` interior, and `1` unknown.
 - Hard industrial PDF scan/export validation passed with `49` walls and wall
   type counts of `3` exterior, `45` interior, and `1` unknown.
@@ -299,7 +311,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
   thin paired surface-band, short repeated detail-slot, and rejected-slot support
   chain regressions.
 - Full solution test suite passed with `448` tests.
-- Easy Blyverket PDF scan/export validation passed with `53` walls after repeated
+- Light PDF scan/export validation passed with `53` walls after repeated
   garage slot/rail detail cleanup, down from `62` earlier in this pass, with
   wall-only PDF-background review screenshots.
 - Hard industrial PDF scan/export validation passed with `49` walls after dense
