@@ -6,6 +6,15 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.003] - 2026-06-15
+
+### Changed
+- Added a prominent README project-link row so `CHANGELOG.md` is visible from
+  the GitHub repository landing page.
+
+### Verified
+- `git diff --check` reported no whitespace errors.
+
 ## [0.02.002] - 2026-06-15
 
 ### Changed

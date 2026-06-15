@@ -4,6 +4,8 @@ OpenPlanTrace is a standalone .NET floorplan scanning engine for applications th
 
 The project intentionally does not contain downstream application UI code. It exposes a library boundary that other applications can consume later.
 
+**Project links:** [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
+
 ## Versioning and Changelog
 
 OpenPlanTrace uses project versions in `A.BC.DEF` format, for example `0.02.001`.
