@@ -6,6 +6,18 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.002] - 2026-06-15
+
+### Changed
+- Tightened `.gitignore` so private/user-provided drawing inputs such as PDF,
+  DWG, DXF, RVT, IFC, and Navisworks files stay local by default, while public
+  golden/docs fixtures can still be added intentionally.
+
+### Verified
+- Confirmed the existing tracked public DXF fixture remains tracked.
+- Cleaned ignored local viewer logs and generated scan/build output before
+  publishing.
+
 ## [0.02.001] - 2026-06-15
 
 ### Changed
