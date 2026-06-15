@@ -2,10 +2,20 @@
 
 All notable changes to OpenPlanTrace will be documented in this file.
 
-OpenPlanTrace uses project-level semantic versions while the individual JSON
-contracts keep their own schema versions.
+OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
+generation, `BC` is the major update track, and `DEF` is the small update or bug
+fix counter. Individual JSON contracts keep their own schema versions.
 
-## [0.2.0] - 2026-06-14
+## [0.02.001] - 2026-06-15
+
+### Changed
+- Documented the project versioning and changelog rules in `README.md`.
+- Aligned existing changelog headings with the `A.BC.DEF` version format.
+
+### Verified
+- `git diff --check` reported no whitespace errors.
+
+## [0.02.000] - 2026-06-14
 
 ### Added
 - Added artifact-based scanner pipeline metadata, including stage contracts,
@@ -57,7 +67,7 @@ contracts keep their own schema versions.
 - Schema contract tests passed with `44` tests.
 - `git diff --check` reported no whitespace errors.
 
-## [0.1.0] - 2026-06-13
+## [0.01.000] - 2026-06-13
 
 ### Added
 - Initial public OpenPlanTrace repository and solution structure.

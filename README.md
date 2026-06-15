@@ -4,6 +4,16 @@ OpenPlanTrace is a standalone .NET floorplan scanning engine for applications th
 
 The project intentionally does not contain downstream application UI code. It exposes a library boundary that other applications can consume later.
 
+## Versioning and Changelog
+
+OpenPlanTrace uses project versions in `A.BC.DEF` format, for example `0.02.001`.
+
+- `A` is the release generation. `0` means the project is still in alpha.
+- `BC` is the major update track for noticeable scanner, architecture, or workflow improvements.
+- `DEF` is the small update counter for bug fixes, focused improvements, and documentation changes.
+
+Every bug fix, feature update, and meaningful project change should be recorded in `CHANGELOG.md`. Small entries should stay short and readable; major chunks can include a fuller summary of what changed and how it was verified. These project versions are separate from OpenPlanTrace's JSON contract schema versions such as `openplantrace.scan.v60`.
+
 ## Current Scope
 
 The first engine version works from normalized floorplan drawing primitives:
