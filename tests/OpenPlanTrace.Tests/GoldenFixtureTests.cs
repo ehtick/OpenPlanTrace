@@ -183,7 +183,7 @@ public sealed class GoldenFixtureTests
 
         var industrialFixture = Assert.Single(
             manifest.Fixtures,
-            fixture => string.Equals(fixture.Id, "industrial-plan-1-etasje", StringComparison.Ordinal));
+            fixture => string.Equals(fixture.Id, "pdf-extreme", StringComparison.Ordinal));
         AssertStageArtifacts(industrialFixture, "room-adjacency", PlanArtifactKind.RoomAdjacency);
     }
 

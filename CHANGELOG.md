@@ -6,6 +6,15 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.016] - 2026-06-15
+
+### Fixed
+- Updated the provided-PDF golden fixture test to use the new neutral
+  `pdf-extreme` fixture ID after private fixture names were removed.
+
+### Verified
+- GitHub Actions failure was traced to the stale fixture ID assertion.
+
 ## [0.02.015] - 2026-06-15
 
 ### Changed
