@@ -6,6 +6,178 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.116] - 2026-06-18
+
+### Added
+- Viewer QA now distinguishes source-aligned review from overlay-only review.
+  When a PDF underlay is present the visualizer shows a `PDF source underlay`
+  badge; when only scan/placement/snapshot JSON is loaded it shows
+  `Overlay-only: source PDF not loaded`. This makes wall-only screenshots much
+  harder to misread as source-aligned evidence.
+- The viewer now supports local PDF + JSON multi-file loads in one drop/open
+  operation. Placement JSON, scan JSON, or visual snapshot JSON can be paired
+  with the source PDF so wall accuracy can be inspected directly against the
+  drawing instead of on a blank page.
+
+### Verified
+- JavaScript syntax check passed with the bundled Node runtime.
+- Focused wall-graph regression tests passed with `3` tests.
+- Solution build passed after NuGet restore was allowed for verification.
+- Full test suite passed with `555` tests using `--no-restore`.
+- Viewer local file endpoints served the private medium PDF and latest
+  placement JSON successfully.
+- Captured and inspected a controlled headless viewer screenshot with the
+  source PDF underlay:
+  `real-pdf-output/private-medium-a20-102-v135/viewer-source-underlay-walls-cdp.png`.
+  The viewer reached `Ready`, page `1 / 1`, and showed the `PDF source
+  underlay` badge.
+- Captured and inspected the JSON-only control screenshot:
+  `real-pdf-output/private-medium-a20-102-v135/viewer-overlay-only-warning.png`.
+  It shows the overlay-only warning badge on the blank-grid render.
+
+### Notes
+- The source-aligned medium screenshot makes the next scanner accuracy target
+  clearer: several top/right exterior walls and some interior walls align, but
+  the left stair/entrance side, several interior spans, and some
+  furniture/detail-vs-wall decisions still need substantial wall-face recovery
+  work.
+
+## [0.02.115] - 2026-06-18
+
+### Fixed
+- Compact paired-wall component recovery now has an explicit pair-score
+  guardrail. Strong compact wall clusters below the structural recovery
+  threshold stay object-like/review-only instead of being promoted into
+  secondary structural topology. This blocks borderline recoveries that can add
+  apparent walls while creating high-severity topology import blockers.
+
+### Verified
+- Added regression coverage proving compact strong paired-wall clusters with a
+  `0.67` pair score remain object-like, while higher-confidence compact strong
+  paired-wall clusters can still be retained as secondary structural context.
+- Focused component/object guardrail tests passed with `6` tests.
+- Full test suite passed with `555` tests.
+- Medium private PDF smoke scan confirmed the unsafe borderline v134 recovery
+  was rejected again in v135: placement-ready walls stayed at the safer `37`,
+  omitted walls `87`, topology spans `37`, solid wall spans `141`, wall-graph
+  repair candidates `2`, openings `29`, and routing items `107`. This avoids
+  the v134 topology-import-blocked candidate while preserving the safe v133
+  compact structural recovery.
+- Light private PDF smoke scan stayed stable: placement-ready walls `17`,
+  omitted walls `39`, topology spans `17`, solid spans `75`, wall-graph repair
+  candidates `2`, openings `24`, and routing items `78`.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v135/placement.json` and
+  `real-pdf-output/private-light-fixture-v135/placement.json`.
+- Rendered and inspected wall-only QA screenshots:
+  `real-pdf-output/private-medium-a20-102-v135/viewer-placement-walls-only.png`
+  and
+  `real-pdf-output/private-light-fixture-v135/viewer-placement-walls-only.png`.
+  The medium visual keeps the safe recovered vertical structural cluster but
+  avoids the questionable extra L-shaped recovery that produced a topology
+  blocker; broad missing wall recovery remains the next accuracy target.
+
+## [0.02.114] - 2026-06-18
+
+### Fixed
+- Compact disconnected wall graph components now have a guarded structural
+  escape hatch before they are demoted as object-like linework. A compact
+  component near the main structural graph is retained as secondary structural
+  context only when it is orthogonal, has no diagonal detail lines, contains at
+  least two high-confidence placement-ready `StrongWallBody` paired-wall
+  segments, has enough total wall length, and has no hard-risk, weak-pair,
+  duplicate, or opening-like evidence. Medium/review-only paired-wall clusters
+  still become object/fixture detail, and existing table/car/stair detail
+  protections stay in place.
+
+### Verified
+- Added wall-graph regression coverage for compact strong paired-wall cluster
+  recovery and compact medium paired-wall cluster rejection.
+- Focused component/object guardrail tests passed with `5` tests.
+- Full test suite passed with `554` tests.
+- Medium private PDF smoke scan recovered one compact structural component
+  (`page:1:wall-component:5`) from object-like/excluded to secondary structural.
+  Placement-ready walls rose from `35` to `37`, omitted walls dropped from `89`
+  to `87`, rejected wall evidence dropped from `40` to `38`, topology spans rose
+  from `35` to `37`, solid wall spans rose from `140` to `141`, openings rose
+  from `27` to `29`, and routing items rose from `105` to `107`; wall-graph
+  repair candidates stayed at `2`.
+- Light private PDF smoke scan stayed stable: placement-ready walls `17`,
+  omitted walls `39`, topology spans `17`, solid spans `75`, openings `24`, and
+  routing items `78`.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v133/placement.json` and
+  `real-pdf-output/private-light-fixture-v133/placement.json`.
+- Rendered and inspected wall-only QA screenshots:
+  `real-pdf-output/private-medium-a20-102-v133/viewer-placement-walls-only.png`
+  and
+  `real-pdf-output/private-light-fixture-v133/viewer-placement-walls-only.png`.
+  The medium visual now shows the extra recovered vertical structural cluster
+  without changing the light fixture output, but broad missing wall recovery and
+  better source-aligned visual comparison remain open accuracy work.
+
+## [0.02.113] - 2026-06-18
+
+### Fixed
+- Trusted endpoint-to-wall snapping now has a stricter paired-wall evidence
+  path. Strong placement-ready paired wall bodies, and high-pair-score medium
+  paired wall bodies that are otherwise eligible for one-endpoint structural
+  promotion, can use the wider paired endpoint tolerance when snapping to a
+  trusted perpendicular host wall. Weak/fragmented, duplicate, hard-risk,
+  opening-like, review-blocked, or too-short candidates remain blocked. This
+  reduces floating wall-return fragments without opening the door to door-leaf
+  or detail-line noise.
+
+### Verified
+- Added wall-graph regression coverage for extended paired-wall endpoint
+  snapping and weak medium-pair rejection.
+- Focused wall-graph snap tests passed with `4` tests.
+- Full test suite passed with `552` tests.
+- Medium private PDF smoke scan completed with no placement-ready wall-count
+  inflation: placement-ready walls stayed at `35`, omitted walls stayed at
+  `89`, topology spans stayed at `35`, solid wall spans changed from `141` to
+  `140`, wall-graph repair candidates dropped from `4` to `2`, trusted endpoint
+  snap diagnostics rose from `9` to `15`, and normalized snapped endpoint gaps
+  rose from `5` to `6`.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v132/placement.json`.
+- Light private PDF smoke scan completed and deep placement validation passed
+  for `real-pdf-output/private-light-fixture-v132/placement.json`.
+- Rendered and inspected wall-only QA screenshots:
+  `real-pdf-output/private-medium-a20-102-v132/viewer-placement-walls-only.png`
+  and
+  `real-pdf-output/private-light-fixture-v132/viewer-placement-walls-only.png`.
+  The paired snap cleanup reduces some floating repair work, but both images
+  still show missing real wall structure and remaining review markers; the next
+  accuracy pass should focus on recovering complete exterior/interior wall
+  bodies from source geometry instead of only repairing endpoints.
+
+## [0.02.112] - 2026-06-18
+
+### Fixed
+- Main-structural medium paired-wall evidence can now be promoted when it has
+  one topology-supported endpoint, a high parsed pair score, interior wall type,
+  enough wall length, and no weak/fragmented, duplicate, or hard-risk evidence.
+  This recovers short real partition returns that previously stayed review-only
+  while keeping weaker one-endpoint candidates blocked.
+
+### Verified
+- Added wall-graph regression coverage for high-score one-endpoint medium
+  paired-wall promotion and weak-score one-endpoint rejection.
+- Focused wall-graph promotion tests passed with `4` tests.
+- Full test suite passed with `550` tests.
+- Medium PDF smoke scan completed with the private medium PDF fixture.
+  Placement-ready wall output rose from `34` to `35`, review-only wall evidence
+  dropped from `4` to `3`, `no_clean_topology_spans` stayed at `0`, and
+  rejected/isolated wall-noise counts stayed unchanged.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v131/placement.json`.
+- Rendered and inspected a wall-only QA screenshot:
+  `real-pdf-output/private-medium-a20-102-v131/viewer-placement-walls-only.png`.
+  The recovered short wall is visible without adding random wall noise, but the
+  overlay remains too sparse overall; the next wall pass should recover broader
+  missing real structure.
+
 ## [0.02.111] - 2026-06-18
 
 ### Fixed

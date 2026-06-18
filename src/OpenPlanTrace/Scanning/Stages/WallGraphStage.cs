@@ -2,6 +2,10 @@ namespace OpenPlanTrace;
 
 internal sealed class WallGraphStage : IPipelineStage
 {
+    private const double MinOneEndpointMainStructuralMediumPairScore = 0.80;
+    private const double MinOneEndpointMainStructuralMediumLength = 24.0;
+    private const double MinCompactStructuralPairedWallPairScore = 0.68;
+
     public string Name => "wall-graph";
 
     public ValueTask ExecuteAsync(ScanContext context, CancellationToken cancellationToken)
@@ -858,7 +862,7 @@ internal sealed class WallGraphStage : IPipelineStage
             var sequence = 1;
             foreach (var rawComponent in ordered)
             {
-                var kind = ClassifyComponent(rawComponent, mainComponent, mainBounds, context.Options);
+                var kind = ClassifyComponent(rawComponent, mainComponent, mainBounds, context);
                 var exclusionReason = StructuralTopologyExclusionReason(
                     rawComponent,
                     kind,
@@ -1131,8 +1135,7 @@ internal sealed class WallGraphStage : IPipelineStage
             || assessment.Decision != WallEvidenceDecision.Review
             || assessment.Category != WallEvidenceCategory.MediumWallBody
             || assessment.PlacementReady
-            || assessment.Confidence.Value < 0.82
-            || supportedEndpointCount < 2)
+            || assessment.Confidence.Value < 0.82)
         {
             return false;
         }
@@ -1153,6 +1156,12 @@ internal sealed class WallGraphStage : IPipelineStage
             return false;
         }
 
+        if (supportedEndpointCount < 2
+            && !IsTrustedOneEndpointMainStructuralMediumWallAssessment(assessment, wall, supportedEndpointCount))
+        {
+            return false;
+        }
+
         if (assessment.Evidence.Any(IsHardRiskReviewWallEvidence)
             || assessment.Evidence.Any(IsMainStructuralPromotionBlockedEvidence))
         {
@@ -1160,6 +1169,74 @@ internal sealed class WallGraphStage : IPipelineStage
         }
 
         return true;
+    }
+
+    private static bool IsTrustedOneEndpointMainStructuralMediumWallAssessment(
+        WallEvidenceWallAssessment assessment,
+        WallSegment wall,
+        int supportedEndpointCount)
+    {
+        if (supportedEndpointCount != 1
+            || wall.WallType != WallType.Interior
+            || wall.DrawingLength < MinOneEndpointMainStructuralMediumLength)
+        {
+            return false;
+        }
+
+        var evidence = assessment.Evidence
+            .Concat(wall.Evidence)
+            .ToArray();
+        if (evidence.Any(item => item.Contains("weak/fragmented pair evidence", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return TryReadPairScore(evidence, out var pairScore)
+            && pairScore >= MinOneEndpointMainStructuralMediumPairScore;
+    }
+
+    private static bool TryReadPairScore(IEnumerable<string> evidence, out double pairScore)
+    {
+        foreach (var item in evidence)
+        {
+            const string marker = "pair score";
+            var index = item.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            var valueStart = index + marker.Length;
+            while (valueStart < item.Length && char.IsWhiteSpace(item[valueStart]))
+            {
+                valueStart++;
+            }
+
+            var valueEnd = valueStart;
+            while (valueEnd < item.Length
+                && (char.IsDigit(item[valueEnd]) || item[valueEnd] == '.' || item[valueEnd] == ','))
+            {
+                valueEnd++;
+            }
+
+            if (valueEnd == valueStart)
+            {
+                continue;
+            }
+
+            var value = item[valueStart..valueEnd].Replace(',', '.');
+            if (double.TryParse(
+                    value,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out pairScore))
+            {
+                return true;
+            }
+        }
+
+        pairScore = 0;
+        return false;
     }
 
     private static bool IsMainStructuralPromotionBlockedEvidence(string evidence)
@@ -1704,7 +1781,7 @@ internal sealed class WallGraphStage : IPipelineStage
         RawWallGraphComponent component,
         RawWallGraphComponent? mainComponent,
         PlanRect mainBounds,
-        ScannerOptions options)
+        ScanContext context)
     {
         if (mainComponent is not null
             && ReferenceEquals(component, mainComponent)
@@ -1713,13 +1790,18 @@ internal sealed class WallGraphStage : IPipelineStage
             return WallGraphComponentKind.MainStructural;
         }
 
+        if (LooksLikeCompactStructuralPairedWallCluster(component, mainComponent, context))
+        {
+            return WallGraphComponentKind.SecondaryStructural;
+        }
+
         if (LooksLikeObjectIsland(component, mainBounds)
-            || LooksLikeDenseDetailOrStairIsland(component, mainBounds, options))
+            || LooksLikeDenseDetailOrStairIsland(component, mainBounds, context.Options))
         {
             return WallGraphComponentKind.ObjectLikeIsland;
         }
 
-        if (LooksLikeRecoverableInteriorFragment(component, mainComponent, options))
+        if (LooksLikeRecoverableInteriorFragment(component, mainComponent, context.Options))
         {
             return WallGraphComponentKind.SecondaryStructural;
         }
@@ -1731,6 +1813,96 @@ internal sealed class WallGraphStage : IPipelineStage
 
         return WallGraphComponentKind.SecondaryStructural;
     }
+
+    private static bool LooksLikeCompactStructuralPairedWallCluster(
+        RawWallGraphComponent component,
+        RawWallGraphComponent? mainComponent,
+        ScanContext context)
+    {
+        if (mainComponent is null
+            || ReferenceEquals(component, mainComponent)
+            || component.Bounds.IsEmpty
+            || mainComponent.Bounds.IsEmpty
+            || component.WallIds.Count < 2
+            || component.WallIds.Count > 6
+            || component.EdgeIds.Count == 0
+            || component.DiagonalWallCount > 0
+            || component.PairedWallCount < 2
+            || component.DrawingLength < CompactStructuralPairedWallClusterLength(context.Options))
+        {
+            return false;
+        }
+
+        var structuralNeighborhood = mainComponent.Bounds.Inflate(Math.Max(
+            UnresolvedEndpointGapReviewTolerance(context.Options) * 2.0,
+            context.Options.DefaultWallThickness * 10.0));
+        if (!structuralNeighborhood.Intersects(component.Bounds))
+        {
+            return false;
+        }
+
+        var wallsById = context.Walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
+        var assessmentsByWallId = context.WallEvidenceMap.WallAssessments
+            .Where(assessment => !string.IsNullOrWhiteSpace(assessment.WallId))
+            .GroupBy(assessment => assessment.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+
+        var trustedPairedWallCount = 0;
+        foreach (var wallId in component.WallIds)
+        {
+            if (!wallsById.TryGetValue(wallId, out var wall)
+                || !assessmentsByWallId.TryGetValue(wallId, out var assessment))
+            {
+                continue;
+            }
+
+            if (IsTrustedCompactStructuralPairedWall(assessment, wall, context.Options))
+            {
+                trustedPairedWallCount++;
+            }
+        }
+
+        return trustedPairedWallCount >= 2;
+    }
+
+    private static bool IsTrustedCompactStructuralPairedWall(
+        WallEvidenceWallAssessment assessment,
+        WallSegment wall,
+        ScannerOptions options)
+    {
+        if (assessment.RejectedAsNoise
+            || assessment.Category != WallEvidenceCategory.StrongWallBody
+            || assessment.Confidence.Value < 0.86
+            || (!assessment.PlacementReady && assessment.Decision != WallEvidenceDecision.Accept)
+            || wall.DrawingLength < options.MinWallLength
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || HasOpeningKeywordEvidence(wall))
+        {
+            return false;
+        }
+
+        var evidence = assessment.Evidence
+            .Concat(wall.Evidence)
+            .ToArray();
+        if (evidence.Any(IsHardRiskReviewWallEvidence)
+            || evidence.Any(IsMainStructuralPromotionBlockedEvidence)
+            || evidence.Any(item => item.Contains("weak/fragmented pair evidence", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            && !evidence.Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return !TryReadPairScore(evidence, out var pairScore)
+            || pairScore >= MinCompactStructuralPairedWallPairScore;
+    }
+
+    private static double CompactStructuralPairedWallClusterLength(ScannerOptions options) =>
+        Math.Max(options.MinWallLength * 5.0, options.DefaultWallThickness * 30.0);
 
     private static string? StructuralTopologyExclusionReason(
         RawWallGraphComponent component,
@@ -1980,6 +2152,12 @@ internal sealed class WallGraphStage : IPipelineStage
         else if (kind == WallGraphComponentKind.IsolatedFragment)
         {
             evidence.Add("isolated wall graph fragment with weak topology");
+        }
+        else if (component.PairedWallCount >= 2
+            && component.DiagonalWallCount == 0
+            && component.WallIds.Count <= 6)
+        {
+            evidence.Add("compact paired-wall component retained as secondary structural wall context");
         }
         else if (component.WallIds.Count == 1 && component.FragmentMergedWallCount == 1 && component.InteriorWallCount == 1)
         {
@@ -3009,8 +3187,9 @@ internal sealed class WallGraphStage : IPipelineStage
                         continue;
                     }
 
+                    var candidateSnapTolerance = TrustedEndpointSnapTolerance(endpointWall, hostWall, context, options);
                     var hostLength = Math.Max(hostWall.CenterLine.Length, 1);
-                    var parameterTolerance = trustedSnapTolerance / hostLength;
+                    var parameterTolerance = candidateSnapTolerance / hostLength;
                     var parameter = hostWall.CenterLine.ProjectParameter(endpoint);
                     if (parameter < -parameterTolerance || parameter > 1 + parameterTolerance)
                     {
@@ -3019,7 +3198,7 @@ internal sealed class WallGraphStage : IPipelineStage
 
                     var projected = hostWall.CenterLine.PointAt(Math.Clamp(parameter, 0, 1));
                     var distance = endpoint.DistanceTo(projected);
-                    if (distance <= safeSnapTolerance || distance > trustedSnapTolerance)
+                    if (distance <= safeSnapTolerance || distance > candidateSnapTolerance)
                     {
                         continue;
                     }
@@ -3077,6 +3256,22 @@ internal sealed class WallGraphStage : IPipelineStage
             || item.Contains("requires review", StringComparison.OrdinalIgnoreCase)
             || item.Contains("rejected", StringComparison.OrdinalIgnoreCase));
 
+    private static double TrustedEndpointSnapTolerance(
+        WallSegment endpointWall,
+        WallSegment hostWall,
+        ScanContext context,
+        ScannerOptions options)
+    {
+        var baseTolerance = TrustedEndpointSnapTolerance(options);
+        if (!IsHighTrustPairedEndpointSnapWall(endpointWall, context, options)
+            || !IsTrustedEndpointSnapHostWall(hostWall))
+        {
+            return baseTolerance;
+        }
+
+        return Math.Max(baseTolerance, PairedEndpointSnapTolerance(options));
+    }
+
     private static double TrustedEndpointSnapTolerance(ScannerOptions options)
     {
         var safeSnapTolerance = InferredNearTouchJunctionTolerance(options);
@@ -3085,6 +3280,56 @@ internal sealed class WallGraphStage : IPipelineStage
         return Math.Min(
             lowRiskLimit,
             safeSnapTolerance + Math.Max(options.DefaultWallThickness, options.WallSnapTolerance * 2.0));
+    }
+
+    private static bool IsHighTrustPairedEndpointSnapWall(
+        WallSegment wall,
+        ScanContext context,
+        ScannerOptions options)
+    {
+        if (wall.DrawingLength < options.MinWallLength
+            || wall.Confidence.Value < 0.70
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || HasOpeningKeywordEvidence(wall))
+        {
+            return false;
+        }
+
+        var assessment = context.WallEvidenceMap.WallAssessments
+            .FirstOrDefault(item => string.Equals(item.WallId, wall.Id, StringComparison.Ordinal));
+        var evidence = (assessment?.Evidence ?? Array.Empty<string>())
+            .Concat(wall.Evidence)
+            .ToArray();
+
+        if (evidence.Any(IsHardRiskReviewWallEvidence)
+            || evidence.Any(IsMainStructuralPromotionBlockedEvidence)
+            || evidence.Any(item => item.Contains("weak/fragmented pair evidence", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            && !evidence.Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (assessment is null || assessment.RejectedAsNoise)
+        {
+            return false;
+        }
+
+        if (assessment.Category == WallEvidenceCategory.StrongWallBody
+            && assessment.Confidence.Value >= 0.82
+            && (assessment.Decision == WallEvidenceDecision.Accept || assessment.PlacementReady))
+        {
+            return true;
+        }
+
+        return assessment.Category == WallEvidenceCategory.MediumWallBody
+            && assessment.Decision == WallEvidenceDecision.Review
+            && assessment.Confidence.Value >= 0.82
+            && IsTrustedOneEndpointMainStructuralMediumWallAssessment(assessment, wall, supportedEndpointCount: 1);
     }
 
     private static IReadOnlyList<PairedEndpointSnap> DetectPairedEndpointToWallSnaps(

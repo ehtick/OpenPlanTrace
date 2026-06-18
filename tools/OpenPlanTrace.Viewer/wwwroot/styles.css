@@ -1799,6 +1799,36 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.source-underlay-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(25, 26, 31, 0.16);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.source-underlay-badge[hidden] {
+  display: none;
+}
+
+.source-underlay-badge.source-underlay-ready {
+  border-color: rgba(63, 143, 87, 0.35);
+  color: #1f6b39;
+}
+
+.source-underlay-badge.source-underlay-missing {
+  border-color: rgba(196, 61, 61, 0.38);
+  color: #9c2634;
+}
+
 #pdfCanvas {
   display: block;
 }

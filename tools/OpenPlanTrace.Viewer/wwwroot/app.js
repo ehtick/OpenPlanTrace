@@ -232,6 +232,7 @@ const elements = {
   stage: document.querySelector("#stage"),
   emptyState: document.querySelector("#emptyState"),
   pageFrame: document.querySelector("#pageFrame"),
+  sourceUnderlayBadge: document.querySelector("#sourceUnderlayBadge"),
   kvemoReview: document.querySelector("#kvemoReview"),
   canvas: document.querySelector("#pdfCanvas"),
   overlay: document.querySelector("#overlay"),
@@ -538,13 +539,18 @@ async function loadFiles(files) {
     return;
   }
 
+  const pdf = files.find(isPdfFile);
   const json = files.find(isJsonFile);
+  if (pdf && json) {
+    await loadPdfAndScanJsonFiles(pdf, json);
+    return;
+  }
+
   if (json) {
     await loadScanJsonFile(json);
     return;
   }
 
-  const pdf = files.find(isPdfFile);
   if (pdf) {
     await loadPdfFile(pdf);
   }
@@ -631,6 +637,86 @@ async function loadPdfFile(file) {
     setStatus("Failed");
     elements.emptyState.style.display = "grid";
     elements.pageFrame.style.display = "none";
+    setDiagnostics([{ severity: "Error", stage: "viewer", message: error.message || String(error) }]);
+  }
+}
+
+async function loadPdfAndScanJsonFiles(pdfFile, jsonFile) {
+  const operationRevision = beginViewerOperation();
+  const documentRevision = beginDocumentLoad();
+  beginBenchmarkOverlayLoad();
+  resetViewerState("pdf-json");
+  elements.fileMeta.textContent = `${pdfFile.name} + ${jsonFile.name}`;
+  setStatus("Loading PDF + JSON");
+
+  try {
+    const [pdf, payload] = await Promise.all([
+      loadPdfForPreview(pdfFile),
+      parseJsonFile(jsonFile)
+    ]);
+
+    if (!isCurrentDocumentLoad(documentRevision)) {
+      return;
+    }
+
+    state.pdf = pdf;
+    state.compare = null;
+    state.benchmarkComparison = null;
+    state.batchComparison = null;
+    if (!viewerOperationChangedSince(operationRevision)) {
+      state.selectedItem = null;
+    }
+
+    if (isVisualSnapshotPayload(payload)) {
+      state.scan = null;
+      state.placement = null;
+      state.visualSnapshot = normalizeVisualSnapshotPayload(payload, jsonFile.name);
+      state.currentPage = state.visualSnapshot.pages[0]?.number ?? 1;
+      state.sourceMode = "pdf-visual-snapshot";
+      state.enabledSourceLayers = new Set();
+      setCounts();
+      setSourceLayers();
+      setCalibration();
+      setQuality(visualSnapshotQualityReport(state.visualSnapshot));
+      setTitleBlocks();
+      setObjectGroups();
+      setDiagnostics(visualSnapshotDiagnostics(state.visualSnapshot));
+    } else {
+      state.visualSnapshot = null;
+      state.placement = isPlacementPayload(payload) ? payload : null;
+      state.scan = normalizeScanPayload(payload);
+      state.currentPage = state.scan.pages[0]?.number ?? 1;
+      state.sourceMode = state.placement ? "placement-pdf" : "pdf-json";
+      state.enabledSourceLayers = new Set((state.scan.layers ?? []).map((layer) => layerKey(layer.name)));
+      setCounts(state.scan);
+      setSourceLayers(state.scan);
+      setCalibration(state.scan.calibration, state.scan.measurementConsistency);
+      setQuality(state.scan.quality);
+      setTitleBlocks(state.scan);
+      setObjectGroups(state.scan);
+      setDiagnostics(state.scan.diagnostics);
+    }
+
+    setCompare();
+    setBenchmarkDetails();
+    setSelection();
+    elements.emptyState.style.display = "none";
+    elements.pageFrame.style.display = "block";
+    await renderCurrentPage();
+    if (!isCurrentDocumentLoad(documentRevision)) {
+      return;
+    }
+
+    setStatus("Ready");
+  } catch (error) {
+    if (!isCurrentDocumentLoad(documentRevision)) {
+      return;
+    }
+
+    setStatus("Failed");
+    elements.emptyState.style.display = "grid";
+    elements.pageFrame.style.display = "none";
+    setSourceUnderlayBadge();
     setDiagnostics([{ severity: "Error", stage: "viewer", message: error.message || String(error) }]);
   }
 }
@@ -2362,6 +2448,14 @@ async function loadPdfForPreview(file) {
   return pdfjsLib.getDocument({ data: bytes }).promise;
 }
 
+async function parseJsonFile(file) {
+  try {
+    return JSON.parse(await file.text());
+  } catch (error) {
+    throw new Error(`${file.name} is not valid JSON: ${error.message || String(error)}`);
+  }
+}
+
 async function scanPdf(
   file,
   documentRevision = state.documentLoadRevision,
@@ -2456,6 +2550,7 @@ async function renderCurrentPage(options = {}) {
 
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   await page.render({ canvasContext: context, viewport }).promise;
+  setSourceUnderlayBadge();
 
   drawOverlay();
   updateNavigation();
@@ -2498,6 +2593,7 @@ function renderScanJsonCurrentPage(options = {}) {
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, viewportWidth, viewportHeight);
   drawBlankPageGrid(viewportWidth, viewportHeight, scale);
+  setSourceUnderlayBadge();
 
   drawOverlay();
   updateNavigation();
@@ -2526,6 +2622,30 @@ function drawBlankPageGrid(width, height, scale) {
     context.stroke();
   }
   context.restore();
+}
+
+function setSourceUnderlayBadge() {
+  if (!elements.sourceUnderlayBadge) {
+    return;
+  }
+
+  const status = sourceUnderlayStatus();
+  elements.sourceUnderlayBadge.textContent = status.label;
+  elements.sourceUnderlayBadge.hidden = !status.visible;
+  elements.sourceUnderlayBadge.classList.toggle("source-underlay-missing", status.kind === "missing");
+  elements.sourceUnderlayBadge.classList.toggle("source-underlay-ready", status.kind === "ready");
+}
+
+function sourceUnderlayStatus() {
+  if (!state.scan && !state.visualSnapshot) {
+    return { visible: false, kind: "none", label: "" };
+  }
+
+  if (state.pdf) {
+    return { visible: true, kind: "ready", label: "PDF source underlay" };
+  }
+
+  return { visible: true, kind: "missing", label: "Overlay-only: source PDF not loaded" };
 }
 
 function drawVisualSnapshotOverlay() {
@@ -14375,6 +14495,7 @@ function resetViewerState(sourceMode = "empty", options = {}) {
   setBenchmarkDetails();
   setSelection(state.selectedItem);
   clearOverlay();
+  setSourceUnderlayBadge();
   updateNavigation();
 }
 

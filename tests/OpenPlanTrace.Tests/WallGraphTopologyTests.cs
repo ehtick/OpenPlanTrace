@@ -345,6 +345,85 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_PromotesHighPairScoreOneEndpointMainStructuralMediumWall()
+    {
+        var host = DetectedWall("wall-host", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
+        var reviewReturn = DetectedWall("wall-review-one-endpoint-high-pair", new PlanPoint(200, 100), new PlanPoint(200, 130))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                WallType = WallType.Interior
+            };
+        var context = new ScanContext(
+            Document("wall-main-structural-one-endpoint-medium-promotion"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { host, reviewReturn });
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            new[]
+            {
+                TrustedReviewBand(reviewReturn)
+            },
+            new[]
+            {
+                Assessment(host, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                MediumPairedReviewAssessment(reviewReturn)
+            });
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == reviewReturn.Id);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("1 topology-supported endpoint", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallGraphStage_DoesNotPromoteWeakPairScoreOneEndpointMainStructuralMediumWall()
+    {
+        var host = DetectedWall("wall-host", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
+        var reviewReturn = DetectedWall("wall-review-one-endpoint-weak-pair", new PlanPoint(200, 100), new PlanPoint(200, 130))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                WallType = WallType.Interior
+            };
+        var context = new ScanContext(
+            Document("wall-main-structural-one-endpoint-medium-promotion-blocked"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { host, reviewReturn });
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            new[]
+            {
+                TrustedReviewBand(reviewReturn)
+            },
+            new[]
+            {
+                Assessment(host, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                MediumPairedReviewAssessmentWithPairScore(
+                    reviewReturn,
+                    0.60,
+                    "wall evidence: short unlayered parallel-face candidate has only one structurally supported endpoint and weak/fragmented pair evidence")
+            });
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retainedReview = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == reviewReturn.Id);
+        Assert.False(retainedReview.PlacementReady);
+        Assert.True(retainedReview.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retainedReview.Decision);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.main_structural_medium_walls_promoted");
+    }
+
+    [Fact]
     public async Task WallGraphStage_DoesNotPromoteDuplicateMainStructuralMediumWallForPlacement()
     {
         var top = DetectedWall("wall-top", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
@@ -628,6 +707,111 @@ public sealed class WallGraphTopologyTests
             context.Diagnostics.Build().Messages,
             diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.trusted_endpoint_snapped"
                 && diagnostic.Properties["trustedEndpointSnapCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallGraphStage_AutoSnapsStrongPairedEndpointGapWithinExtendedPairedTolerance()
+    {
+        var options = new ScannerOptions { DefaultWallThickness = 6 };
+        var hostWall = DetectedWall("wall-strong-host", new PlanPoint(100, 60), new PlanPoint(100, 180))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.93),
+                Evidence = new[] { "parallel wall-face pair", "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.93" }
+            };
+        var partition = DetectedWall("wall-strong-gap-partition", new PlanPoint(113, 100), new PlanPoint(240, 100))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.90),
+                WallType = WallType.Interior,
+                Evidence = new[] { "parallel wall-face pair", "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.90" }
+            };
+        var context = new ScanContext(
+            Document("wall-strong-paired-endpoint-gap-extended-auto-snap"),
+            options);
+        context.Walls.AddRange(new[] { hostWall, partition });
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(hostWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.93)),
+                Assessment(partition, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.90))
+            });
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Empty(context.WallGraph.RepairCandidates);
+        var normalizedPartition = Assert.Single(context.Walls, wall => wall.Id == partition.Id);
+
+        Assert.Equal(100, normalizedPartition.CenterLine.Start.X, precision: 1);
+        Assert.Equal(100, normalizedPartition.CenterLine.Start.Y, precision: 1);
+        Assert.DoesNotContain(context.WallGraph.Nodes, node =>
+            node.Position.DistanceTo(new PlanPoint(113, 100)) <= 0.5);
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.trusted_endpoint_snapped"
+                && diagnostic.Properties["trustedEndpointSnapCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallGraphStage_DoesNotExtendEndpointSnapForWeakMediumPairEvidence()
+    {
+        var options = new ScannerOptions { DefaultWallThickness = 6 };
+        var hostWall = DetectedWall("wall-weak-host", new PlanPoint(100, 60), new PlanPoint(100, 180))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.93),
+                Evidence = new[] { "parallel wall-face pair", "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.93" }
+            };
+        var partition = DetectedWall("wall-weak-gap-partition", new PlanPoint(113, 100), new PlanPoint(240, 100))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.85),
+                WallType = WallType.Interior,
+                Evidence = new[] { "parallel wall-face pair", "wall evidence assessment: MediumWallBody / review-only / confidence 0.85" }
+            };
+        var context = new ScanContext(
+            Document("wall-weak-paired-endpoint-gap-extended-auto-snap-blocked"),
+            options);
+        context.Walls.AddRange(new[] { hostWall, partition });
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(hostWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.93)),
+                MediumPairedReviewAssessmentWithPairScore(
+                    partition,
+                    0.60,
+                    "wall evidence: short unlayered parallel-face candidate has only one structurally supported endpoint and weak/fragmented pair evidence")
+            });
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retainedPartition = Assert.Single(context.Walls, wall => wall.Id == partition.Id);
+
+        Assert.Equal(113, retainedPartition.CenterLine.Start.X, precision: 1);
+        Assert.Equal(100, retainedPartition.CenterLine.Start.Y, precision: 1);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.trusted_endpoint_snapped");
     }
 
     [Fact]
@@ -1073,6 +1257,149 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_RetainsCompactStrongPairedWallClusterAsSecondaryStructural()
+    {
+        var mainWalls = new[]
+        {
+            DetectedWall("main-top", new PlanPoint(100, 100), new PlanPoint(700, 100)) with { WallType = WallType.Exterior },
+            DetectedWall("main-right", new PlanPoint(700, 100), new PlanPoint(700, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-bottom", new PlanPoint(700, 500), new PlanPoint(100, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-left", new PlanPoint(100, 500), new PlanPoint(100, 100)) with { WallType = WallType.Exterior }
+        };
+        var lowerReturn = StrongPairedWall("wall-compact-structural-lower", new PlanPoint(300, 180), new PlanPoint(300, 250));
+        var upperReturn = StrongPairedWall("wall-compact-structural-upper", new PlanPoint(300, 250), new PlanPoint(300, 320));
+        var context = new ScanContext(
+            Document("wall-compact-structural-cluster"),
+            new ScannerOptions());
+        context.Walls.AddRange(mainWalls.Append(lowerReturn).Append(upperReturn));
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            mainWalls
+                .Select(wall => Assessment(wall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High))
+                .Concat(new[]
+                {
+                    Assessment(lowerReturn, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91)),
+                    Assessment(upperReturn, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91))
+                })
+                .ToArray());
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var compactComponent = Assert.Single(
+            context.WallGraph.Components,
+            component => component.WallIds.Contains(lowerReturn.Id)
+                && component.WallIds.Contains(upperReturn.Id));
+
+        Assert.Equal(WallGraphComponentKind.SecondaryStructural, compactComponent.Kind);
+        Assert.False(compactComponent.ExcludedFromStructuralTopology);
+        Assert.Contains(
+            compactComponent.Evidence,
+            item => item.Contains("compact paired-wall component retained", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.object_like_components_reclassified"
+                && diagnostic.Properties["componentIds"].Contains(compactComponent.Id, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WallGraphStage_KeepsCompactMediumPairedWallClusterObjectLike()
+    {
+        var mainWalls = new[]
+        {
+            DetectedWall("main-top", new PlanPoint(100, 100), new PlanPoint(700, 100)) with { WallType = WallType.Exterior },
+            DetectedWall("main-right", new PlanPoint(700, 100), new PlanPoint(700, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-bottom", new PlanPoint(700, 500), new PlanPoint(100, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-left", new PlanPoint(100, 500), new PlanPoint(100, 100)) with { WallType = WallType.Exterior }
+        };
+        var lowerDetail = StrongPairedWall("wall-compact-detail-lower", new PlanPoint(300, 180), new PlanPoint(300, 250));
+        var upperDetail = StrongPairedWall("wall-compact-detail-upper", new PlanPoint(300, 250), new PlanPoint(300, 320));
+        var context = new ScanContext(
+            Document("wall-compact-medium-cluster-object-like"),
+            new ScannerOptions());
+        context.Walls.AddRange(mainWalls.Append(lowerDetail).Append(upperDetail));
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            mainWalls
+                .Select(wall => Assessment(wall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High))
+                .Concat(new[]
+                {
+                    MediumPairedReviewAssessment(lowerDetail),
+                    MediumPairedReviewAssessment(upperDetail)
+                })
+                .ToArray());
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var compactComponent = Assert.Single(
+            context.WallGraph.Components,
+            component => component.WallIds.Contains(lowerDetail.Id)
+                && component.WallIds.Contains(upperDetail.Id));
+        var lowerAssessment = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == lowerDetail.Id);
+        var upperAssessment = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == upperDetail.Id);
+
+        Assert.Equal(WallGraphComponentKind.ObjectLikeIsland, compactComponent.Kind);
+        Assert.True(compactComponent.ExcludedFromStructuralTopology);
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, lowerAssessment.Category);
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, upperAssessment.Category);
+        Assert.Equal(WallEvidenceDecision.Reject, lowerAssessment.Decision);
+        Assert.Equal(WallEvidenceDecision.Reject, upperAssessment.Decision);
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.object_like_components_reclassified"
+                && diagnostic.Properties["componentIds"].Contains(compactComponent.Id, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WallGraphStage_KeepsCompactLowPairScoreStrongWallClusterObjectLike()
+    {
+        var mainWalls = new[]
+        {
+            DetectedWall("main-top", new PlanPoint(100, 100), new PlanPoint(700, 100)) with { WallType = WallType.Exterior },
+            DetectedWall("main-right", new PlanPoint(700, 100), new PlanPoint(700, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-bottom", new PlanPoint(700, 500), new PlanPoint(100, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-left", new PlanPoint(100, 500), new PlanPoint(100, 100)) with { WallType = WallType.Exterior }
+        };
+        var lowerDetail = StrongPairedWall("wall-compact-low-score-lower", new PlanPoint(300, 180), new PlanPoint(300, 250), pairScore: 0.67);
+        var upperDetail = StrongPairedWall("wall-compact-low-score-upper", new PlanPoint(300, 250), new PlanPoint(300, 320), pairScore: 0.67);
+        var context = new ScanContext(
+            Document("wall-compact-low-score-cluster-object-like"),
+            new ScannerOptions());
+        context.Walls.AddRange(mainWalls.Append(lowerDetail).Append(upperDetail));
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            mainWalls
+                .Select(wall => Assessment(wall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High))
+                .Concat(new[]
+                {
+                    Assessment(lowerDetail, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91)),
+                    Assessment(upperDetail, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91))
+                })
+                .ToArray());
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var compactComponent = Assert.Single(
+            context.WallGraph.Components,
+            component => component.WallIds.Contains(lowerDetail.Id)
+                && component.WallIds.Contains(upperDetail.Id));
+        var lowerAssessment = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == lowerDetail.Id);
+        var upperAssessment = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == upperDetail.Id);
+
+        Assert.Equal(WallGraphComponentKind.ObjectLikeIsland, compactComponent.Kind);
+        Assert.True(compactComponent.ExcludedFromStructuralTopology);
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, lowerAssessment.Category);
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, upperAssessment.Category);
+        Assert.Equal(WallEvidenceDecision.Reject, lowerAssessment.Decision);
+        Assert.Equal(WallEvidenceDecision.Reject, upperAssessment.Decision);
+    }
+
+    [Fact]
     public async Task WallGraphStage_DemotesCompactStairDetailComponentFromPlacementTopology()
     {
         var mainWalls = new[]
@@ -1253,13 +1580,19 @@ public sealed class WallGraphTopologyTests
 
     private static WallEvidenceWallAssessment MediumPairedReviewAssessment(
         WallSegment wall,
+        params string[] extraEvidence) =>
+        MediumPairedReviewAssessmentWithPairScore(wall, 0.85, extraEvidence);
+
+    private static WallEvidenceWallAssessment MediumPairedReviewAssessmentWithPairScore(
+        WallSegment wall,
+        double pairScore,
         params string[] extraEvidence)
     {
         var evidence = new[]
         {
             "parallel wall-face pair",
             "face separation 6 drawing units",
-            "pair score 0.85",
+            $"pair score {pairScore.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             "overlap ratio 1",
             "wall type interior: supported wall evidence inside exterior envelope",
             "wall evidence: short unlayered parallel-face candidate has clustered support but fewer than two distinct structural wall connections"
@@ -1338,6 +1671,20 @@ public sealed class WallGraphTopologyTests
         {
             SourcePrimitiveIds = new[] { id },
             Evidence = new[] { "test detected wall" }
+        };
+
+    private static WallSegment StrongPairedWall(string id, PlanPoint start, PlanPoint end, double pairScore = 0.91) =>
+        DetectedWall(id, start, end) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Confidence = new Confidence(0.91),
+            Evidence = new[]
+            {
+                "parallel wall-face pair",
+                $"pair score {pairScore.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.91"
+            }
         };
 
     private static WallSegment DetectedFragmentWall(string id, PlanPoint start, PlanPoint end) =>
