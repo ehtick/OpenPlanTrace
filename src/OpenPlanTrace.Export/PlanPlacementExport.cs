@@ -1803,7 +1803,6 @@ public sealed record PlacementWallSolidSpanExport(
         var wallLength = wall.CenterLine.Length;
         var startPoint = wall.CenterLine.PointAt(startParameter);
         var endPoint = wall.CenterLine.PointAt(endParameter);
-        var line = new PlanLineSegment(startPoint, endPoint);
         var bodyFootprint = WallBodyFootprintBuilder.Build(
             wall,
             startParameter,
@@ -1811,6 +1810,7 @@ public sealed record PlacementWallSolidSpanExport(
             $"{wall.Id}:solid-span:{sequence}:body",
             wall.Confidence,
             wall.Evidence);
+        var line = bodyFootprint.CenterLine;
         var bodyPolygonMillimeters = ScalePoints(bodyFootprint.Polygon, millimetersPerDrawingUnit);
         var thicknessMillimeters = wall.ThicknessMillimeters
             ?? (millimetersPerDrawingUnit is > 0 ? wall.Thickness * millimetersPerDrawingUnit.Value : null);

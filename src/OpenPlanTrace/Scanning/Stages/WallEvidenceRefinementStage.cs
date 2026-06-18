@@ -112,7 +112,15 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
         var requiresReview = false;
         var rejected = false;
 
-        if (wall.Evidence.Any(item => item.Contains("recovered by wall evidence map", StringComparison.OrdinalIgnoreCase)))
+        if (TryClassifyRecoveredDuplicateWallBodyReview(wall, context, out var recoveredDuplicateEvidence))
+        {
+            category = WallEvidenceCategory.MediumWallBody;
+            confidence = new Confidence(Math.Min(0.88, Math.Max(wall.Confidence.Value, 0.68)));
+            placementReady = false;
+            requiresReview = true;
+            evidence.Add(recoveredDuplicateEvidence);
+        }
+        else if (wall.Evidence.Any(item => item.Contains("recovered by wall evidence map", StringComparison.OrdinalIgnoreCase)))
         {
             var shortUnlayeredRecoveredSegment = IsShortUnlayeredRecoveredSegment(wall, context);
             category = WallEvidenceCategory.RecoveredWallBody;
@@ -240,6 +248,14 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             placementReady = false;
             requiresReview = true;
             evidence.Add(duplicateWallFaceEvidence);
+        }
+        else if (TryClassifyUnsupportedFragmentMergedWallReview(wall, context, out var unsupportedFragmentEvidence))
+        {
+            category = WallEvidenceCategory.MediumWallBody;
+            confidence = new Confidence(Math.Min(0.88, Math.Max(wall.Confidence.Value, 0.64)));
+            placementReady = false;
+            requiresReview = true;
+            evidence.Add(unsupportedFragmentEvidence);
         }
         else if (IsMediumWallBody(wall, context))
         {
@@ -556,6 +572,87 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     private static double ShortWeaklySupportedPairedWallReviewLength(ScannerOptions options) =>
         Math.Max(options.MinWallLength * 2.25, options.DefaultWallThickness * 14.0);
 
+    private static bool TryClassifyRecoveredDuplicateWallBodyReview(
+        WallSegment wall,
+        ScanContext context,
+        out string evidence)
+    {
+        evidence = string.Empty;
+        if (wall.WallType != WallType.Unknown
+            || !IsStrongPairedWall(wall)
+            || wall.PairEvidence is null
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || !IsRecoveredWallEvidence(wall))
+        {
+            return false;
+        }
+
+        foreach (var other in context.WallCandidates)
+        {
+            if (string.Equals(other.Id, wall.Id, StringComparison.Ordinal)
+                || other.PageNumber != wall.PageNumber
+                || other.WallType == WallType.Unknown
+                || !IsStrongPairedWall(other)
+                || other.PairEvidence is null
+                || other.FragmentEvidence?.RequiresGeometryReview == true
+                || !AreNearParallel(wall.CenterLine, other.CenterLine))
+            {
+                continue;
+            }
+
+            var overlapRatio = AxisAlignedOverlapRatio(wall.CenterLine, other.CenterLine);
+            if (overlapRatio < 0.72)
+            {
+                continue;
+            }
+
+            var separation = CenterLineSeparation(wall.CenterLine, other.CenterLine);
+            var maxDuplicateSeparation = RecoveredDuplicateWallBodySeparationLimit(
+                wall.PairEvidence,
+                other.PairEvidence,
+                context.Options);
+            if (separation > maxDuplicateSeparation)
+            {
+                continue;
+            }
+
+            evidence = $"wall evidence: recovered duplicate wall body already represented by stronger nearby paired wall body {other.Id}; keep for review but block exact placement";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsRecoveredWallEvidence(WallSegment wall) =>
+        wall.Evidence.Any(item => item.Contains("recovered by wall evidence map", StringComparison.OrdinalIgnoreCase));
+
+    private static double RecoveredDuplicateWallBodySeparationLimit(
+        WallPairEvidence first,
+        WallPairEvidence second,
+        ScannerOptions options)
+    {
+        var pairEnvelope = (first.FaceSeparation + second.FaceSeparation) * 0.62;
+        var optionEnvelope = Math.Max(options.WallSnapTolerance * 2.5, options.DefaultWallThickness * 2.25);
+        return Math.Max(pairEnvelope, optionEnvelope);
+    }
+
+    private static double CenterLineSeparation(PlanLineSegment first, PlanLineSegment second)
+    {
+        if (first.IsHorizontal() && second.IsHorizontal())
+        {
+            return Math.Abs(first.Midpoint.Y - second.Midpoint.Y);
+        }
+
+        if (first.IsVertical() && second.IsVertical())
+        {
+            return Math.Abs(first.Midpoint.X - second.Midpoint.X);
+        }
+
+        return Math.Min(
+            first.DistanceToPoint(second.Midpoint),
+            second.DistanceToPoint(first.Midpoint));
+    }
+
     private static int CountCollinearContinuitySupportWalls(
         WallSegment wall,
         ScanContext context)
@@ -653,6 +750,61 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
 
     private static double ShortUnknownFragmentMergedReviewLength(ScannerOptions options) =>
         Math.Max(options.MinWallLength, options.DefaultWallThickness * 10.0);
+
+    private static bool TryClassifyUnsupportedFragmentMergedWallReview(
+        WallSegment wall,
+        ScanContext context,
+        out string evidence)
+    {
+        evidence = string.Empty;
+        if (wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.PairEvidence is not null
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence
+            || IsWallLayerBacked(wall, context)
+            || IsRecoveredWallEvidence(wall)
+            || wall.WallType == WallType.Exterior
+            || wall.DrawingLength < UnsupportedFragmentMergedReviewLength(context.Options))
+        {
+            return false;
+        }
+
+        var visiblyFragmented = fragmentEvidence.FragmentCount >= 3
+            || fragmentEvidence.GapRatio >= 0.08
+            || fragmentEvidence.TotalHealedGap >= context.Options.DefaultWallThickness * 1.5;
+        if (!visiblyFragmented)
+        {
+            return false;
+        }
+
+        var trustedEndpointSupportCount = CountTrustedStructuralEndpointSupport(
+            wall.CenterLine,
+            wall.PageNumber,
+            context);
+        var trustedSupportWallCount = CountDistinctTrustedStructuralSupportWalls(
+            wall.CenterLine,
+            wall.PageNumber,
+            context);
+        if (trustedEndpointSupportCount >= 2 && trustedSupportWallCount >= 2)
+        {
+            return false;
+        }
+
+        var supportEvidence = trustedEndpointSupportCount <= 0
+            ? "no trusted structural endpoint support"
+            : trustedEndpointSupportCount == 1
+                ? "only one trusted structural endpoint"
+                : "endpoint support from fewer than two trusted structural walls";
+        evidence = string.Format(
+            CultureInfo.InvariantCulture,
+            "wall evidence: unlayered fragment-merged wall candidate has {0} ({1} fragments, gap ratio {2:0.###}); keep for topology but block exact placement until reviewed",
+            supportEvidence,
+            fragmentEvidence.FragmentCount,
+            fragmentEvidence.GapRatio);
+        return true;
+    }
+
+    private static double UnsupportedFragmentMergedReviewLength(ScannerOptions options) =>
+        Math.Max(options.MinWallLength * 1.35, options.DefaultWallThickness * 12.0);
 
     private static bool IsShortUnlayeredSingleLineCandidate(WallSegment wall, ScanContext context) =>
         wall.DetectionKind == WallDetectionKind.SingleLine
@@ -2226,6 +2378,50 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             .Distinct(StringComparer.Ordinal)
             .Count();
     }
+
+    private static int CountTrustedStructuralEndpointSupport(
+        PlanLineSegment line,
+        int pageNumber,
+        ScanContext context)
+    {
+        var tolerance = Math.Max(context.Options.WallSnapTolerance * 3.0, context.Options.DefaultWallThickness * 2.5);
+        var supportedEndpoints = 0;
+        foreach (var endpoint in new[] { line.Start, line.End })
+        {
+            if (context.WallCandidates
+                .Where(wall => wall.PageNumber == pageNumber)
+                .Where(wall => IsTrustedStructuralSupportWall(wall, line, context))
+                .Any(wall => wall.CenterLine.DistanceToPoint(endpoint) <= tolerance))
+            {
+                supportedEndpoints++;
+            }
+        }
+
+        return supportedEndpoints;
+    }
+
+    private static int CountDistinctTrustedStructuralSupportWalls(
+        PlanLineSegment line,
+        int pageNumber,
+        ScanContext context)
+    {
+        var tolerance = Math.Max(context.Options.WallSnapTolerance * 3.0, context.Options.DefaultWallThickness * 2.5);
+        return context.WallCandidates
+            .Where(wall => wall.PageNumber == pageNumber)
+            .Where(wall => IsTrustedStructuralSupportWall(wall, line, context))
+            .Where(wall => wall.CenterLine.DistanceToPoint(line.Start) <= tolerance
+                || wall.CenterLine.DistanceToPoint(line.End) <= tolerance)
+            .Select(wall => wall.Id)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+    }
+
+    private static bool IsTrustedStructuralSupportWall(
+        WallSegment wall,
+        PlanLineSegment targetLine,
+        ScanContext context) =>
+        !SameLine(targetLine, wall.CenterLine, context.Options.WallSnapTolerance)
+        && (IsStrongPairedWall(wall) || IsWallLayerBacked(wall, context));
 
     private static NearbyArcSupport NearbyDoorArcSupport(
         WallSegment wall,

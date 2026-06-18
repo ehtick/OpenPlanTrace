@@ -3,6 +3,7 @@ namespace OpenPlanTrace.Export;
 internal static class WallTopologySpanVisibility
 {
     private const double MaxCleanDanglingSpanLength = 36.0;
+    private const double MinTrustedShortStructuralDanglingSpanLength = 18.0;
     private const double MaxCleanRunJoinGapDrawingUnits = 12.0;
     private const double MinCleanRunLengthDrawingUnits = 8.0;
     private const double MinPlacementRegularizationToleranceDrawingUnits = 1.25;
@@ -120,7 +121,7 @@ internal static class WallTopologySpanVisibility
             return false;
         }
 
-        return !IsShortDanglingTopologySpan(span, context.NodeDegreeById);
+        return !IsShortDanglingTopologySpan(span, component, assessment, context.NodeDegreeById);
     }
 
     private static WallTopologySpanVisibilityContext BuildContext(PlanScanResult result) =>
@@ -133,6 +134,8 @@ internal static class WallTopologySpanVisibility
 
     private static bool IsShortDanglingTopologySpan(
         WallGraphTopologySpan span,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
         IReadOnlyDictionary<string, int> nodeDegreeById)
     {
         if (span.DrawingLength > MaxCleanDanglingSpanLength)
@@ -147,7 +150,78 @@ internal static class WallTopologySpanVisibility
             ? foundToDegree
             : 0;
 
-        return fromDegree <= 1 || toDegree <= 1;
+        if (fromDegree > 1 && toDegree > 1)
+        {
+            return false;
+        }
+
+        return !IsTrustedShortStructuralDanglingSpan(span, component, assessment);
+    }
+
+    private static bool IsTrustedShortStructuralDanglingSpan(
+        WallGraphTopologySpan span,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment)
+    {
+        if (span.DrawingLength < MinTrustedShortStructuralDanglingSpanLength)
+        {
+            return false;
+        }
+
+        if (span.SourceWall?.DetectionKind != WallDetectionKind.ParallelLinePair)
+        {
+            return false;
+        }
+
+        if (component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment)
+        {
+            return false;
+        }
+
+        if (assessment is null
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject)
+        {
+            return false;
+        }
+
+        if (assessment.Category is WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.RecoveredWallBody)
+        {
+            return true;
+        }
+
+        if (assessment.Category != WallEvidenceCategory.MediumWallBody
+            || component.Kind != WallGraphComponentKind.MainStructural)
+        {
+            return false;
+        }
+
+        return ContainsEvidence(
+            assessment.Evidence
+                .Concat(span.Evidence)
+                .Concat(component.Evidence),
+            "promoted to placement-ready by main structural graph component");
+    }
+
+    private static bool ContainsEvidence(IEnumerable<string> evidence, string value) =>
+        evidence.Any(item => item.Contains(value, StringComparison.OrdinalIgnoreCase));
+
+    private static void AddCleanRunIfLongEnough(
+        List<WallGraphTopologySpan> spans,
+        CleanRunInterval interval,
+        WallSegment sourceWall,
+        ref int runIndex)
+    {
+        if (interval.LengthDrawingUnits < MinCleanRunLengthDrawingUnits)
+        {
+            return;
+        }
+
+        spans.Add(interval.ToSpan(sourceWall, runIndex++));
     }
 
     private static IReadOnlyList<WallGraphTopologySpan> MergeCleanTopologyRuns(
@@ -171,7 +245,7 @@ internal static class WallTopologySpanVisibility
 
             var intervals = groupSpans
                 .Select(span => CleanRunInterval.From(span, sourceWall.CenterLine))
-                .Where(interval => interval.LengthDrawingUnits >= MinCleanRunLengthDrawingUnits)
+                .Where(interval => interval.LengthDrawingUnits > 0.001)
                 .OrderBy(interval => interval.StartParameter)
                 .ToArray();
 
@@ -182,7 +256,8 @@ internal static class WallTopologySpanVisibility
 
             if (intervals.Length == 1 && groupSpans.Length == 1)
             {
-                merged.Add(intervals[0].ToSpan(sourceWall, 1));
+                var singleRunIndex = 1;
+                AddCleanRunIfLongEnough(merged, intervals[0], sourceWall, ref singleRunIndex);
                 continue;
             }
 
@@ -198,11 +273,11 @@ internal static class WallTopologySpanVisibility
                     continue;
                 }
 
-                merged.Add(current.ToSpan(sourceWall, runIndex++));
+                AddCleanRunIfLongEnough(merged, current, sourceWall, ref runIndex);
                 current = next;
             }
 
-            merged.Add(current.ToSpan(sourceWall, runIndex));
+            AddCleanRunIfLongEnough(merged, current, sourceWall, ref runIndex);
         }
 
         return merged
@@ -651,14 +726,27 @@ internal static class WallTopologySpanVisibility
 
         public WallGraphTopologySpan ToSpan(WallSegment sourceWall, int runIndex)
         {
-            var centerLine = new PlanLineSegment(
-                sourceWall.CenterLine.PointAt(StartParameter),
-                sourceWall.CenterLine.PointAt(EndParameter));
+            var placementAxis = WallBodyFootprintBuilder.BuildPlacementAxis(
+                sourceWall,
+                StartParameter,
+                EndParameter);
+            var centerLine = placementAxis.CenterLine;
             var thickness = Math.Max(Thickness, sourceWall.Thickness);
             var bounds = centerLine.Bounds.Inflate(Math.Max(thickness / 2.0, 0.5));
             var sourceLength = sourceWall.CenterLine.Length;
             var startOffset = StartParameter * sourceLength;
             var endOffset = EndParameter * sourceLength;
+            var sourceProjectionDistanceStart = sourceWall.CenterLine.DistanceToPoint(centerLine.Start);
+            var sourceProjectionDistanceEnd = sourceWall.CenterLine.DistanceToPoint(centerLine.End);
+            var evidence = Evidence
+                .Prepend("clean placement run projected onto source wall centerline")
+                .Prepend($"clean placement run merged {SourceSpanIds.Count} topology span(s)")
+                .ToList();
+            if (placementAxis.UsesPairedFaceEvidence)
+            {
+                evidence.Add($"clean placement run centered between paired wall faces using {placementAxis.GeometrySource}");
+            }
+
             return new WallGraphTopologySpan(
                 $"{WallId}:clean-run:{runIndex}",
                 PageNumber,
@@ -674,15 +762,14 @@ internal static class WallTopologySpanVisibility
                 StartParameter,
                 EndParameter,
                 (StartParameter + EndParameter) / 2.0,
-                0,
-                0,
+                sourceProjectionDistanceStart,
+                sourceProjectionDistanceEnd,
                 thickness,
                 Confidence,
                 SourcePrimitiveIds,
                 SourceSpanIds,
-                Evidence
-                    .Prepend("clean placement run projected onto source wall centerline")
-                    .Prepend($"clean placement run merged {SourceSpanIds.Count} topology span(s)")
+                evidence
+                    .Distinct(StringComparer.Ordinal)
                     .ToArray(),
                 sourceWall);
         }

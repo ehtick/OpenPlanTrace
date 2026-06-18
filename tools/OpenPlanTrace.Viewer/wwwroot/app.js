@@ -81,7 +81,7 @@ const overlayLegendItems = [
   { key: "gridBays", label: "Grid bays", stroke: "#6b7c1f", fill: "rgba(107, 124, 31, 0.08)", dash: "3 4" },
   { key: "annotations", label: "Annotations", stroke: "#2587b4", fill: "rgba(37, 135, 180, 0.055)" },
   { key: "wallComponents", label: "Wall components", stroke: "#c97c18", fill: "rgba(201, 124, 24, 0.06)", dash: "6 4" },
-  { key: "walls", label: "Walls", stroke: "#c43d3d", fill: "rgba(196, 61, 61, 0.06)" },
+  { key: "walls", label: "Placement walls", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.06)" },
   { key: "wallBodyFootprints", label: "Wall body footprints", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.10)" },
   { key: "wallTopologySpans", label: "Clean wall spans", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.06)" },
   { key: "wallTopologyReviewSpans", label: "Non-placement wall spans", stroke: "#a65f00", fill: "rgba(166, 95, 0, 0.055)", dash: "3 3" },
@@ -275,7 +275,7 @@ const comparableLayers = [
   { key: "annotations", label: "Annotations", layer: "annotations", geometry: "rect" },
   { key: "surfacePatterns", label: "Surface patterns", layer: "surfacePatterns", geometry: "rect" },
   { key: "wallComponents", label: "Wall components", layer: "wallComponents", geometry: "rect" },
-  { key: "walls", label: "Walls", layer: "walls", geometry: "wallLine" },
+  { key: "walls", label: "Placement walls", layer: "walls", geometry: "wallLine" },
   { key: "nodes", label: "Nodes", layer: "nodes", geometry: "point" },
   { key: "rooms", label: "Rooms", layer: "rooms", geometry: "room" },
   { key: "roomAdjacencyEdges", label: "Room links" },
@@ -2956,7 +2956,7 @@ function drawOverlay() {
         `confidence ${wall.confidence.toFixed(2)}`,
         reliability
       ].filter(Boolean).join(" - ");
-      wallRawDrawLines(wall).forEach((span) => {
+      wallCleanTopologySpans(wall).forEach((span) => {
         const className = wallClassName(wall);
         const opacity = wallDrawOpacity({ ...wall, confidence: span.confidence ?? wall.confidence });
         addLine(span.centerLine, `${className} wall-halo`, "", 1);
@@ -3041,6 +3041,10 @@ function drawOverlay() {
 }
 
 function shouldDrawWallInStructuralLayer(wall) {
+  return shouldDrawWallInStructuralCandidateLayer(wall) && !wallCoordinateBlocked(wall);
+}
+
+function shouldDrawWallInStructuralCandidateLayer(wall) {
   if (wall?.excludedFromStructuralTopology) {
     return false;
   }
@@ -3049,7 +3053,7 @@ function shouldDrawWallInStructuralLayer(wall) {
     return false;
   }
 
-  return !wallCoordinateBlocked(wall);
+  return true;
 }
 
 function wallIsPlacementReady(wall) {
@@ -3065,8 +3069,12 @@ function shouldDrawWallAsCleanTopologySpan(wall) {
   return shouldDrawWallInStructuralLayer(wall) && wallIsPlacementReady(wall);
 }
 
+function shouldDrawWallAsPlacementWall(wall) {
+  return shouldDrawWallAsCleanTopologySpan(wall) && wallCleanTopologySpans(wall).length > 0;
+}
+
 function shouldDrawWallAsReviewTopologySpan(wall) {
-  return shouldDrawWallInStructuralLayer(wall) && !wallIsPlacementReady(wall);
+  return shouldDrawWallInStructuralCandidateLayer(wall) && !wallIsPlacementReady(wall);
 }
 
 function drawScanReviewQueue(page, options = {}) {
@@ -3263,7 +3271,7 @@ function addLine(line, className, title, opacity, item = null) {
 }
 
 function addWallHitTarget(wall, title, item) {
-  const spans = wallRawDrawLines(wall);
+  const spans = wallCleanTopologySpans(wall);
   if (!spans.length) {
     return;
   }
@@ -4256,7 +4264,21 @@ function wallDrawOpacity(wall) {
 }
 
 function wallRequiresReliabilityReview(wall) {
-  return Boolean(wall?.reliability?.requiresReview ?? wall?.evidenceAssessment?.requiresReview ?? wall?.requiresReview);
+  if (wall?.evidenceAssessment?.requiresReview === true || wall?.requiresReview === true) {
+    return true;
+  }
+
+  const reliability = wall?.reliability;
+  if (!reliability?.requiresReview) {
+    return false;
+  }
+
+  if (reliability.readyForCoordinatePlacement === false) {
+    return true;
+  }
+
+  const reasons = normalizeStringArray(reliability.reasons).map((reason) => reason.toLowerCase());
+  return reasons.some((reason) => !reason.includes("metric") && !reason.includes("scale"));
 }
 
 function wallCoordinateBlocked(wall) {
@@ -6678,8 +6700,8 @@ function appendWallTopologyLegend(container, scan = state.scan) {
     return;
   }
 
-  const structuralWalls = walls.filter(shouldDrawWallInStructuralLayer);
-  const hiddenWalls = walls.filter((wall) => !shouldDrawWallInStructuralLayer(wall));
+  const structuralWalls = walls.filter(shouldDrawWallAsPlacementWall);
+  const hiddenWalls = walls.filter((wall) => !shouldDrawWallAsPlacementWall(wall));
   const exteriorWalls = structuralWalls.filter((wall) => String(wall.wallType || "").toLowerCase() === "exterior");
   const interiorWalls = structuralWalls.filter((wall) => String(wall.wallType || "").toLowerCase() === "interior");
   const unknownWalls = structuralWalls.filter((wall) => {
@@ -9639,7 +9661,7 @@ function layerTotalForKey(scan, key) {
     case "wallComponents":
       return scan.wallComponents?.length ?? 0;
     case "walls":
-      return (scan.walls ?? []).filter(shouldDrawWallInStructuralLayer).length;
+      return wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);
     case "wallBodyFootprints":
       return wallBodyFootprintCount(scan);
     case "wallTopologySpans":
@@ -9699,10 +9721,7 @@ function layerCountForKey(scan, key) {
     case "wallComponents":
       return currentPageOnly(scan.wallComponents);
     case "walls":
-      return (scan.walls ?? [])
-        .filter((wall) => wall.pageNumber == null || wall.pageNumber === state.currentPage)
-        .filter(shouldDrawWallInStructuralLayer)
-        .length;
+      return wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);
     case "wallBodyFootprints":
       return wallBodyFootprintCount(scan, state.currentPage);
     case "wallTopologySpans":

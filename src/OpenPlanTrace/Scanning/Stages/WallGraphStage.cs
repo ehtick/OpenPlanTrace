@@ -274,6 +274,7 @@ internal sealed class WallGraphStage : IPipelineStage
             .ThenBy(candidate => candidate.SourceNodeId, StringComparer.Ordinal)
             .ToArray();
         PromoteMainStructuralMediumWallEvidence(context, components, graphEdges, graphNodes, repairCandidates);
+        PromoteSecondaryInteriorFragmentWallEvidence(context, components);
         context.WallGraph = new WallGraph(graphNodes, graphEdges, components, repairCandidates);
 
         AddComponentDiagnostics(context, components);
@@ -1177,6 +1178,157 @@ internal sealed class WallGraphStage : IPipelineStage
             || evidence.Contains("unknown fragment-merged", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static void PromoteSecondaryInteriorFragmentWallEvidence(
+        ScanContext context,
+        IReadOnlyList<WallGraphComponent> components)
+    {
+        if (context.WallEvidenceMap.WallAssessments.Count == 0 || components.Count == 0)
+        {
+            return;
+        }
+
+        var secondaryFragmentComponents = components
+            .Where(component => component.Kind == WallGraphComponentKind.SecondaryStructural)
+            .Where(component => !component.ExcludedFromStructuralTopology)
+            .Where(component => component.WallIds.Count == 1 && component.EdgeIds.Count > 0)
+            .ToArray();
+        if (secondaryFragmentComponents.Length == 0)
+        {
+            return;
+        }
+
+        var componentByWallId = secondaryFragmentComponents
+            .SelectMany(component => component.WallIds.Select(wallId => new { WallId = wallId, Component = component }))
+            .GroupBy(item => item.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().Component, StringComparer.Ordinal);
+        var wallsById = context.Walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
+        var promotedWallIds = new HashSet<string>(StringComparer.Ordinal);
+        var promotedAssessments = context.WallEvidenceMap.WallAssessments
+            .Select(assessment =>
+            {
+                if (!componentByWallId.TryGetValue(assessment.WallId, out var component)
+                    || !wallsById.TryGetValue(assessment.WallId, out var wall)
+                    || !IsTrustedSecondaryInteriorFragmentAssessment(assessment, wall, component, context.Options))
+                {
+                    return assessment;
+                }
+
+                promotedWallIds.Add(assessment.WallId);
+                return PromoteSecondaryInteriorFragmentAssessment(assessment, component);
+            })
+            .ToArray();
+
+        if (promotedWallIds.Count == 0)
+        {
+            return;
+        }
+
+        context.WallEvidenceMap = context.WallEvidenceMap with
+        {
+            WallAssessments = promotedAssessments
+        };
+
+        for (var index = 0; index < context.Walls.Count; index++)
+        {
+            var wall = context.Walls[index];
+            if (!promotedWallIds.Contains(wall.Id) || !componentByWallId.TryGetValue(wall.Id, out var component))
+            {
+                continue;
+            }
+
+            context.Walls[index] = wall with
+            {
+                Evidence = AppendEvidence(
+                    wall.Evidence,
+                    new[]
+                    {
+                        $"wall evidence assessment: long interior fragment promoted to placement-ready by secondary structural graph component {component.Id}"
+                    })
+            };
+        }
+
+        context.AddDiagnostic(
+            "wall_evidence.secondary_interior_fragments_promoted",
+            DiagnosticSeverity.Info,
+            "wall-graph",
+            $"{promotedWallIds.Count} long interior fragment wall assessment(s) were promoted to placement-ready by secondary structural graph context.",
+            confidence: Confidence.Medium,
+            scope: DiagnosticScope.Detection,
+            sourcePrimitiveIds: context.Walls
+                .Where(wall => promotedWallIds.Contains(wall.Id))
+                .SelectMany(wall => wall.SourcePrimitiveIds)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            properties: new Dictionary<string, string>
+            {
+                ["promotedWallCount"] = promotedWallIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["wallIds"] = string.Join(",", promotedWallIds.OrderBy(id => id, StringComparer.Ordinal).Take(20))
+            });
+    }
+
+    private static bool IsTrustedSecondaryInteriorFragmentAssessment(
+        WallEvidenceWallAssessment assessment,
+        WallSegment wall,
+        WallGraphComponent component,
+        ScannerOptions options)
+    {
+        if (assessment.RejectedAsNoise
+            || assessment.Decision != WallEvidenceDecision.Review
+            || assessment.Category != WallEvidenceCategory.MediumWallBody
+            || assessment.PlacementReady
+            || assessment.Confidence.Value < 0.64)
+        {
+            return false;
+        }
+
+        if (component.Kind != WallGraphComponentKind.SecondaryStructural
+            || component.ExcludedFromStructuralTopology
+            || component.WallIds.Count != 1
+            || component.EdgeIds.Count == 0)
+        {
+            return false;
+        }
+
+        if (wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.DrawingLength <= RecoverableInteriorFragmentLength(options)
+            || wall.FragmentEvidence?.RequiresGeometryReview == true)
+        {
+            return false;
+        }
+
+        if (!assessment.Evidence.Any(item => item.Contains("unlayered fragment-merged wall candidate", StringComparison.OrdinalIgnoreCase))
+            || !assessment.Evidence.Any(item => item.Contains("only one trusted structural endpoint", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (assessment.Evidence.Any(IsHardRiskReviewWallEvidence)
+            || assessment.Evidence.Any(IsSecondaryInteriorFragmentPromotionBlockedEvidence))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsSecondaryInteriorFragmentPromotionBlockedEvidence(string evidence)
+    {
+        if (string.IsNullOrWhiteSpace(evidence))
+        {
+            return false;
+        }
+
+        return evidence.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("already represented", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("topology import", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("repair candidate", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("endpoint-to-wall snap", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("fragment geometry requires review", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("unknown fragment-merged", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("no trusted structural endpoint", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int CountSupportedTopologyEndpoints(
         IReadOnlyList<WallEdge> wallEdges,
         IReadOnlyDictionary<string, int> nodeDegreeById)
@@ -1221,6 +1373,27 @@ internal sealed class WallGraphStage : IPipelineStage
         };
     }
 
+    private static WallEvidenceWallAssessment PromoteSecondaryInteriorFragmentAssessment(
+        WallEvidenceWallAssessment assessment,
+        WallGraphComponent component)
+    {
+        var evidence = AppendEvidence(
+            assessment.Evidence,
+            new[]
+            {
+                $"wall evidence: promoted to placement-ready by secondary structural graph component {component.Id}",
+                "wall evidence: long interior fragment has one trusted structural endpoint and is near the main wall body"
+            });
+        return assessment with
+        {
+            PlacementReady = true,
+            RequiresReview = false,
+            Decision = WallEvidenceDecision.Accept,
+            ScoreBreakdown = PromoteSecondaryInteriorFragmentScore(assessment.ScoreBreakdown),
+            Evidence = evidence
+        };
+    }
+
     private static WallEvidenceScoreBreakdown PromoteMainStructuralMediumWallScore(
         WallEvidenceScoreBreakdown score)
     {
@@ -1245,6 +1418,37 @@ internal sealed class WallGraphStage : IPipelineStage
             score.LayerSupportScore,
             structuralScore,
             score.RecoverySupportScore,
+            score.NoisePenalty,
+            score.FragmentReviewPenalty,
+            positiveEvidence,
+            negativeEvidence);
+    }
+
+    private static WallEvidenceScoreBreakdown PromoteSecondaryInteriorFragmentScore(
+        WallEvidenceScoreBreakdown score)
+    {
+        var structuralScore = RoundScore(Math.Max(score.StructuralSupportScore, 0.16));
+        var recoveryScore = RoundScore(Math.Max(score.RecoverySupportScore, 0.12));
+        var positiveScore = RoundScore(Math.Min(1, Math.Max(score.PositiveScore, score.PairSupportScore + score.LayerSupportScore + structuralScore + recoveryScore)));
+        var negativeEvidence = score.NegativeEvidence
+            .Where(item => !item.Contains("not placement-ready", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var decisionScore = RoundScore(Math.Max(-1, Math.Min(1, positiveScore - score.NegativeScore)));
+        var positiveEvidence = AppendEvidence(
+            score.PositiveEvidence,
+            new[]
+            {
+                "secondary structural interior fragment continuity"
+            });
+
+        return new WallEvidenceScoreBreakdown(
+            positiveScore,
+            score.NegativeScore,
+            decisionScore,
+            score.PairSupportScore,
+            score.LayerSupportScore,
+            structuralScore,
+            recoveryScore,
             score.NoisePenalty,
             score.FragmentReviewPenalty,
             positiveEvidence,
@@ -1473,6 +1677,9 @@ internal sealed class WallGraphStage : IPipelineStage
         var shortWallCount = componentWalls.Count(wall => wall.DrawingLength <= shortDetailWallLength);
         var singleLineWallCount = componentWalls.Count(wall => wall.DetectionKind == WallDetectionKind.SingleLine);
         var pairedWallCount = componentWalls.Count(wall => wall.DetectionKind == WallDetectionKind.ParallelLinePair);
+        var fragmentMergedWallCount = componentWalls.Count(wall => wall.DetectionKind == WallDetectionKind.FragmentMerged);
+        var interiorWallCount = componentWalls.Count(wall => wall.WallType == WallType.Interior);
+        var exteriorWallCount = componentWalls.Count(wall => wall.WallType == WallType.Exterior);
 
         return new RawWallGraphComponent(
             pageNumber,
@@ -1487,7 +1694,10 @@ internal sealed class WallGraphStage : IPipelineStage
             diagonalWallCount,
             shortWallCount,
             singleLineWallCount,
-            pairedWallCount);
+            pairedWallCount,
+            fragmentMergedWallCount,
+            interiorWallCount,
+            exteriorWallCount);
     }
 
     private static WallGraphComponentKind ClassifyComponent(
@@ -1507,6 +1717,11 @@ internal sealed class WallGraphStage : IPipelineStage
             || LooksLikeDenseDetailOrStairIsland(component, mainBounds, options))
         {
             return WallGraphComponentKind.ObjectLikeIsland;
+        }
+
+        if (LooksLikeRecoverableInteriorFragment(component, mainComponent, options))
+        {
+            return WallGraphComponentKind.SecondaryStructural;
         }
 
         if (component.WallIds.Count <= 1 || component.EdgeIds.Count == 0 || component.NodeIds.Count <= 2)
@@ -1701,6 +1916,36 @@ internal sealed class WallGraphStage : IPipelineStage
     private static double ShortDetailComponentWallLength(ScannerOptions options) =>
         Math.Max(options.MinWallLength * 2.75, options.DefaultWallThickness * 16.0);
 
+    private static bool LooksLikeRecoverableInteriorFragment(
+        RawWallGraphComponent component,
+        RawWallGraphComponent? mainComponent,
+        ScannerOptions options)
+    {
+        if (mainComponent is null
+            || ReferenceEquals(component, mainComponent)
+            || component.Bounds.IsEmpty
+            || mainComponent.Bounds.IsEmpty
+            || component.WallIds.Count != 1
+            || component.EdgeIds.Count == 0
+            || component.FragmentMergedWallCount != 1
+            || component.InteriorWallCount != 1
+            || component.ExteriorWallCount > 0
+            || component.DiagonalWallCount > 0
+            || component.ShortWallCount > 0
+            || component.DrawingLength <= RecoverableInteriorFragmentLength(options))
+        {
+            return false;
+        }
+
+        var structuralNeighborhood = mainComponent.Bounds.Inflate(Math.Max(
+            UnresolvedEndpointGapReviewTolerance(options) * 1.5,
+            options.DefaultWallThickness * 8.0));
+        return structuralNeighborhood.Intersects(component.Bounds);
+    }
+
+    private static double RecoverableInteriorFragmentLength(ScannerOptions options) =>
+        Math.Max(ShortDetailComponentWallLength(options) * 1.05, options.DefaultWallThickness * 18.0);
+
     private static Confidence ComponentConfidence(WallGraphComponentKind kind) =>
         kind switch
         {
@@ -1735,6 +1980,10 @@ internal sealed class WallGraphStage : IPipelineStage
         else if (kind == WallGraphComponentKind.IsolatedFragment)
         {
             evidence.Add("isolated wall graph fragment with weak topology");
+        }
+        else if (component.WallIds.Count == 1 && component.FragmentMergedWallCount == 1 && component.InteriorWallCount == 1)
+        {
+            evidence.Add("long interior fragment recovered as secondary structural wall context");
         }
         else if (mainComponent is not null)
         {
@@ -3960,7 +4209,10 @@ internal sealed class WallGraphStage : IPipelineStage
         int DiagonalWallCount,
         int ShortWallCount,
         int SingleLineWallCount,
-        int PairedWallCount);
+        int PairedWallCount,
+        int FragmentMergedWallCount,
+        int InteriorWallCount,
+        int ExteriorWallCount);
 
     private enum DirectionBucket
     {

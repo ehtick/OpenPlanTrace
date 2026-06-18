@@ -106,6 +106,63 @@ public sealed class WallEvidenceRecoveryTests
     }
 
     [Fact]
+    public async Task WallEvidenceRefinement_MarksRecoveredDuplicatePairedBodyReviewOnly()
+    {
+        var context = new ScanContext(
+            new PlanDocument(
+                "wall-evidence-recovered-duplicate-body",
+                new[]
+                {
+                    new PlanPage(1, new PlanSize(420, 320), Array.Empty<PlanPrimitive>())
+                }),
+            new ScannerOptions
+            {
+                DefaultWallThickness = 6,
+                WallSnapTolerance = 4
+            });
+        var knownExterior = PairedWall(
+            "known-exterior",
+            new PlanLineSegment(new PlanPoint(200, 60), new PlanPoint(200, 240)),
+            faceSeparation: 12,
+            pairScore: 0.80,
+            WallType.Exterior);
+        var recoveredDuplicate = PairedWall(
+            "recovered-duplicate",
+            new PlanLineSegment(new PlanPoint(210, 62), new PlanPoint(210, 240)),
+            faceSeparation: 6,
+            pairScore: 0.82,
+            WallType.Unknown) with
+            {
+                Evidence = new[]
+                {
+                    "recovered by wall evidence map from unclaimed parallel wall-face evidence"
+                }
+            };
+        context.WallCandidates.Add(knownExterior);
+        context.WallCandidates.Add(recoveredDuplicate);
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var knownAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == knownExterior.Id);
+        Assert.Equal(WallEvidenceDecision.Accept, knownAssessment.Decision);
+        Assert.True(knownAssessment.PlacementReady);
+
+        var duplicateAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == recoveredDuplicate.Id);
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, duplicateAssessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, duplicateAssessment.Decision);
+        Assert.False(duplicateAssessment.PlacementReady);
+        Assert.True(duplicateAssessment.RequiresReview);
+        Assert.Contains(
+            duplicateAssessment.Evidence,
+            item => item.Contains("recovered duplicate wall body", StringComparison.OrdinalIgnoreCase)
+                && item.Contains(knownExterior.Id, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task WallEvidenceRefinement_RecoversShortSupportedWallSegments()
     {
         var document = new PlanDocument(
@@ -251,6 +308,129 @@ public sealed class WallEvidenceRecoveryTests
         Assert.Contains(
             assessment.Evidence,
             item => item.Contains("short unknown fragment-merged wall candidate requires review", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallEvidenceRefinement_KeepsUnsupportedUnlayeredFragmentMergedWallsReviewOnly()
+    {
+        var document = new PlanDocument(
+            "wall-evidence-unsupported-fragment-merged-review",
+            new[]
+            {
+                new PlanPage(1, new PlanSize(320, 220), Array.Empty<PlanPrimitive>())
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                DefaultWallThickness = 4,
+                MinWallLength = 36
+            });
+        var fragmentWall = new WallSegment(
+            "wall-unsupported-fragment",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(190, 100)),
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            FragmentEvidence = new WallFragmentEvidence(
+                8,
+                12,
+                3,
+                0,
+                0.15,
+                RequiresGeometryReview: false,
+                new[] { "fragment-merged test wall" }),
+            SourcePrimitiveIds = new[] { "fragment-a", "fragment-b" },
+            Evidence = new[] { "merged collinear wall fragments" }
+        };
+        context.WallCandidates.Add(fragmentWall);
+        context.WallCandidates.Add(PairedWall(
+            "support-left",
+            new PlanLineSegment(new PlanPoint(100, 50), new PlanPoint(100, 180)),
+            8,
+            0.82,
+            WallType.Interior));
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.WallId == fragmentWall.Id);
+
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+        Assert.False(assessment.PlacementReady);
+        Assert.True(assessment.RequiresReview);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains("unlayered fragment-merged wall candidate", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("only one trusted structural endpoint", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallEvidenceRefinement_AcceptsTrustedSupportedUnlayeredFragmentMergedWalls()
+    {
+        var document = new PlanDocument(
+            "wall-evidence-supported-fragment-merged-accept",
+            new[]
+            {
+                new PlanPage(1, new PlanSize(320, 220), Array.Empty<PlanPrimitive>())
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                DefaultWallThickness = 4,
+                MinWallLength = 36
+            });
+        var fragmentWall = new WallSegment(
+            "wall-supported-fragment",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(190, 100)),
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            FragmentEvidence = new WallFragmentEvidence(
+                8,
+                12,
+                3,
+                0,
+                0.15,
+                RequiresGeometryReview: false,
+                new[] { "fragment-merged test wall" }),
+            SourcePrimitiveIds = new[] { "fragment-a", "fragment-b" },
+            Evidence = new[] { "merged collinear wall fragments" }
+        };
+        context.WallCandidates.Add(fragmentWall);
+        context.WallCandidates.Add(PairedWall(
+            "support-left",
+            new PlanLineSegment(new PlanPoint(100, 50), new PlanPoint(100, 180)),
+            8,
+            0.82,
+            WallType.Interior));
+        context.WallCandidates.Add(PairedWall(
+            "support-right",
+            new PlanLineSegment(new PlanPoint(190, 50), new PlanPoint(190, 180)),
+            8,
+            0.82,
+            WallType.Interior));
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.WallId == fragmentWall.Id);
+
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Accept, assessment.Decision);
+        Assert.True(assessment.PlacementReady);
+        Assert.False(assessment.RequiresReview);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains("medium wall body from wall-like layer, length, or structural context", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -1449,10 +1449,19 @@ public sealed class ExportTests
             .GetProperty("walls")
             .EnumerateArray()
             .Single(item => item.GetProperty("id").GetString() == sourceWall.Id);
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
         var span = Assert.Single(wall.GetProperty("solidSpans").EnumerateArray());
         var body = span.GetProperty("bodyPolygon");
         var evidence = span.GetProperty("evidence").EnumerateArray().Select(item => item.GetString()).ToArray();
+        var topologyEvidence = topologySpan.GetProperty("evidence").EnumerateArray().Select(item => item.GetString()).ToArray();
 
+        Assert.Equal(line.Start.Y + 2, topologySpan.GetProperty("centerLine").GetProperty("start").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(line.End.Y + 2, topologySpan.GetProperty("centerLine").GetProperty("end").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(2, topologySpan.GetProperty("sourceWallStartProjectionDistanceDrawingUnits").GetDouble(), 3);
+        Assert.Equal(2, topologySpan.GetProperty("sourceWallEndProjectionDistanceDrawingUnits").GetDouble(), 3);
+        Assert.Contains(topologyEvidence, item => item?.Contains("centered between paired wall faces", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(line.Start.Y + 2, span.GetProperty("centerLine").GetProperty("start").GetProperty("y").GetDouble(), 3);
+        Assert.Equal(line.End.Y + 2, span.GetProperty("centerLine").GetProperty("end").GetProperty("y").GetDouble(), 3);
         Assert.Equal(5, body.GetArrayLength());
         Assert.Equal(line.Start.X, body[0].GetProperty("x").GetDouble(), 3);
         Assert.Equal(line.Start.Y - 3, body[0].GetProperty("y").GetDouble(), 3);
@@ -2113,6 +2122,77 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_KeepsTrustedShortDanglingPairedWallReturn()
+    {
+        var result = CreateOffAxisTopologySpanResult(
+            "trusted-short-wall-return",
+            new PlanPoint(124, 100),
+            sourceEndX: 124,
+            detectionKind: WallDetectionKind.ParallelLinePair,
+            category: WallEvidenceCategory.StrongWallBody);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var root = document.RootElement;
+        var wall = Assert.Single(root.GetProperty("walls").EnumerateArray());
+        var span = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.Equal(24, span.GetProperty("drawingLength").GetDouble(), precision: 3);
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_KeepsPromotedMediumShortDanglingPairedWallReturn()
+    {
+        var result = CreateOffAxisTopologySpanResult(
+            "promoted-medium-short-wall-return",
+            new PlanPoint(124, 100),
+            sourceEndX: 124,
+            detectionKind: WallDetectionKind.ParallelLinePair,
+            category: WallEvidenceCategory.MediumWallBody,
+            assessmentEvidence:
+            [
+                "wall evidence: medium wall body promoted to placement-ready by main structural graph component synthetic"
+            ]);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var root = document.RootElement;
+        var wall = Assert.Single(root.GetProperty("walls").EnumerateArray());
+        var span = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.Equal(24, span.GetProperty("drawingLength").GetDouble(), precision: 3);
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_MergesTinyContiguousFragmentsIntoTrustedShortWallReturn()
+    {
+        var result = CreateFragmentedShortPairedWallReturnResult();
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "fragmented-short-wall-return");
+        var span = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.Equal(28, span.GetProperty("drawingLength").GetDouble(), precision: 3);
+        Assert.Equal(
+            new[] { "fragmented-short-edge-a", "fragmented-short-edge-b", "fragmented-short-edge-c" },
+            JsonStrings(span.GetProperty("sourceWallGraphEdgeIds")));
+    }
+
+    [Fact]
     public async Task JsonExporter_WritesEvidenceBackedScanReviewQueue()
     {
         var result = await CreateScanResultAsync();
@@ -2692,9 +2772,17 @@ public sealed class ExportTests
 
     private static PlanScanResult CreateOffAxisTopologySpanResult(
         string id,
-        PlanPoint offAxisEnd)
+        PlanPoint offAxisEnd,
+        double sourceEndX = 220,
+        WallDetectionKind detectionKind = WallDetectionKind.SingleLine,
+        WallEvidenceCategory category = WallEvidenceCategory.StrongWallBody,
+        IReadOnlyList<string>? assessmentEvidence = null)
     {
-        var wall = SyntheticWall(id, 100, 100, 220, 100) with { WallType = WallType.Interior };
+        var wall = SyntheticWall(id, 100, 100, sourceEndX, 100) with
+        {
+            DetectionKind = detectionKind,
+            WallType = WallType.Interior
+        };
         var nodes = new[]
         {
             SyntheticNode($"{id}:node-a", 100, 100, WallNodeKind.Endpoint),
@@ -2717,13 +2805,13 @@ public sealed class ExportTests
             wall.Id,
             wall.PageNumber,
             wall.Bounds,
-            WallEvidenceCategory.StrongWallBody,
+            category,
             Confidence.High,
             PlacementReady: true,
             RequiresReview: false,
             RejectedAsNoise: false,
             wall.SourcePrimitiveIds,
-            ["synthetic accepted wall body evidence"])
+            assessmentEvidence ?? ["synthetic accepted wall body evidence"])
         {
             Decision = WallEvidenceDecision.Accept
         };
@@ -2766,6 +2854,122 @@ public sealed class ExportTests
             Array.Empty<SurfacePatternCandidate>(),
             [wall],
             new WallGraph(nodes, [edge], [component]),
+            Array.Empty<RoomRegion>(),
+            RoomAdjacencyGraph.Empty,
+            Array.Empty<OpeningCandidate>(),
+            Array.Empty<ObjectCandidate>(),
+            Array.Empty<ObjectCandidateGroup>(),
+            Array.Empty<ObjectAggregate>(),
+            new PipelineDiagnostics(
+                now,
+                now,
+                Array.Empty<PipelineStageReport>(),
+                Array.Empty<PlanDiagnostic>()))
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                [assessment],
+                1,
+                0)
+        };
+    }
+
+    private static PlanScanResult CreateFragmentedShortPairedWallReturnResult()
+    {
+        var wall = SyntheticWall("fragmented-short-wall-return", 100, 100, 128, 100) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior
+        };
+        var anchor = SyntheticWall("fragmented-short-anchor", 128, 100, 128, 140) with
+        {
+            WallType = WallType.Interior
+        };
+        var walls = new[] { wall, anchor };
+        var nodes = new[]
+        {
+            SyntheticNode("fragmented-short-node-a", 100, 100, WallNodeKind.Endpoint),
+            SyntheticNode("fragmented-short-node-b", 119, 100, WallNodeKind.TJunction),
+            SyntheticNode("fragmented-short-node-c", 126, 100, WallNodeKind.TJunction),
+            SyntheticNode("fragmented-short-node-d", 128, 100, WallNodeKind.TJunction),
+            SyntheticNode("fragmented-short-node-e", 128, 140, WallNodeKind.Endpoint)
+        };
+        var edges = new[]
+        {
+            new WallEdge("fragmented-short-edge-a", 1, nodes[0].Id, nodes[1].Id, wall.Id, Confidence.High),
+            new WallEdge("fragmented-short-edge-b", 1, nodes[1].Id, nodes[2].Id, wall.Id, Confidence.High),
+            new WallEdge("fragmented-short-edge-c", 1, nodes[2].Id, nodes[3].Id, wall.Id, Confidence.High),
+            new WallEdge("fragmented-short-anchor-edge", 1, nodes[3].Id, nodes[4].Id, anchor.Id, Confidence.High)
+        };
+        var component = new WallGraphComponent(
+            "fragmented-short-component",
+            1,
+            WallGraphComponentKind.MainStructural,
+            new PlanRect(98, 96, 34, 48),
+            walls.Select(item => item.Id).ToArray(),
+            nodes.Select(node => node.Id).ToArray(),
+            edges.Select(edge => edge.Id).ToArray(),
+            walls.SelectMany(item => item.SourcePrimitiveIds).ToArray(),
+            walls.Sum(item => item.DrawingLength),
+            Confidence.High,
+            ["synthetic main structural fragmented short wall return"]);
+        var assessment = new WallEvidenceWallAssessment(
+            wall.Id,
+            wall.PageNumber,
+            wall.Bounds,
+            WallEvidenceCategory.StrongWallBody,
+            Confidence.High,
+            PlacementReady: true,
+            RequiresReview: false,
+            RejectedAsNoise: false,
+            wall.SourcePrimitiveIds,
+            ["synthetic accepted paired wall body evidence"])
+        {
+            Decision = WallEvidenceDecision.Accept
+        };
+        var now = DateTimeOffset.UtcNow;
+
+        return new PlanScanResult(
+            new PlanDocument(
+                "fragmented-short-wall-return",
+                [
+                    new PlanPage(
+                        1,
+                        new PlanSize(220, 180),
+                        walls.Select(item => WallLine(
+                                item.Id,
+                                item.CenterLine.Start,
+                                item.CenterLine.End))
+                            .Cast<PlanPrimitive>()
+                            .ToArray())
+                ])
+            {
+                Metadata = new PlanMetadata
+                {
+                    SourceName = "fragmented-short-wall-return.pdf",
+                    SourcePath = @"C:\plans\fragmented-short-wall-return.pdf",
+                    Properties = new Dictionary<string, string>
+                    {
+                        ["format"] = "pdf",
+                        ["loader"] = "synthetic",
+                        ["sourceKind"] = PlanSourceKind.Pdf.ToString(),
+                        ["effectiveSourceKind"] = PlanSourceKind.Pdf.ToString()
+                    }
+                }
+            },
+            PlanLayerAnalysis.Empty,
+            PlanCalibration.Empty,
+            MeasurementConsistencyReport.Empty,
+            Array.Empty<TitleBlockAnalysis>(),
+            Array.Empty<DimensionAnnotation>(),
+            Array.Empty<PlanAnnotationBlock>(),
+            Array.Empty<GridAxis>(),
+            Array.Empty<GridBaySpacing>(),
+            Array.Empty<SheetRegion>(),
+            Array.Empty<SurfacePatternCandidate>(),
+            walls,
+            new WallGraph(nodes, edges, [component]),
             Array.Empty<RoomRegion>(),
             RoomAdjacencyGraph.Empty,
             Array.Empty<OpeningCandidate>(),

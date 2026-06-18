@@ -6,6 +6,150 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.111] - 2026-06-18
+
+### Fixed
+- Clean placement wall topology now keeps trusted short dangling wall returns
+  when they come from placement-ready paired-wall evidence inside a structural
+  component. Short single-line/off-axis connectors are still filtered out, so
+  this recovers real wall returns without reopening the random-line noise path.
+- Clean wall-run merging now keeps tiny contiguous fragments long enough to
+  merge them into a trusted placement run, then applies the minimum-length gate
+  to the merged run. This prevents the tail of a real fragmented wall from being
+  discarded before it can reconnect to the rest of the wall.
+
+### Verified
+- Added placement export regression coverage for trusted short paired-wall
+  returns, promoted medium paired-wall returns, short connector rejection, and
+  tiny contiguous fragment merging.
+- Focused placement export tests passed with `5` tests.
+- Full test suite passed with `548` tests.
+- Medium PDF smoke scan completed with
+  `private medium PDF fixture`. Placement-ready wall
+  output rose from `32` to `34`, `no_clean_topology_spans` omissions dropped
+  from `2` to `0`, and rejected/isolated wall-noise counts stayed unchanged.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v130/placement.json`.
+- Rendered and inspected a wall-only QA screenshot:
+  `real-pdf-output/private-medium-a20-102-v130/viewer-placement-walls-only.png`.
+  The recovered output is cleaner, but still too sparse; the next accuracy pass
+  should focus on recovering missing real wall structure, not merely suppressing
+  noise.
+
+## [0.02.110] - 2026-06-18
+
+### Changed
+- Placement-ready wall topology spans and solid wall span centerlines now use the
+  midpoint between detected paired wall faces when reliable pair evidence exists,
+  instead of always reusing the raw source wall centerline. This keeps raw wall
+  provenance intact while improving downstream placement alignment for thick
+  walls whose detected source line is biased toward one face.
+
+### Verified
+- Added placement export regression coverage for pair-centered topology spans and
+  solid spans.
+- Focused placement export tests passed with `3` tests.
+- Export, placement validation, and viewer script contract tests passed with
+  `55` tests.
+- Full test suite passed with `545` tests.
+- Private medium PDF smoke scan completed with
+  `private medium PDF fixture`. Placement-ready wall
+  counts stayed stable at `32` topology spans and `141` solid spans while
+  pair-evidence placement spans now carry non-zero source projection distances
+  when centered between detected faces.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v129/placement.json`.
+- Rendered and inspected a wall-only visualizer screenshot:
+  `real-pdf-output/private-medium-a20-102-v129/viewer-placement-walls-only.png`.
+  The overlay remains clean and stable; remaining visual issues are still
+  missing/fragmented interior spans and broader source wall-body recognition.
+
+## [0.02.109] - 2026-06-18
+
+### Fixed
+- Long interior fragment-merged wall components that sit near the main wall body
+  can now be recovered as secondary structural walls instead of staying isolated
+  review-only fragments. This helps recover real bathroom/entry partition walls
+  while short detail-sized fragments remain blocked from placement output.
+
+### Verified
+- Added wall-graph regression coverage for long interior fragment recovery and
+  short interior fragment rejection.
+- Focused graph recovery tests passed with `2` tests.
+- Related wall graph/topology/evidence suites passed with `53` tests.
+- Full test suite passed with `545` tests.
+- Private medium PDF smoke scan completed with
+  `private medium PDF fixture`. Placement-ready wall
+  output rose from `29` to `32` walls after promoting
+  `page:1:wall:134`, `page:1:wall:149`, and `page:1:wall:155` as long interior
+  fragment walls.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v128/placement.json`.
+- Rendered and inspected a wall-only viewer screenshot:
+  `real-pdf-output/private-medium-a20-102-v128/viewer-placement-walls-only.png`.
+  The previous random-line overlay remains gone, and the new promoted interior
+  spans are visible, but visual QA still shows remaining wall centering/alignment
+  drift and fragmented/missing interior spans for the next accuracy pass.
+
+## [0.02.108] - 2026-06-18
+
+### Changed
+- The visualizer's main wall overlay is now explicitly a `Placement walls`
+  layer and draws only clean placement-ready topology spans, instead of falling
+  back to raw wall evidence lines that made wall-only screenshots look random.
+- Wall overlay styling no longer marks every placement wall as dashed just
+  because metric scale is unavailable. Dashed walls are now reserved for actual
+  geometry/evidence review in page-coordinate placement.
+
+### Fixed
+- Long unlayered fragment-merged wall candidates now need trusted structural
+  support before they can become exact placement geometry. Unsupported candidates
+  are kept for topology/review, and object-like fragment clusters can be rejected
+  before they pollute clean placement output.
+
+### Verified
+- Added wall-evidence regression coverage for unsupported and supported
+  unlayered fragment-merged wall candidates.
+- Focused wall-evidence tests passed with `13` tests.
+- Full test suite passed with `543` tests.
+- Private medium PDF smoke scan completed with
+  `private medium PDF fixture`. Placement-ready wall
+  spans dropped from `35` to `29`, wall graph edges dropped from `199` to `188`,
+  accepted wall evidence dropped from `41` to `36`, and rejected wall-like noise
+  increased from `35` to `40`.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v127/placement.json`.
+- Rendered and inspected wall-only visualizer screenshots:
+  `real-pdf-output/private-medium-a20-102-v127/viewer-placement-walls-only.png`
+  and
+  `real-pdf-output/private-medium-a20-102-v127/viewer-placement-walls-on-pdf.png`.
+  The random raw-line mess is gone and the overlay is easier to read, but visual
+  QA still shows missing/fragmented interior walls and some exterior centering
+  drift that need the next accuracy pass.
+
+## [0.02.107] - 2026-06-18
+
+### Fixed
+- Recovered unknown paired wall bodies that strongly overlap a nearby known
+  structural paired wall are now marked review-only duplicate geometry before
+  exact placement. This prevents a duplicate recovered wall face/body from
+  becoming a clean downstream wall span.
+
+### Verified
+- Added wall-evidence regression coverage for recovered duplicate paired bodies.
+- Focused wall-evidence tests passed with `11` tests.
+- Full test suite passed with `541` tests.
+- Private medium PDF smoke scan completed with
+  `private medium PDF fixture`. Clean placement spans
+  dropped from `38` to `35`, raw wall graph edges dropped from `215` to `199`,
+  and clean placement spans now include `0` unknown wall-type spans.
+- Deep placement validation passed for
+  `real-pdf-output/private-medium-a20-102-v125/placement.json`.
+- Rendered and inspected the wall-only viewer screenshot
+  `real-pdf-output/private-medium-a20-102-v125/viewer-placement-clean-spans-only.png`.
+  The previous odd unclassified vertical span is gone, while remaining wall
+  coverage gaps are still visible and need later accuracy work.
+
 ## [0.02.106] - 2026-06-18
 
 ### Added
@@ -24,7 +168,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused schema/export tests passed with `84` tests.
 - Full test suite passed with `540` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The placement packet
+  `private medium PDF fixture`. The placement packet
   reports `38` clean topology spans and preserves `215` raw wall graph edges;
   `18` clean spans merge more than one raw edge, with up to `6` raw edge IDs on
   a single compact span.
@@ -57,7 +201,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused placement/export tests passed with `5` tests.
 - Full test suite passed with `540` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The compact
+  `private medium PDF fixture`. The compact
   `placement.json` now reports `38` wall topology spans, matching the
   placement-review SVG clean layer, while retaining `215` raw wall graph edges.
 - Deep placement validation passed for
@@ -120,7 +264,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused placement export tests passed with `3` tests.
 - Full test suite passed with `539` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. Exported placement
+  `private medium PDF fixture`. Exported placement
   topology spans dropped from `118` to `81`, with `0` remaining off-axis spans
   above one drawing unit.
 - Deep placement validation passed for
@@ -147,7 +291,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused export/schema/CLI placement validation tests passed with `96` tests.
 - Full test suite passed with `537` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The placement-review
+  `private medium PDF fixture`. The placement-review
   SVG now reports `39` placement-ready walls, `85` omitted/review walls, and top
   omission categories: rejected evidence, isolated fragments, and duplicate
   faces.
@@ -174,7 +318,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused export/schema/CLI placement validation tests passed with `96` tests.
 - Full test suite passed with `537` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The placement summary
+  `private medium PDF fixture`. The placement summary
   reported `124` walls, `39` placement-ready walls, `85` omitted/review walls,
   `118` clean topology spans, and `141` solid wall spans.
 - Deep placement validation passed for
@@ -204,7 +348,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused export/schema tests passed with `82` tests.
 - Full test suite passed with `537` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The scan exported
+  `private medium PDF fixture`. The scan exported
   `124` walls: `39` placement-ready walls with no omission and `85`
   review/omitted walls with structured omission codes.
 - Deep placement validation passed for
@@ -234,7 +378,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused wall graph/export tests passed with `4` tests.
 - Full test suite passed with `537` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The repair-aware
+  `private medium PDF fixture`. The repair-aware
   promotion safely moved `page:1:wall:105` into placement-ready output while
   leaving the risky `page:1:wall:111` endpoint-repair wall review-only.
 - Rendered and inspected
@@ -287,7 +431,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
   prior interior wall-envelope classification.
 - Focused wall-type refinement test passed.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. Wall geometry counts
+  `private medium PDF fixture`. Wall geometry counts
   stayed stable, while wall typing improved from `40` exterior / `39` interior
   to `25` exterior / `54` interior.
 - Rendered and inspected
@@ -311,7 +455,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused export, wall-graph, wall-placement, arc-door filtering, and viewer
   contract tests passed with `78` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The high-severity repair
+  `private medium PDF fixture`. The high-severity repair
   involving `page:1:wall:111` and `page:1:wall:54` remains visible as QA, while
   clean topology spans stay at `37`, wall body footprints stay at `37`, and
   hidden non-placement topology spans stay at `99`.
@@ -337,7 +481,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused export, wall-graph, and placement-readiness tests passed with `67`
   tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. Clean visible topology
+  `private medium PDF fixture`. Clean visible topology
   spans dropped from `38` to `37`, wall body footprints dropped from `38` to
   `37`, and hidden non-placement topology spans rose from `98` to `99`.
 - Rendered and inspected
@@ -361,7 +505,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
   repair candidates.
 - Focused export, wall-graph, and wall-placement tests passed with `67` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The blocking repair
+  `private medium PDF fixture`. The blocking repair
   involving `page:1:wall:54` now makes that wall coordinate-not-ready, dropping
   coordinate-ready walls from `40` to `39` and total coordinate-ready placement
   entities from `64` to `63`.
@@ -387,7 +531,7 @@ fix counter. Individual JSON contracts keep their own schema versions.
 - Focused wall evidence tests passed with `46` tests.
 - Full test suite passed with `528` tests.
 - Private medium PDF smoke scan completed with
-  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The false accepted wall
+  `private medium PDF fixture`. The false accepted wall
   `page:1:wall:9` is now review-only instead of placement-ready, clean
   placement-ready walls dropped from `45` to `43`, and rendered screenshots were
   inspected at

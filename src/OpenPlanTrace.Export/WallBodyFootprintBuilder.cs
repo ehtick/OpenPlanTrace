@@ -15,8 +15,42 @@ internal sealed record WallBodyFootprint(
     WallSegment SourceWall,
     IReadOnlyList<string> Evidence);
 
+internal sealed record WallPlacementAxis(
+    PlanLineSegment CenterLine,
+    string GeometrySource,
+    bool UsesPairedFaceEvidence);
+
 internal static class WallBodyFootprintBuilder
 {
+    public static WallPlacementAxis BuildPlacementAxis(
+        WallSegment wall,
+        double startParameter,
+        double endParameter)
+    {
+        var normalizedStart = Math.Clamp(Math.Min(startParameter, endParameter), 0, 1);
+        var normalizedEnd = Math.Clamp(Math.Max(startParameter, endParameter), 0, 1);
+        var sourceLine = new PlanLineSegment(
+            wall.CenterLine.PointAt(normalizedStart),
+            wall.CenterLine.PointAt(normalizedEnd));
+
+        if (TryBuildCenterLineFromPairEvidence(
+            wall.PairEvidence,
+            normalizedStart,
+            normalizedEnd,
+            out var pairCenterLine))
+        {
+            return new WallPlacementAxis(
+                pairCenterLine,
+                "detected paired wall-face midpoint",
+                UsesPairedFaceEvidence: true);
+        }
+
+        return new WallPlacementAxis(
+            sourceLine,
+            "source wall centerline",
+            UsesPairedFaceEvidence: false);
+    }
+
     public static WallBodyFootprint Build(
         WallSegment wall,
         double startParameter,
@@ -27,9 +61,8 @@ internal static class WallBodyFootprintBuilder
     {
         var normalizedStart = Math.Clamp(Math.Min(startParameter, endParameter), 0, 1);
         var normalizedEnd = Math.Clamp(Math.Max(startParameter, endParameter), 0, 1);
-        var line = new PlanLineSegment(
-            wall.CenterLine.PointAt(normalizedStart),
-            wall.CenterLine.PointAt(normalizedEnd));
+        var placementAxis = BuildPlacementAxis(wall, normalizedStart, normalizedEnd);
+        var line = placementAxis.CenterLine;
         var alongVector = line.Vector.Normalize();
         var fallbackNormalVector = new PlanVector(-alongVector.Y, alongVector.X);
         var hasPairEvidenceBody = TryBuildBodyPolygonFromPairEvidence(
@@ -244,6 +277,42 @@ internal static class WallBodyFootprintBuilder
         ];
         return true;
     }
+
+    private static bool TryBuildCenterLineFromPairEvidence(
+        WallPairEvidence? pairEvidence,
+        double startParameter,
+        double endParameter,
+        out PlanLineSegment centerLine)
+    {
+        centerLine = default;
+        if (pairEvidence is null
+            || pairEvidence.FirstFaceLine.Length <= 0.001
+            || pairEvidence.SecondFaceLine.Length <= 0.001
+            || pairEvidence.FaceSeparation <= 0.001
+            || pairEvidence.OverlapRatio < 0.55)
+        {
+            return false;
+        }
+
+        var firstStart = pairEvidence.FirstFaceLine.PointAt(startParameter);
+        var firstEnd = pairEvidence.FirstFaceLine.PointAt(endParameter);
+        var secondStart = pairEvidence.SecondFaceLine.PointAt(startParameter);
+        var secondEnd = pairEvidence.SecondFaceLine.PointAt(endParameter);
+        var sameDirectionDistance = firstStart.DistanceTo(secondStart) + firstEnd.DistanceTo(secondEnd);
+        var reverseDirectionDistance = firstStart.DistanceTo(secondEnd) + firstEnd.DistanceTo(secondStart);
+        if (reverseDirectionDistance < sameDirectionDistance)
+        {
+            (secondStart, secondEnd) = (secondEnd, secondStart);
+        }
+
+        centerLine = new PlanLineSegment(
+            Midpoint(firstStart, secondStart),
+            Midpoint(firstEnd, secondEnd));
+        return centerLine.Length > 0.001;
+    }
+
+    private static PlanPoint Midpoint(PlanPoint first, PlanPoint second) =>
+        new((first.X + second.X) / 2.0, (first.Y + second.Y) / 2.0);
 
     private static IReadOnlyList<PlanPoint> BuildFallbackBodyPolygon(
         PlanLineSegment line,
