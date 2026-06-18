@@ -6,6 +6,129 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.096] - 2026-06-18
+
+### Changed
+- Wall type refinement no longer flips a wall from `Interior` to `Exterior`
+  solely because room detection found a room on only one side. One-sided room
+  evidence now preserves prior interior envelope/topology classification, which
+  reduces false exterior walls when room detection misses the opposite side of a
+  real interior partition.
+
+### Verified
+- Added regression coverage proving one-sided room evidence does not override a
+  prior interior wall-envelope classification.
+- Focused wall-type refinement test passed.
+- Private medium PDF smoke scan completed with
+  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. Wall geometry counts
+  stayed stable, while wall typing improved from `40` exterior / `39` interior
+  to `25` exterior / `54` interior.
+- Rendered and inspected
+  `real-pdf-output/private-medium-a20-102-v110/placement-review-background-page-fit.png`;
+  the middle/right interior partitions now render green instead of false
+  exterior blue while the outer shell remains blue.
+
+## [0.02.095] - 2026-06-18
+
+### Changed
+- The viewer now treats scan-only `TopologyImportBlocked` wall graph repair
+  candidates as coordinate-blocking evidence, even when a raw scan JSON has not
+  been converted to placement JSON yet. Clean structural wall layers no longer
+  draw those blocked wall IDs as placement-ready lines.
+- Viewer cache busting was bumped so the browser reloads the corrected script.
+
+### Verified
+- Added a viewer script contract test that guards the raw-scan fallback for
+  `TopologyImportBlocked` repair candidates.
+- Viewer JavaScript syntax check passed with the bundled Node.js runtime.
+- Focused export, wall-graph, wall-placement, arc-door filtering, and viewer
+  contract tests passed with `78` tests.
+- Private medium PDF smoke scan completed with
+  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The high-severity repair
+  involving `page:1:wall:111` and `page:1:wall:54` remains visible as QA, while
+  clean topology spans stay at `37`, wall body footprints stay at `37`, and
+  hidden non-placement topology spans stay at `99`.
+- Rendered and inspected
+  `real-pdf-output/private-medium-a20-102-v109/placement-review-page-fit.png`;
+  the previous random-line failure is now reduced to a small repair marker
+  instead of a long clean wall.
+
+## [0.02.094] - 2026-06-18
+
+### Changed
+- Placement-review SVG overlays now hide wall topology spans and wall body
+  footprints for walls involved in `TopologyImportBlocked` repair candidates.
+  The repair candidate itself remains visible as a QA layer, but blocked walls no
+  longer appear as clean placement-ready geometry.
+- Visual snapshots now reflect those blocked spans as hidden non-placement
+  topology, keeping screenshot QA aligned with placement JSON reliability.
+
+### Verified
+- Added placement-review renderer coverage proving import-blocked walls are
+  omitted from clean topology spans and wall body footprints while the repair QA
+  layer remains visible.
+- Focused export, wall-graph, and placement-readiness tests passed with `67`
+  tests.
+- Private medium PDF smoke scan completed with
+  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. Clean visible topology
+  spans dropped from `38` to `37`, wall body footprints dropped from `38` to
+  `37`, and hidden non-placement topology spans rose from `98` to `99`.
+- Rendered and inspected
+  `real-pdf-output/private-medium-a20-102-v108/placement-review-page-fit.png`;
+  the blocked repair remains visible while the affected wall is removed from
+  clean placement-review geometry.
+
+## [0.02.093] - 2026-06-18
+
+### Changed
+- Placement reliability now treats `TopologyImportBlocked` wall graph repair
+  candidates as coordinate-placement blockers for the involved walls. The wall
+  remains exported with its source geometry and repair candidate IDs, but
+  downstream engines should no longer treat it as exact-placement ready.
+- Wall graph repair review reasons in placement JSON now include the repair
+  candidate import impact (`TopologyReviewRequired` or `TopologyImportBlocked`)
+  so consumers can distinguish review warnings from blocking topology defects.
+
+### Verified
+- Added readiness and placement JSON coverage for import-blocking wall graph
+  repair candidates.
+- Focused export, wall-graph, and wall-placement tests passed with `67` tests.
+- Private medium PDF smoke scan completed with
+  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The blocking repair
+  involving `page:1:wall:54` now makes that wall coordinate-not-ready, dropping
+  coordinate-ready walls from `40` to `39` and total coordinate-ready placement
+  entities from `64` to `63`.
+- Rendered and inspected
+  `real-pdf-output/private-medium-a20-102-v107/placement-review-page-fit.png`;
+  the visual wall overlay remains stable while the JSON reliability contract is
+  stricter.
+
+## [0.02.092] - 2026-06-18
+
+### Changed
+- Short unlayered parallel-face wall candidates are now demoted to review-only
+  when they have only one structurally supported endpoint and weak or fragmented
+  pair evidence. This catches door/stair/detail fragments that previously looked
+  like clean interior walls in placement-review output.
+- The wall evidence message now records the endpoint-support reason, pair score,
+  and face-fragment count so future screenshot QA can explain why a candidate was
+  blocked from exact placement.
+
+### Verified
+- Added regression coverage for a weak short unlayered parallel pair supported
+  by only one structural endpoint.
+- Focused wall evidence tests passed with `46` tests.
+- Full test suite passed with `528` tests.
+- Private medium PDF smoke scan completed with
+  `C:\Users\post\Downloads\A20-102 PLAN 1. ETASJE.pdf`. The false accepted wall
+  `page:1:wall:9` is now review-only instead of placement-ready, clean
+  placement-ready walls dropped from `45` to `43`, and rendered screenshots were
+  inspected at
+  `real-pdf-output/private-medium-a20-102-v106/placement-review-page-fit.png`.
+  The worst random short pair in the left/stair area is removed from the clean
+  placement overlay, while other questionable fragment-merged walls remain as
+  candidates for the next accuracy pass.
+
 ## [0.02.091] - 2026-06-18
 
 ### Changed

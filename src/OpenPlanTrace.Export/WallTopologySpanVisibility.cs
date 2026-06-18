@@ -78,6 +78,11 @@ internal static class WallTopologySpanVisibility
             return false;
         }
 
+        if (context.TopologyImportBlockedWallIds.Contains(span.WallId))
+        {
+            return false;
+        }
+
         return !IsShortDanglingTopologySpan(span, context.NodeDegreeById);
     }
 
@@ -86,7 +91,8 @@ internal static class WallTopologySpanVisibility
             WallGraphTopologySpanBuilder.Build(result.WallGraph, result.Walls),
             BuildWallComponentLookup(result.WallGraph.Components),
             WallEvidenceExportHelpers.BuildAssessmentLookup(result.WallEvidenceMap),
-            BuildNodeIncidentLookup(result.WallGraph.Edges));
+            BuildNodeIncidentLookup(result.WallGraph.Edges),
+            BuildTopologyImportBlockedWallIds(result.WallGraph.RepairCandidates));
 
     private static bool IsShortDanglingTopologySpan(
         WallGraphTopologySpan span,
@@ -207,11 +213,31 @@ internal static class WallTopologySpanVisibility
         }
     }
 
+    private static IReadOnlySet<string> BuildTopologyImportBlockedWallIds(
+        IReadOnlyList<WallGraphRepairCandidate> repairCandidates)
+    {
+        var blocked = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in repairCandidates.Where(candidate =>
+            candidate.ImportImpact == WallGraphRepairImportImpact.TopologyImportBlocked))
+        {
+            foreach (var wallId in candidate.WallIds)
+            {
+                if (!string.IsNullOrWhiteSpace(wallId))
+                {
+                    blocked.Add(wallId);
+                }
+            }
+        }
+
+        return blocked;
+    }
+
     private sealed record WallTopologySpanVisibilityContext(
         IReadOnlyList<WallGraphTopologySpan> Spans,
         IReadOnlyDictionary<string, WallGraphComponent> ComponentByWallId,
         IReadOnlyDictionary<string, WallEvidenceWallAssessment> WallEvidenceAssessments,
-        IReadOnlyDictionary<string, int> NodeDegreeById);
+        IReadOnlyDictionary<string, int> NodeDegreeById,
+        IReadOnlySet<string> TopologyImportBlockedWallIds);
 
     private sealed record CleanRunInterval(
         string WallId,

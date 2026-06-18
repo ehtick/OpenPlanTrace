@@ -506,7 +506,7 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
         out string evidence)
     {
         evidence = string.Empty;
-        if (!IsStrongPairedWall(wall)
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
             || wall.PairEvidence is null
             || IsWallLayerBacked(wall, context))
         {
@@ -524,19 +524,37 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             wall.PageNumber,
             context.WallCandidates,
             context.Options);
-        if (structuralSupportWallCount >= 2)
+        var structuralEndpointSupportCount = CountStructuralEndpointSupport(
+            wall.CenterLine,
+            wall.PageNumber,
+            context.WallCandidates,
+            context.Options);
+        if (structuralEndpointSupportCount >= 2 && structuralSupportWallCount >= 2)
         {
             return false;
         }
 
-        evidence = structuralSupportWallCount == 0
-            ? "wall evidence: short unlayered parallel-face candidate has no distinct structural support; keep for topology but block exact placement until reviewed"
-            : "wall evidence: short unlayered parallel-face candidate is supported by only one distinct structural wall; keep for topology but block exact placement until reviewed";
+        var weakPairEvidence = wall.PairEvidence.Score < 0.68
+            || wall.PairEvidence.FirstFaceFragmentCount + wall.PairEvidence.SecondFaceFragmentCount >= 6;
+        if (!IsStrongPairedWall(wall) && !weakPairEvidence)
+        {
+            return false;
+        }
+
+        var supportEvidence = structuralEndpointSupportCount <= 0
+            ? "has no structural endpoint support"
+            : structuralEndpointSupportCount == 1
+                ? "has only one structurally supported endpoint"
+                : "has clustered support but fewer than two distinct structural wall connections";
+        var pairEvidence = weakPairEvidence
+            ? $"weak/fragmented pair evidence (score {wall.PairEvidence.Score.ToString("0.###", CultureInfo.InvariantCulture)}, {wall.PairEvidence.FirstFaceFragmentCount + wall.PairEvidence.SecondFaceFragmentCount} face fragments)"
+            : "short paired wall evidence";
+        evidence = $"wall evidence: short unlayered parallel-face candidate {supportEvidence} and {pairEvidence}; keep for topology but block exact placement until reviewed";
         return true;
     }
 
     private static double ShortWeaklySupportedPairedWallReviewLength(ScannerOptions options) =>
-        Math.Max(options.MinWallLength * 1.35, options.DefaultWallThickness * 10.0);
+        Math.Max(options.MinWallLength * 2.25, options.DefaultWallThickness * 14.0);
 
     private static int CountCollinearContinuitySupportWalls(
         WallSegment wall,

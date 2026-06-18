@@ -218,6 +218,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && IsStructuralWallComponent(component)
             && wall.Confidence.Value >= 0.45)
         {
+            if (wall.WallType == WallType.Interior)
+            {
+                return new WallTypeRefinement(
+                    WallType.Interior,
+                    "wall type preserved interior: one-sided room evidence did not override interior wall-envelope evidence");
+            }
+
             return new WallTypeRefinement(
                 WallType.Exterior,
                 "wall type refined exterior: detected room evidence on one side only");

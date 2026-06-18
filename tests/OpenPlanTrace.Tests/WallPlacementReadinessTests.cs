@@ -105,6 +105,32 @@ public sealed class WallPlacementReadinessTests
         Assert.Contains("wall fragment geometry requires review before exact placement", readiness.Reasons);
     }
 
+    [Fact]
+    public void Evaluate_BlocksTopologyImportBlockedWallGraphRepairReasonFromCoordinatePlacement()
+    {
+        var wall = Wall("wall:repair-blocked", Confidence.High);
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.StrongWallBody, placementReady: true);
+        var repairReason =
+            "wall graph repair candidate repair-1 requires review for endpoint-to-wall snap (EndpointToWall, TopologyImportBlocked, 17.238 drawing units)";
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence,
+            new[] { repairReason });
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains(repairReason, readiness.Reasons);
+    }
+
     private static WallSegment Wall(string id, Confidence confidence) =>
         new(
             id,

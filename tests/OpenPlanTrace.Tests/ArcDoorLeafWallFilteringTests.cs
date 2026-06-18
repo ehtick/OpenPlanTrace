@@ -360,6 +360,89 @@ public sealed class ArcDoorLeafWallFilteringTests
     }
 
     [Fact]
+    public async Task WallEvidenceRefinement_DowngradesWeakShortUnlayeredParallelPairWithOneSupport()
+    {
+        var firstFace = new PlanLineSegment(new PlanPoint(160, 112), new PlanPoint(212, 112));
+        var secondFace = new PlanLineSegment(new PlanPoint(160, 120), new PlanPoint(212, 120));
+        var document = new PlanDocument(
+            "wall-evidence-weak-short-unlayered-pair-review",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(420, 260),
+                    new PlanPrimitive[]
+                    {
+                        Wall("host-wall", new PlanPoint(212, 70), new PlanPoint(212, 170)),
+                        DoorLeaf("weak-pair-face-a", firstFace.Start, firstFace.End),
+                        DoorLeaf("weak-pair-face-b", secondFace.Start, secondFace.End)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                EnableWallEvidenceNoiseRejection = true,
+                MinWallLength = 24,
+                DefaultWallThickness = 4
+            })
+        {
+            LayerAnalysis = new PlanLayerAnalysis(new[]
+            {
+                Layer("A-WALL", LayerCategory.Wall, Confidence.High)
+            })
+        };
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host",
+            1,
+            new PlanLineSegment(new PlanPoint(212, 70), new PlanPoint(212, 170)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-wall" },
+            Evidence = new[] { "test structural wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-weak-short-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(160, 116), new PlanPoint(212, 116)),
+            8,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            SourcePrimitiveIds = new[] { "weak-pair-face-a", "weak-pair-face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 8,
+                OverlapRatio: 1,
+                Score: 0.60,
+                FirstFaceFragmentCount: 4,
+                SecondFaceFragmentCount: 3,
+                FirstFaceSourcePrimitiveIds: new[] { "weak-pair-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "weak-pair-face-b" }),
+            Evidence = new[] { "test weak short paired detail" }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Contains(context.Walls, wall => wall.SourcePrimitiveIds.Contains("host-wall"));
+        Assert.Contains(context.Walls, wall => wall.SourcePrimitiveIds.Contains("weak-pair-face-a"));
+
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.SourcePrimitiveIds.Contains("weak-pair-face-a"));
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+        Assert.False(assessment.PlacementReady);
+        Assert.True(assessment.RequiresReview);
+        Assert.False(assessment.RejectedAsNoise);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains("weak/fragmented pair evidence", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallEvidenceRefinement_RejectsUnlayeredArcLineWithOnlyOneEndpointSupport()
     {
         var document = new PlanDocument(

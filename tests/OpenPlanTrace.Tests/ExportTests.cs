@@ -827,6 +827,8 @@ public sealed class ExportTests
         Assert.Contains("EndpointToWall SnapEndpointToWall", svg);
         Assert.Contains("1 wall graph repairs (1 blocking)", svg);
         Assert.Contains("class=\"wall-graph-repair wall-graph-repair-high\"", svg);
+        Assert.DoesNotContain("clean wall topology span detail-host", svg);
+        Assert.DoesNotContain("wall body footprint detail-host", svg);
 
         var snapshot = PlanOverlaySnapshot.From(
             result,
@@ -838,6 +840,31 @@ public sealed class ExportTests
         var repairLayer = page.Layers.Single(layer => layer.Name == "wallGraphRepairs");
         Assert.Equal(1, repairLayer.Count);
         Assert.Equal(1, repairLayer.Breakdown["High"]);
+        Assert.True(page.Layers.Single(layer => layer.Name == "wallTopologyReviewSpans").Count > 0);
+    }
+
+    [Fact]
+    public void PlacementJsonExporter_BlocksWallsWithTopologyImportBlockedRepairCandidates()
+    {
+        var result = WithWallGraphRepairCandidate(CreateDenseMinorRoutingDetailResult());
+
+        using var parsed = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(result));
+        var root = parsed.RootElement;
+        var candidate = Assert.Single(root.GetProperty("wallGraphRepairCandidates").EnumerateArray());
+        var wall = Assert.Single(root.GetProperty("walls").EnumerateArray(), item =>
+            item.GetProperty("id").GetString() == "detail-host");
+
+        Assert.Equal("TopologyImportBlocked", candidate.GetProperty("importImpact").GetString());
+        Assert.Contains(
+            candidate.GetProperty("id").GetString(),
+            wall.GetProperty("wallGraphRepairCandidateIds").EnumerateArray().Select(item => item.GetString()));
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(wall.GetProperty("reliability").GetProperty("requiresReview").GetBoolean());
+        Assert.Contains(
+            wall.GetProperty("reliability").GetProperty("reasons").EnumerateArray().Select(item => item.GetString()),
+            reason => reason is not null
+                && reason.Contains(candidate.GetProperty("id").GetString()!, StringComparison.Ordinal)
+                && reason.Contains("TopologyImportBlocked", StringComparison.Ordinal));
     }
 
     [Fact]

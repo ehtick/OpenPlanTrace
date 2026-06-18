@@ -1228,7 +1228,7 @@ public sealed record PlacementWallExport(
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"wall graph repair candidate {candidate.Id} requires review for {action} ({candidate.Kind}, {candidate.GapDistance:0.###} drawing units)");
+            $"wall graph repair candidate {candidate.Id} requires review for {action} ({candidate.Kind}, {candidate.ImportImpact}, {candidate.GapDistance:0.###} drawing units)");
     }
 }
 

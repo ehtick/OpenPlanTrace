@@ -4255,11 +4255,35 @@ function wallRequiresReliabilityReview(wall) {
 }
 
 function wallCoordinateBlocked(wall) {
+  if (wallHasTopologyImportBlockedRepair(wall)) {
+    return true;
+  }
+
   if (wall?.reliability) {
     return wall.reliability.readyForCoordinatePlacement === false;
   }
 
   return wall?.evidenceAssessment && wall.evidenceAssessment.placementReady === false;
+}
+
+function wallHasTopologyImportBlockedRepair(wall, scan = state.scan) {
+  if (!wall?.id || !Array.isArray(scan?.wallGraphRepairCandidates)) {
+    return false;
+  }
+
+  const wallId = String(wall.id);
+  const repairIds = new Set(normalizeStringArray(wall.wallGraphRepairCandidateIds ?? wall.repairCandidateIds));
+  return scan.wallGraphRepairCandidates.some((candidate) => {
+    if (String(candidate?.importImpact || "").toLowerCase() !== "topologyimportblocked") {
+      return false;
+    }
+
+    if (repairIds.size > 0 && repairIds.has(String(candidate.id || ""))) {
+      return true;
+    }
+
+    return normalizeStringArray(candidate?.wallIds).includes(wallId);
+  });
 }
 
 function wallReliabilitySummary(wall) {

@@ -38,15 +38,21 @@ public static class WallPlacementReadinessEvaluator
             AddEvidenceReasons(evidenceAssessment, reasons);
         }
 
-        if (reviewReasons is not null)
+        var reviewReasonList = reviewReasons?
+            .Where(reason => !string.IsNullOrWhiteSpace(reason))
+            .ToArray()
+            ?? Array.Empty<string>();
+        if (reviewReasonList.Length > 0)
         {
-            reasons.AddRange(reviewReasons.Where(reason => !string.IsNullOrWhiteSpace(reason)));
+            reasons.AddRange(reviewReasonList);
         }
 
         var coordinatePlacementBlocked = CoordinatePlacementBlockedByComponent(component);
+        var coordinatePlacementBlockedByReviewReason = reviewReasonList.Any(IsCoordinateBlockingReviewReason);
         var readyForCoordinatePlacement =
             wall.Confidence.Value >= 0.5
             && !coordinatePlacementBlocked
+            && !coordinatePlacementBlockedByReviewReason
             && wall.FragmentEvidence?.RequiresGeometryReview != true
             && (evidenceAssessment is null || evidenceAssessment.PlacementReady);
         var readyForMetricPlacement =
@@ -58,11 +64,12 @@ public static class WallPlacementReadinessEvaluator
             readyForMetricPlacement,
             reasons.Count > 0
             || coordinatePlacementBlocked
+            || coordinatePlacementBlockedByReviewReason
             || evidenceAssessment?.RequiresReview == true
             || evidenceAssessment?.RejectedAsNoise == true
             || evidenceAssessment?.PlacementReady == false,
             wall.Confidence,
-            coordinatePlacementBlocked,
+            coordinatePlacementBlocked || coordinatePlacementBlockedByReviewReason,
             reasons.Distinct(StringComparer.Ordinal).ToArray());
     }
 
@@ -108,4 +115,8 @@ public static class WallPlacementReadinessEvaluator
     private static bool CoordinatePlacementBlockedByComponent(WallGraphComponent? component) =>
         component?.ExcludedFromStructuralTopology == true
         || component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment;
+
+    private static bool IsCoordinateBlockingReviewReason(string reason) =>
+        reason.Contains("wall graph repair candidate", StringComparison.OrdinalIgnoreCase)
+        && reason.Contains(nameof(WallGraphRepairImportImpact.TopologyImportBlocked), StringComparison.OrdinalIgnoreCase);
 }

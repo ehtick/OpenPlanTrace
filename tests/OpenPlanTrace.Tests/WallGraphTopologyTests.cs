@@ -624,6 +624,7 @@ public sealed class WallGraphTopologyTests
             wall.GetProperty("reliability").GetProperty("reasons").EnumerateArray().Select(item => item.GetString()),
             reason => reason is not null
                 && reason.Contains(candidate.GetProperty("id").GetString()!, StringComparison.Ordinal)
+                && reason.Contains(candidate.GetProperty("importImpact").GetString()!, StringComparison.Ordinal)
                 && reason.Contains("endpoint-overrun trim", StringComparison.OrdinalIgnoreCase));
     }
 
