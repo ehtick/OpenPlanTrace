@@ -817,6 +817,95 @@ public sealed class WallEvidenceRecoveryTests
         Assert.True(accepted.PlacementReady);
     }
 
+    [Fact]
+    public async Task WallEvidenceRefinement_DowngradesSingleLineOutdoorBoundaryToReview()
+    {
+        var falseBoundary = new PlanLineSegment(new PlanPoint(100, 148), new PlanPoint(220, 148));
+        var realExteriorFirstFace = new PlanLineSegment(new PlanPoint(258, 120), new PlanPoint(258, 220));
+        var realExteriorSecondFace = new PlanLineSegment(new PlanPoint(278, 120), new PlanPoint(278, 220));
+        var document = new PlanDocument(
+            "wall-evidence-single-line-covered-entry-review-filter",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(360, 260),
+                    new PlanPrimitive[]
+                    {
+                        Text("covered-entry-label", "Overbygd inngang", new PlanRect(145, 133, 70, 10)),
+                        Line("covered-boundary-line", falseBoundary.Start, falseBoundary.End),
+                        Line("real-exterior-face-a", realExteriorFirstFace.Start, realExteriorFirstFace.End),
+                        Line("real-exterior-face-b", realExteriorSecondFace.Start, realExteriorSecondFace.End)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                DefaultWallThickness = 4,
+                EnableWallEvidenceNoiseRejection = true
+            });
+
+        context.WallCandidates.Add(new WallSegment(
+            "wall-covered-entry-single-line-boundary",
+            1,
+            falseBoundary,
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Exterior,
+            SourcePrimitiveIds = new[] { "covered-boundary-line" },
+            Evidence = new[] { "wall type exterior: near detected floorplan/wall envelope or local outer boundary" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-real-exterior",
+            1,
+            new PlanLineSegment(new PlanPoint(268, 120), new PlanPoint(268, 220)),
+            20,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            SourcePrimitiveIds = new[] { "real-exterior-face-a", "real-exterior-face-b" },
+            PairEvidence = new WallPairEvidence(
+                realExteriorFirstFace,
+                realExteriorSecondFace,
+                FaceSeparation: 20,
+                OverlapRatio: 1,
+                Score: 0.94,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: new[] { "real-exterior-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "real-exterior-face-b" }),
+            Evidence = new[] { "wall type exterior: near detected floorplan/wall envelope or local outer boundary" }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Contains(context.Walls, wall => wall.Id == "wall-covered-entry-single-line-boundary");
+        Assert.Contains(context.Walls, wall => wall.Id == "wall-real-exterior");
+
+        var review = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == "wall-covered-entry-single-line-boundary");
+        Assert.Equal(WallEvidenceCategory.SurfacePatternDetail, review.Category);
+        Assert.Equal(WallEvidenceDecision.Review, review.Decision);
+        Assert.False(review.PlacementReady);
+        Assert.True(review.RequiresReview);
+        Assert.False(review.RejectedAsNoise);
+        Assert.Contains(
+            review.Evidence,
+            item => item.Contains("unpaired outdoor covered-area boundary", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("review-only", StringComparison.OrdinalIgnoreCase));
+
+        var accepted = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == "wall-real-exterior");
+        Assert.Equal(WallEvidenceCategory.StrongWallBody, accepted.Category);
+        Assert.True(accepted.PlacementReady);
+    }
+
     private static WallSegment HostWall(string sourceId, PlanPoint start, PlanPoint end) =>
         new($"wall-{sourceId}", 1, new PlanLineSegment(start, end), 4, Confidence.High)
         {

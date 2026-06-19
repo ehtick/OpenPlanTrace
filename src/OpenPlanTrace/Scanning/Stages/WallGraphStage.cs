@@ -1477,6 +1477,12 @@ internal sealed class WallGraphStage : IPipelineStage
 
         return evidence.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("already represented", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("block exact placement", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("review before exact placement", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("until reviewed", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("one structurally supported endpoint", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("one trusted structural endpoint", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("fewer than two distinct structural wall connections", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("topology import", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("repair candidate", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("endpoint-to-wall snap", StringComparison.OrdinalIgnoreCase)
@@ -1627,6 +1633,10 @@ internal sealed class WallGraphStage : IPipelineStage
 
         return evidence.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("already represented", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("block exact placement", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("review before exact placement", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("until reviewed", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("one trusted structural endpoint", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("topology import", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("repair candidate", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("endpoint-to-wall snap", StringComparison.OrdinalIgnoreCase)
@@ -2792,11 +2802,6 @@ internal sealed class WallGraphStage : IPipelineStage
                          .Where(other => other.PageNumber == node.PageNumber)
                          .Where(other => string.CompareOrdinal(other.Id, node.Id) > 0))
             {
-                if (!HasPerpendicularDirections(node, other))
-                {
-                    continue;
-                }
-
                 var otherWallIds = WallIdsForNode(other.Id, incidentEdgesByNode)
                     .ToHashSet(StringComparer.Ordinal);
                 if (otherWallIds.Count == 0 || nodeWallIds.Overlaps(otherWallIds))
@@ -2812,6 +2817,49 @@ internal sealed class WallGraphStage : IPipelineStage
                 }
 
                 if (!ShouldReviewEndpointGap(involvedWallIds, componentByWallId))
+                {
+                    continue;
+                }
+
+                if (TryGetCollinearContinuationGap(
+                        node,
+                        other,
+                        minimumReviewDistance,
+                        reviewTolerance,
+                        options,
+                        out var collinearDistance,
+                        out var axisOffset,
+                        out var axisName))
+                {
+                    var collinearPairKey = string.CompareOrdinal(node.Id, other.Id) < 0
+                        ? $"node:{node.Id}:{other.Id}"
+                        : $"node:{other.Id}:{node.Id}";
+                    if (!keys.Contains(collinearPairKey))
+                    {
+                        best = ChooseNearest(
+                            best,
+                            CreateEndpointGapReview(
+                                node,
+                                other.Position,
+                                other.Id,
+                                hostWallId: null,
+                                WallGraphRepairCandidateKind.EndpointToEndpoint,
+                                collinearDistance,
+                                involvedWallIds,
+                                wallsById,
+                                options,
+                                new[]
+                                {
+                                    $"{axisName} collinear continuation gap",
+                                    $"endpoint axis offset {axisOffset.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} drawing units",
+                                    "endpoints face away from the gap; review before bridging possible missing wall continuity"
+                                }));
+                    }
+
+                    continue;
+                }
+
+                if (!HasPerpendicularDirections(node, other))
                 {
                     continue;
                 }
@@ -3010,7 +3058,8 @@ internal sealed class WallGraphStage : IPipelineStage
         double distance,
         IEnumerable<string> wallIds,
         IReadOnlyDictionary<string, WallSegment> wallsById,
-        ScannerOptions options)
+        ScannerOptions options,
+        IReadOnlyList<string>? extraEvidence = null)
     {
         var orderedWallIds = wallIds
             .Where(id => !string.IsNullOrWhiteSpace(id) && wallsById.ContainsKey(id))
@@ -3052,6 +3101,7 @@ internal sealed class WallGraphStage : IPipelineStage
         evidence =
         [
             .. evidence,
+            .. (extraEvidence ?? Array.Empty<string>()),
             $"safe auto-snap distance {safeSnapDistance.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} drawing units",
             $"review distance limit {reviewDistanceLimit.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} drawing units",
             $"excess beyond safe snap {excessDistanceBeyondSafeSnap.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} drawing units",
@@ -3374,6 +3424,70 @@ internal sealed class WallGraphStage : IPipelineStage
     private static bool HasVerticalDirection(WallNode node) =>
         node.Directions.Contains(nameof(DirectionBucket.North), StringComparer.Ordinal)
         || node.Directions.Contains(nameof(DirectionBucket.South), StringComparer.Ordinal);
+
+    private static bool TryGetCollinearContinuationGap(
+        WallNode first,
+        WallNode second,
+        double minimumReviewDistance,
+        double reviewTolerance,
+        ScannerOptions options,
+        out double distance,
+        out double axisOffset,
+        out string axisName)
+    {
+        distance = 0;
+        axisOffset = 0;
+        axisName = string.Empty;
+
+        var dx = second.Position.X - first.Position.X;
+        var dy = second.Position.Y - first.Position.Y;
+        var axisTolerance = CollinearContinuationAxisTolerance(options);
+        if (Math.Abs(dx) >= Math.Abs(dy))
+        {
+            axisName = "Horizontal";
+            distance = Math.Abs(dx);
+            axisOffset = Math.Abs(dy);
+            if (axisOffset > axisTolerance
+                || distance <= minimumReviewDistance
+                || distance > reviewTolerance)
+            {
+                return false;
+            }
+
+            return dx > 0
+                ? HasWestDirection(first) && HasEastDirection(second)
+                : HasEastDirection(first) && HasWestDirection(second);
+        }
+
+        axisName = "Vertical";
+        distance = Math.Abs(dy);
+        axisOffset = Math.Abs(dx);
+        if (axisOffset > axisTolerance
+            || distance <= minimumReviewDistance
+            || distance > reviewTolerance)
+        {
+            return false;
+        }
+
+        return dy > 0
+            ? HasNorthDirection(first) && HasSouthDirection(second)
+            : HasSouthDirection(first) && HasNorthDirection(second);
+    }
+
+    private static double CollinearContinuationAxisTolerance(ScannerOptions options) =>
+        Math.Max(options.WallSnapTolerance, options.DefaultWallThickness * 0.75);
+
+    private static bool HasEastDirection(WallNode node) =>
+        node.Directions.Contains(nameof(DirectionBucket.East), StringComparer.Ordinal);
+
+    private static bool HasWestDirection(WallNode node) =>
+        node.Directions.Contains(nameof(DirectionBucket.West), StringComparer.Ordinal);
+
+    private static bool HasNorthDirection(WallNode node) =>
+        node.Directions.Contains(nameof(DirectionBucket.North), StringComparer.Ordinal);
+
+    private static bool HasSouthDirection(WallNode node) =>
+        node.Directions.Contains(nameof(DirectionBucket.South), StringComparer.Ordinal);
 
     private static double UnresolvedEndpointGapReviewTolerance(ScannerOptions options)
     {

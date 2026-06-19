@@ -124,10 +124,11 @@ public sealed class RoomSemanticsTests
         Assert.Contains(result.Rooms, room => room.Label == "EL" && room.UseKind == RoomUseKind.Electrical);
         Assert.Contains(result.Rooms, room => room.Label == "KITCHEN" && room.UseKind == RoomUseKind.Kitchen);
         Assert.Contains(result.Rooms, room => room.Label == "BEDROOM" && room.UseKind == RoomUseKind.Bedroom);
+        Assert.Contains(result.Rooms, room => room.Label == "TERRASSE" && room.UseKind == RoomUseKind.Outdoor);
         Assert.Contains(
             result.Diagnostics.Messages,
             diagnostic => diagnostic.Code == "rooms.use_semantics.detected"
-                && diagnostic.Properties["knownUseKindCount"] == "4"
+                && diagnostic.Properties["knownUseKindCount"] == "5"
                 && diagnostic.Properties["useKinds"].Contains("Mechanical:1", StringComparison.Ordinal));
     }
 
@@ -678,10 +679,12 @@ public sealed class RoomSemanticsTests
                             Wall("outer-left", new PlanPoint(80, 500), new PlanPoint(80, 80)),
                             Wall("divider-v1", new PlanPoint(270, 80), new PlanPoint(270, 500)),
                             Wall("divider-v2", new PlanPoint(520, 80), new PlanPoint(520, 500)),
+                            Wall("divider-v3", new PlanPoint(670, 80), new PlanPoint(670, 500)),
                             Wall("divider-h1", new PlanPoint(80, 290), new PlanPoint(820, 290)),
                             RoomText("pump-label", "PUMP ROOM", new PlanRect(145, 175, 102, 16)),
                             RoomText("el-label", "EL", new PlanRect(392, 175, 24, 16)),
-                            RoomText("kitchen-label", "KITCHEN", new PlanRect(620, 175, 84, 16)),
+                            RoomText("kitchen-label", "KITCHEN", new PlanRect(565, 175, 84, 16)),
+                            RoomText("terrace-label", "TERRASSE", new PlanRect(705, 175, 90, 16)),
                             RoomText("bed-label", "BEDROOM", new PlanRect(610, 380, 92, 16))
                         })
                 }));

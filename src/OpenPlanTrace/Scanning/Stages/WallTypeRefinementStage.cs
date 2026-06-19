@@ -16,7 +16,12 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var roomIdsByWallId = BuildRoomIdsByWallId(context.Rooms);
         var sharedWallIds = BuildSharedWallIds(context.RoomAdjacencyGraph);
         var componentsByWallId = BuildComponentsByWallId(context.WallGraph);
+        var evidenceByWallId = BuildEvidenceByWallId(context.WallEvidenceMap);
         var rejectedEvidenceByWallId = BuildRejectedEvidenceByWallId(context.WallEvidenceMap);
+        var roomsById = context.Rooms
+            .Where(room => !string.IsNullOrWhiteSpace(room.Id))
+            .GroupBy(room => room.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         var roomsByPage = context.Rooms
             .GroupBy(room => room.PageNumber)
             .ToDictionary(group => group.Key, group => group.ToArray());
@@ -26,6 +31,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var twoSidedRoomEvidence = 0;
         var oneSidedRoomEvidence = 0;
         var rejectedEvidenceProtected = 0;
+        var roomConfirmedPlacementPromoted = 0;
+        var promotedAssessmentsByWallId = new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal);
 
         for (var index = 0; index < context.Walls.Count; index++)
         {
@@ -63,10 +70,15 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 rejectedEvidenceProtected++;
             }
 
+            var hasOutdoorRoomReference = wallRoomIds
+                .Select(id => roomsById.TryGetValue(id, out var room) ? room : null)
+                .OfType<RoomRegion>()
+                .Any(room => room.UseKind == RoomUseKind.Outdoor);
             var refined = RefineWallType(
                 wall,
                 wallRoomIds.Length,
                 sharedWallIds.Contains(wall.Id),
+                hasOutdoorRoomReference,
                 sideEvidence,
                 component,
                 rejectedEvidence);
@@ -75,26 +87,64 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ? AppendEvidence(wall.Evidence, refined.Evidence)
                 : wall.Evidence;
             var evidenceChanged = evidence.Count != wall.Evidence.Count;
+            var updatedWall = wall;
 
-            if (refined.WallType == wall.WallType && !evidenceChanged)
+            if (refined.WallType != wall.WallType || evidenceChanged)
             {
-                continue;
+                updatedWall = wall with
+                {
+                    WallType = refined.WallType,
+                    Evidence = evidence
+                };
+
+                if (refined.WallType != wall.WallType)
+                {
+                    changed++;
+                }
+
+                if (evidenceChanged)
+                {
+                    evidenceUpdated++;
+                }
             }
 
-            context.Walls[index] = wall with
+            if (evidenceByWallId.TryGetValue(wall.Id, out var assessment)
+                && TryPromoteRoomConfirmedWallEvidence(
+                    updatedWall,
+                    assessment,
+                    component,
+                    wallRoomIds.Length,
+                    sharedWallIds.Contains(wall.Id),
+                    hasOutdoorRoomReference,
+                    sideEvidence,
+                    out var promotedAssessment,
+                    out var promotionEvidence))
             {
-                WallType = refined.WallType,
-                Evidence = evidence
-            };
-            if (refined.WallType != wall.WallType)
-            {
-                changed++;
-            }
-
-            if (evidenceChanged)
-            {
+                promotedAssessmentsByWallId[wall.Id] = promotedAssessment;
+                updatedWall = updatedWall with
+                {
+                    Evidence = AppendEvidence(updatedWall.Evidence, promotionEvidence)
+                };
+                roomConfirmedPlacementPromoted++;
                 evidenceUpdated++;
             }
+
+            if (!ReferenceEquals(updatedWall, wall))
+            {
+                context.Walls[index] = updatedWall;
+            }
+        }
+
+        if (promotedAssessmentsByWallId.Count > 0)
+        {
+            context.WallEvidenceMap = context.WallEvidenceMap with
+            {
+                WallAssessments = context.WallEvidenceMap.WallAssessments
+                    .Select(assessment => promotedAssessmentsByWallId.TryGetValue(assessment.WallId, out var promoted)
+                        ? promoted
+                        : assessment)
+                    .ToArray()
+            };
         }
 
         AddDiagnostics(
@@ -104,7 +154,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             roomReferenced,
             twoSidedRoomEvidence,
             oneSidedRoomEvidence,
-            rejectedEvidenceProtected);
+            rejectedEvidenceProtected,
+            roomConfirmedPlacementPromoted);
         return ValueTask.CompletedTask;
     }
 
@@ -157,10 +208,17 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .GroupBy(assessment => assessment.WallId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
 
+    private static Dictionary<string, WallEvidenceWallAssessment> BuildEvidenceByWallId(WallEvidenceMap evidenceMap) =>
+        evidenceMap.WallAssessments
+            .Where(assessment => !string.IsNullOrWhiteSpace(assessment.WallId))
+            .GroupBy(assessment => assessment.WallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
     private static WallTypeRefinement RefineWallType(
         WallSegment wall,
         int roomReferenceCount,
         bool isSharedByRoomAdjacency,
+        bool hasOutdoorRoomReference,
         RoomSideEvidence sideEvidence,
         WallGraphComponent? component,
         WallEvidenceWallAssessment? rejectedEvidence)
@@ -195,11 +253,18 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
 
         if (isSharedByRoomAdjacency)
         {
-            if (wall.WallType == WallType.Exterior)
+            if (hasOutdoorRoomReference)
             {
                 return new WallTypeRefinement(
                     WallType.Exterior,
-                    "wall type preserved exterior: envelope/local boundary evidence outranks room adjacency");
+                    "wall type refined exterior: shared by room adjacency that includes outdoor/terrace room evidence");
+            }
+
+            if (wall.WallType == WallType.Exterior)
+            {
+                return new WallTypeRefinement(
+                    WallType.Interior,
+                    "wall type refined interior: shared by room adjacency boundary overrides exterior envelope/local-boundary guess");
             }
 
             return new WallTypeRefinement(
@@ -207,8 +272,22 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 "wall type refined interior: shared by room adjacency boundary");
         }
 
-        if (sideEvidence.HasRoomsOnBothSides && wall.WallType != WallType.Exterior)
+        if (sideEvidence.HasRoomsOnBothSides)
         {
+            if (sideEvidence.HasOutdoorRoomSide)
+            {
+                return new WallTypeRefinement(
+                    WallType.Exterior,
+                    "wall type refined exterior: room evidence on both sides includes outdoor/terrace space");
+            }
+
+            if (wall.WallType == WallType.Exterior)
+            {
+                return new WallTypeRefinement(
+                    WallType.Interior,
+                    "wall type refined interior: detected room evidence on both sides overrides exterior envelope/local-boundary guess");
+            }
+
             return new WallTypeRefinement(
                 WallType.Interior,
                 "wall type refined interior: detected room evidence on both sides");
@@ -253,6 +332,88 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         && (component.ExcludedFromStructuralTopology
             || component.Kind is WallGraphComponentKind.ObjectLikeIsland);
 
+    private static bool TryPromoteRoomConfirmedWallEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        WallGraphComponent? component,
+        int roomReferenceCount,
+        bool isSharedByRoomAdjacency,
+        bool hasOutdoorRoomReference,
+        RoomSideEvidence sideEvidence,
+        out WallEvidenceWallAssessment promotedAssessment,
+        out IReadOnlyList<string> promotionEvidence)
+    {
+        promotedAssessment = assessment;
+        promotionEvidence = Array.Empty<string>();
+
+        if (assessment.PlacementReady
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || !assessment.RequiresReview)
+        {
+            return false;
+        }
+
+        if (assessment.Category is not (WallEvidenceCategory.MediumWallBody or WallEvidenceCategory.RecoveredWallBody))
+        {
+            return false;
+        }
+
+        if (!IsStructuralWallComponent(component)
+            || wall.WallType == WallType.Unknown
+            || wall.FragmentEvidence?.RequiresGeometryReview == true)
+        {
+            return false;
+        }
+
+        if (hasOutdoorRoomReference || sideEvidence.HasOutdoorRoomSide)
+        {
+            return false;
+        }
+
+        var hasStrongRoomConfirmation =
+            isSharedByRoomAdjacency
+            || roomReferenceCount >= 2
+            || sideEvidence.HasRoomsOnBothSides;
+        if (!hasStrongRoomConfirmation)
+        {
+            return false;
+        }
+
+        if (!HasWallBodyEvidence(wall, assessment))
+        {
+            return false;
+        }
+
+        promotionEvidence = new[]
+        {
+            "wall evidence: room-confirmed wall body promoted to placement-ready after room adjacency refinement",
+            $"wall evidence: room references {roomReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, shared adjacency {isSharedByRoomAdjacency.ToString(System.Globalization.CultureInfo.InvariantCulture)}, two-sided room evidence {sideEvidence.HasRoomsOnBothSides.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        };
+        promotedAssessment = assessment with
+        {
+            PlacementReady = true,
+            RequiresReview = false,
+            Decision = WallEvidenceDecision.Accept,
+            Evidence = AppendEvidence(assessment.Evidence, promotionEvidence)
+        };
+        return true;
+    }
+
+    private static bool HasWallBodyEvidence(WallSegment wall, WallEvidenceWallAssessment assessment)
+    {
+        if (wall.DetectionKind == WallDetectionKind.ParallelLinePair
+            || assessment.Category == WallEvidenceCategory.RecoveredWallBody)
+        {
+            return true;
+        }
+
+        return assessment.Evidence
+            .Concat(wall.Evidence)
+            .Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("recovered by wall evidence map", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static RoomSideEvidence AnalyzeRoomSides(
         WallSegment wall,
         IReadOnlyList<RoomRegion> pageRooms,
@@ -275,29 +436,43 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             Math.Max(options.WallSnapTolerance * 3.0, options.DefaultWallThickness * 2.5));
         var positiveHits = 0;
         var negativeHits = 0;
+        var positiveOutdoorHits = 0;
+        var negativeOutdoorHits = 0;
 
         foreach (var t in new[] { 0.25, 0.5, 0.75 })
         {
             var point = wall.CenterLine.PointAt(t);
-            if (IsInsideAnyRoom(point + (normal * sampleOffset), pageRooms, options.WallSnapTolerance))
+            var positiveRooms = RoomsContaining(point + (normal * sampleOffset), pageRooms, options.WallSnapTolerance);
+            if (positiveRooms.Count > 0)
             {
                 positiveHits++;
+                if (positiveRooms.Any(room => room.UseKind == RoomUseKind.Outdoor))
+                {
+                    positiveOutdoorHits++;
+                }
             }
 
-            if (IsInsideAnyRoom(point + (normal * -sampleOffset), pageRooms, options.WallSnapTolerance))
+            var negativeRooms = RoomsContaining(point + (normal * -sampleOffset), pageRooms, options.WallSnapTolerance);
+            if (negativeRooms.Count > 0)
             {
                 negativeHits++;
+                if (negativeRooms.Any(room => room.UseKind == RoomUseKind.Outdoor))
+                {
+                    negativeOutdoorHits++;
+                }
             }
         }
 
-        return new RoomSideEvidence(positiveHits, negativeHits);
+        return new RoomSideEvidence(positiveHits, negativeHits, positiveOutdoorHits, negativeOutdoorHits);
     }
 
-    private static bool IsInsideAnyRoom(
+    private static IReadOnlyList<RoomRegion> RoomsContaining(
         PlanPoint point,
         IReadOnlyList<RoomRegion> rooms,
         double tolerance) =>
-        rooms.Any(room => IsInsideRoom(point, room, tolerance));
+        rooms
+            .Where(room => IsInsideRoom(point, room, tolerance))
+            .ToArray();
 
     private static bool IsInsideRoom(PlanPoint point, RoomRegion room, double tolerance)
     {
@@ -342,6 +517,15 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
+    private static IReadOnlyList<string> AppendEvidence(
+        IReadOnlyList<string> evidence,
+        IEnumerable<string> refinementEvidence) =>
+        evidence
+            .Concat(refinementEvidence)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     private static bool IsActionableEvidence(string evidence) =>
         !evidence.Contains("unchanged", StringComparison.OrdinalIgnoreCase)
         && !evidence.Contains("inconclusive", StringComparison.OrdinalIgnoreCase);
@@ -353,7 +537,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int roomReferenced,
         int twoSidedRoomEvidence,
         int oneSidedRoomEvidence,
-        int rejectedEvidenceProtected)
+        int rejectedEvidenceProtected,
+        int roomConfirmedPlacementPromoted)
     {
         var exterior = context.Walls.Count(wall => wall.WallType == WallType.Exterior);
         var interior = context.Walls.Count(wall => wall.WallType == WallType.Interior);
@@ -374,19 +559,26 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["twoSidedRoomEvidenceWallCount"] = twoSidedRoomEvidence.ToString(),
                 ["oneSidedRoomEvidenceWallCount"] = oneSidedRoomEvidence.ToString(),
                 ["rejectedEvidenceProtectedWallCount"] = rejectedEvidenceProtected.ToString(),
+                ["roomConfirmedPlacementPromotedWallCount"] = roomConfirmedPlacementPromoted.ToString(),
                 ["exteriorWallCount"] = exterior.ToString(),
                 ["interiorWallCount"] = interior.ToString(),
                 ["unknownWallCount"] = unknown.ToString()
             });
     }
 
-    private readonly record struct RoomSideEvidence(int PositiveRoomHits, int NegativeRoomHits)
+    private readonly record struct RoomSideEvidence(
+        int PositiveRoomHits,
+        int NegativeRoomHits,
+        int PositiveOutdoorRoomHits,
+        int NegativeOutdoorRoomHits)
     {
-        public static RoomSideEvidence Empty { get; } = new(0, 0);
+        public static RoomSideEvidence Empty { get; } = new(0, 0, 0, 0);
 
         public bool HasRoomsOnBothSides => PositiveRoomHits > 0 && NegativeRoomHits > 0;
 
         public bool HasRoomsOnExactlyOneSide => PositiveRoomHits > 0 != NegativeRoomHits > 0;
+
+        public bool HasOutdoorRoomSide => PositiveOutdoorRoomHits > 0 || NegativeOutdoorRoomHits > 0;
     }
 
     private sealed record WallTypeRefinement(WallType WallType, string Evidence);

@@ -35,7 +35,7 @@ public sealed record PlanTraceExport(
     QualityExport Quality,
     DiagnosticsExport Diagnostics)
 {
-    public const string CurrentSchemaVersion = "openplantrace.scan.v68";
+    public const string CurrentSchemaVersion = "openplantrace.scan.v69";
 
     public static PlanTraceExport From(PlanScanResult result) =>
         Create(result);

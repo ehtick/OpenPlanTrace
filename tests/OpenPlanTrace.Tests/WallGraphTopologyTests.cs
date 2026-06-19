@@ -173,6 +173,55 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task ScanAsync_QueuesReviewForCollinearContinuationGap()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            Document(
+                "wall-collinear-continuation-gap-review",
+                Wall("left", new PlanPoint(100, 100), new PlanPoint(100, 260)),
+                Wall("top-left", new PlanPoint(100, 100), new PlanPoint(194, 100)),
+                Wall("top-right", new PlanPoint(206, 100), new PlanPoint(320, 100)),
+                Wall("right", new PlanPoint(320, 100), new PlanPoint(320, 260)),
+                Wall("bottom", new PlanPoint(320, 260), new PlanPoint(100, 260))));
+
+        var candidate = Assert.Single(
+            result.WallGraph.RepairCandidates,
+            item => item.Kind == WallGraphRepairCandidateKind.EndpointToEndpoint
+                && item.Evidence.Any(evidence => evidence.Contains("Horizontal collinear continuation gap", StringComparison.OrdinalIgnoreCase)));
+
+        Assert.Equal(12, candidate.GapDistance, precision: 1);
+        Assert.Equal(WallGraphRepairAction.SnapEndpointToEndpoint, candidate.SuggestedAction);
+        Assert.Equal(WallGraphRepairImportImpact.TopologyReviewRequired, candidate.ImportImpact);
+        Assert.Contains(candidate.WallIds, id => result.Walls.Single(wall => wall.Id == id).SourcePrimitiveIds.Contains("top-left"));
+        Assert.Contains(candidate.WallIds, id => result.Walls.Single(wall => wall.Id == id).SourcePrimitiveIds.Contains("top-right"));
+        Assert.Contains(
+            candidate.Evidence,
+            evidence => evidence.Contains("endpoints face away from the gap", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            result.Diagnostics.Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.review"
+                && diagnostic.Properties["gapKind"] == nameof(WallGraphRepairCandidateKind.EndpointToEndpoint)
+                && diagnostic.Properties["wallIds"].Contains("page:1:wall", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScanAsync_DoesNotQueueCollinearContinuationRepairForOpeningSizedGap()
+    {
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            Document(
+                "wall-collinear-opening-sized-gap",
+                Wall("left", new PlanPoint(100, 100), new PlanPoint(100, 260)),
+                Wall("top-left", new PlanPoint(100, 100), new PlanPoint(180, 100)),
+                Wall("top-right", new PlanPoint(240, 100), new PlanPoint(320, 100)),
+                Wall("right", new PlanPoint(320, 100), new PlanPoint(320, 260)),
+                Wall("bottom", new PlanPoint(320, 260), new PlanPoint(100, 260))));
+
+        Assert.DoesNotContain(
+            result.WallGraph.RepairCandidates,
+            item => item.Evidence.Any(evidence => evidence.Contains("collinear continuation gap", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
     public async Task WallGraphStage_DoesNotAutoSnapPairedEndpointGapsNearOpeningEvidence()
     {
         var hostWall = DetectedWall("wall-host", new PlanPoint(100, 60), new PlanPoint(100, 180));
@@ -345,6 +394,43 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_DoesNotPromoteExplicitPlacementBlockedMediumWall()
+    {
+        var top = DetectedWall("wall-top", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
+        var bottom = DetectedWall("wall-bottom", new PlanPoint(100, 220), new PlanPoint(320, 220)) with { WallType = WallType.Exterior };
+        var blockedPartition = DetectedWall("wall-review-placement-blocked", new PlanPoint(200, 100), new PlanPoint(200, 220)) with { WallType = WallType.Interior };
+        var context = new ScanContext(
+            Document("wall-main-structural-placement-blocked-promotion"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { top, bottom, blockedPartition });
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            new[]
+            {
+                TrustedReviewBand(blockedPartition)
+            },
+            new[]
+            {
+                Assessment(top, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                Assessment(bottom, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                MediumPairedReviewAssessment(
+                    blockedPartition,
+                    "wall evidence: short unlayered parallel-face candidate has only one structurally supported endpoint; keep for topology but block exact placement until reviewed")
+            });
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retainedReview = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == blockedPartition.Id);
+        Assert.False(retainedReview.PlacementReady);
+        Assert.True(retainedReview.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retainedReview.Decision);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.main_structural_medium_walls_promoted");
+    }
+
+    [Fact]
     public async Task WallGraphStage_PromotesHighPairScoreOneEndpointMainStructuralMediumWall()
     {
         var host = DetectedWall("wall-host", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
@@ -461,7 +547,7 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
-    public async Task WallGraphStage_RecoversLongInteriorFragmentComponentForPlacement()
+    public async Task WallGraphStage_KeepsLongInteriorFragmentComponentReviewOnlyForPlacement()
     {
         var mainWalls = new[]
         {
@@ -492,26 +578,24 @@ public sealed class WallGraphTopologyTests
         var fragmentComponent = Assert.Single(
             context.WallGraph.Components,
             component => component.WallIds.Contains(fragmentWall.Id));
-        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == fragmentWall.Id);
-        var promotedWall = Assert.Single(context.Walls, wall => wall.Id == fragmentWall.Id);
+        var retainedReview = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == fragmentWall.Id);
+        var retainedWall = Assert.Single(context.Walls, wall => wall.Id == fragmentWall.Id);
 
         Assert.Equal(WallGraphComponentKind.SecondaryStructural, fragmentComponent.Kind);
         Assert.False(fragmentComponent.ExcludedFromStructuralTopology);
         Assert.Contains(fragmentComponent.Evidence, item => item.Contains("long interior fragment recovered", StringComparison.OrdinalIgnoreCase));
-        Assert.True(promoted.PlacementReady);
-        Assert.False(promoted.RequiresReview);
-        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
-        Assert.Contains(
-            promoted.Evidence,
+        Assert.False(retainedReview.PlacementReady);
+        Assert.True(retainedReview.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retainedReview.Decision);
+        Assert.DoesNotContain(
+            retainedReview.Evidence,
             item => item.Contains("promoted to placement-ready by secondary structural graph component", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(
-            promotedWall.Evidence,
+        Assert.DoesNotContain(
+            retainedWall.Evidence,
             item => item.Contains("long interior fragment promoted to placement-ready", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(
+        Assert.DoesNotContain(
             context.Diagnostics.Build().Messages,
-            diagnostic => diagnostic.Code == "wall_evidence.secondary_interior_fragments_promoted"
-                && diagnostic.Properties["promotedWallCount"] == "1"
-                && diagnostic.Properties["wallIds"] == fragmentWall.Id);
+            diagnostic => diagnostic.Code == "wall_evidence.secondary_interior_fragments_promoted");
     }
 
     [Fact]
@@ -1843,7 +1927,7 @@ public sealed class WallGraphTopologyTests
             $"pair score {pairScore.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
             "overlap ratio 1",
             "wall type interior: supported wall evidence inside exterior envelope",
-            "wall evidence: short unlayered parallel-face candidate has clustered support but fewer than two distinct structural wall connections"
+            "wall evidence: clustered medium paired wall body has structural graph support"
         }
             .Concat(extraEvidence)
             .ToArray();

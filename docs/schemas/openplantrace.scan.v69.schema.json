@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:openplantrace:schema:scan:v68",
+  "$id": "urn:openplantrace:schema:scan:v69",
   "title": "OpenPlanTrace Scan Result",
   "description": "Schema for the schema-versioned JSON emitted by OpenPlanTrace scan exports. The contract is strict about stable top-level fields and core evidence shapes, while allowing additional detector-specific fields for forward-compatible evolution.",
   "type": "object",
   "additionalProperties": true,
-  "x-openplantrace-schemaVersion": "openplantrace.scan.v68",
+  "x-openplantrace-schemaVersion": "openplantrace.scan.v69",
   "required": [
     "schemaVersion",
     "generatedAt",
@@ -41,7 +41,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "openplantrace.scan.v68"
+      "const": "openplantrace.scan.v69"
     },
     "generatedAt": {
       "type": "string",
@@ -3755,6 +3755,7 @@
             "Laboratory",
             "Industrial",
             "Parking",
+            "Outdoor",
             "CommonArea"
           ]
         },

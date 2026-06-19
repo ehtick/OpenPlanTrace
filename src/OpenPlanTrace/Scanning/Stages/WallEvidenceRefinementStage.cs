@@ -233,6 +233,14 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             requiresReview = true;
             evidence.Add(dimensionEvidence);
         }
+        else if (TryClassifyUnpairedOutdoorAreaBoundaryReview(wall, context, out var unpairedOutdoorBoundaryEvidence))
+        {
+            category = WallEvidenceCategory.SurfacePatternDetail;
+            confidence = new Confidence(Math.Min(0.84, Math.Max(wall.Confidence.Value, 0.64)));
+            placementReady = false;
+            requiresReview = true;
+            evidence.Add(unpairedOutdoorBoundaryEvidence);
+        }
         else if (TryClassifyRepeatedShortUnlayeredDetailReview(wall, context, out var repeatedDetailEvidence))
         {
             category = WallEvidenceCategory.ObjectOrFixtureDetail;
@@ -1212,6 +1220,54 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             evidence = structuralSupportWallCount == 0
                 ? $"wall evidence: outdoor covered-area boundary near '{keyword}' is review-only; thin unlayered local-boundary pair has no distinct structural support for placement"
                 : $"wall evidence: outdoor covered-area boundary near '{keyword}' is review-only; thin unlayered local-boundary pair is supported by only one distinct structural wall";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryClassifyUnpairedOutdoorAreaBoundaryReview(
+        WallSegment wall,
+        ScanContext context,
+        out string evidence)
+    {
+        evidence = string.Empty;
+        if (wall.WallType != WallType.Exterior
+            || wall.PairEvidence is not null
+            || IsWallLayerBacked(wall, context)
+            || !HasLocalBoundaryEvidence(wall)
+            || wall.DetectionKind is not (WallDetectionKind.SingleLine or WallDetectionKind.FragmentMerged))
+        {
+            return false;
+        }
+
+        var structuralSupportWallCount = CountDistinctStructuralSupportWalls(
+            wall.CenterLine,
+            wall.PageNumber,
+            context.WallCandidates,
+            context.Options);
+        if (structuralSupportWallCount >= 2)
+        {
+            return false;
+        }
+
+        var page = context.Document.Pages.FirstOrDefault(page => page.Number == wall.PageNumber);
+        if (page is null)
+        {
+            return false;
+        }
+
+        foreach (var text in page.Text)
+        {
+            var keyword = OutdoorAreaKeyword(text.Text);
+            if (keyword is null || !OutdoorLabelMatchesWallSpan(text.Bounds, wall, context.Options))
+            {
+                continue;
+            }
+
+            evidence = structuralSupportWallCount == 0
+                ? $"wall evidence: unpaired outdoor covered-area boundary near '{keyword}' is review-only; single-line local-boundary evidence has no distinct structural support for placement"
+                : $"wall evidence: unpaired outdoor covered-area boundary near '{keyword}' is review-only; single-line local-boundary evidence is supported by only one distinct structural wall";
             return true;
         }
 

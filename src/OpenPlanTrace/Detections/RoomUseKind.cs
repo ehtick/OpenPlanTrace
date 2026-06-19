@@ -24,5 +24,6 @@ public enum RoomUseKind
     Laboratory,
     Industrial,
     Parking,
+    Outdoor,
     CommonArea
 }

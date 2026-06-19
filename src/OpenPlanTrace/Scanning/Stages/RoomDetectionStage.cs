@@ -1460,6 +1460,7 @@ internal sealed class RoomDetectionStage : IPipelineStage
         new(RoomUseKind.Laboratory, new[] { "lab", "laboratory", "laboratorium" }),
         new(RoomUseKind.Industrial, new[] { "production", "process", "workshop", "verksted", "industrial" }),
         new(RoomUseKind.Parking, new[] { "parking", "garage", "garasje" }),
+        new(RoomUseKind.Outdoor, new[] { "outdoor", "outside", "terrace", "terrasse", "balcony", "balkong", "veranda", "patio", "porch", "covered entry", "covered entrance", "overbygd inngang", "overbygget inngang", "carport", "uteplass" }),
         new(RoomUseKind.CommonArea, new[] { "common", "amenity", "break", "cafeteria", "kantine" })
     };
 }
