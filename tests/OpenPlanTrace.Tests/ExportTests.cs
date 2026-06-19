@@ -165,6 +165,9 @@ public sealed class ExportTests
         Assert.False(firstWall.GetProperty("wallComponentId").ValueKind == JsonValueKind.Null);
         Assert.Equal("MainStructural", firstWall.GetProperty("wallComponentKind").GetString());
         Assert.False(firstWall.GetProperty("excludedFromStructuralTopology").GetBoolean());
+        Assert.True(firstWall.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.False(firstWall.GetProperty("requiresReview").GetBoolean());
+        Assert.Equal(0, firstWall.GetProperty("reviewReasons").GetArrayLength());
         var firstWallTopologySpan = Assert.Single(firstWall.GetProperty("topologySpans").EnumerateArray());
         Assert.Equal(firstWall.GetProperty("id").GetString(), firstWallTopologySpan.GetProperty("wallId").GetString());
         Assert.Equal(JsonValueKind.Object, firstWallTopologySpan.GetProperty("centerLine").ValueKind);
@@ -191,6 +194,9 @@ public sealed class ExportTests
         Assert.Contains("Wall", firstWall.GetProperty("sourceLayers").EnumerateArray().Select(layer => layer.GetString()));
 
         var firstWallEdge = document.RootElement.GetProperty("wallGraph").GetProperty("edges")[0];
+        Assert.True(firstWallEdge.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.False(firstWallEdge.GetProperty("requiresReview").GetBoolean());
+        Assert.Equal(0, firstWallEdge.GetProperty("reviewReasons").GetArrayLength());
         Assert.Equal(JsonValueKind.Object, firstWallEdge.GetProperty("line").ValueKind);
         Assert.Equal(JsonValueKind.Object, firstWallEdge.GetProperty("lineMillimeters").ValueKind);
         Assert.Equal(JsonValueKind.Object, firstWallEdge.GetProperty("bounds").ValueKind);
@@ -2100,6 +2106,60 @@ public sealed class ExportTests
         Assert.Contains(
             span.GetProperty("evidence").EnumerateArray(),
             item => item.GetString()?.Contains("clean placement run projected onto source wall centerline", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void ScanJsonExporter_ProjectsOffAxisGraphSpansBackToOrthogonalSourceWall()
+    {
+        var result = CreateOffAxisTopologySpanResult(
+            "scan-orthogonal-source-wall",
+            new PlanPoint(160, 110));
+
+        using var document = JsonDocument.Parse(PlanTraceJsonExporter.Serialize(result));
+        var wall = Assert.Single(document.RootElement.GetProperty("walls").EnumerateArray());
+        var span = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        var line = span.GetProperty("centerLine");
+        var graphEdge = Assert.Single(document.RootElement.GetProperty("wallGraph").GetProperty("edges").EnumerateArray());
+        var graphLine = graphEdge.GetProperty("line");
+
+        Assert.Equal(100, line.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(100, line.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(100, line.GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(160, line.GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(100, graphLine.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(100, graphLine.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(60, graphEdge.GetProperty("drawingLength").GetDouble(), precision: 3);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("topology span projected back to source wall axis", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task ScanJsonExporter_MarksReviewOnlyWallGeometryAsNotCoordinateReady()
+    {
+        var result = WithPlacementReadyIsolatedFragment(await CreateScanResultAsync());
+
+        using var document = JsonDocument.Parse(PlanTraceJsonExporter.Serialize(result));
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "isolated-clean-fragment");
+        var edge = document.RootElement
+            .GetProperty("wallGraph")
+            .GetProperty("edges")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("wallId").GetString() == "isolated-clean-fragment");
+
+        Assert.False(wall.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(wall.GetProperty("requiresReview").GetBoolean());
+        Assert.Contains(
+            wall.GetProperty("reviewReasons").EnumerateArray(),
+            item => item.GetString()?.Contains("isolated fragment", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.False(edge.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(edge.GetProperty("requiresReview").GetBoolean());
+        Assert.Contains(
+            edge.GetProperty("reviewReasons").EnumerateArray(),
+            item => item.GetString()?.Contains("isolated fragment", StringComparison.OrdinalIgnoreCase) == true);
     }
 
     [Fact]

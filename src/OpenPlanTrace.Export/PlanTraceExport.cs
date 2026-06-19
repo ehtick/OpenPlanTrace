@@ -35,7 +35,7 @@ public sealed record PlanTraceExport(
     QualityExport Quality,
     DiagnosticsExport Diagnostics)
 {
-    public const string CurrentSchemaVersion = "openplantrace.scan.v67";
+    public const string CurrentSchemaVersion = "openplantrace.scan.v68";
 
     public static PlanTraceExport From(PlanScanResult result) =>
         Create(result);
@@ -1016,6 +1016,9 @@ public sealed record WallExport(
     string? WallComponentId,
     string? WallComponentKind,
     bool ExcludedFromStructuralTopology,
+    bool ReadyForCoordinatePlacement,
+    bool RequiresReview,
+    IReadOnlyList<string> ReviewReasons,
     double DrawingLength,
     double? LengthMeters,
     double? ThicknessMillimeters,
@@ -1037,6 +1040,14 @@ public sealed record WallExport(
         IReadOnlyList<WallGraphTopologySpan> topologySpans)
     {
         wallComponentLookup.TryGetValue(wall.Id, out var component);
+        var excludedFromStructuralTopology =
+            WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment);
+        var reviewReasons = WallEvidenceExportHelpers.CoordinateReviewReasons(
+            wall,
+            component,
+            evidenceAssessment,
+            excludedFromStructuralTopology,
+            hasPlacementGeometry: topologySpans.Count > 0);
         return
         new(
             wall.Id,
@@ -1049,7 +1060,10 @@ public sealed record WallExport(
             wall.WallType.ToString(),
             component?.Id,
             component?.Kind.ToString(),
-            WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment),
+            excludedFromStructuralTopology,
+            reviewReasons.Count == 0,
+            reviewReasons.Count > 0,
+            reviewReasons,
             wall.DrawingLength,
             wall.LengthMeters,
             wall.ThicknessMillimeters,
@@ -1486,6 +1500,55 @@ internal static class WallEvidenceExportHelpers
         WallGraphComponent? component,
         WallEvidenceWallAssessment? evidenceAssessment) =>
         WallStructuralTrust.IsExcludedFromStructuralTopology(component, evidenceAssessment);
+
+    public static IReadOnlyList<string> CoordinateReviewReasons(
+        WallSegment? wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? evidenceAssessment,
+        bool excludedFromStructuralTopology,
+        bool hasPlacementGeometry)
+    {
+        var reasons = new List<string>();
+        if (component?.Kind == WallGraphComponentKind.ObjectLikeIsland)
+        {
+            reasons.Add("wall graph component is object-like detail, not placement wall geometry");
+        }
+
+        if (component?.Kind == WallGraphComponentKind.IsolatedFragment)
+        {
+            reasons.Add("wall graph component is an isolated fragment requiring review");
+        }
+
+        if (excludedFromStructuralTopology)
+        {
+            reasons.Add("excluded from structural topology");
+        }
+
+        if (evidenceAssessment?.RejectedAsNoise == true)
+        {
+            reasons.Add($"wall evidence rejected as non-wall/noise ({evidenceAssessment.Category})");
+        }
+
+        if (evidenceAssessment is not null
+            && (!evidenceAssessment.PlacementReady
+                || evidenceAssessment.RequiresReview
+                || evidenceAssessment.Decision == WallEvidenceDecision.Review))
+        {
+            reasons.Add("wall evidence requires review before exact coordinate placement");
+        }
+
+        if (wall?.FragmentEvidence?.RequiresGeometryReview == true)
+        {
+            reasons.Add("fragmented or healed wall geometry requires coordinate review");
+        }
+
+        if (!hasPlacementGeometry)
+        {
+            reasons.Add("no clean wall graph topology span is available for exact coordinate placement");
+        }
+
+        return reasons.Distinct(StringComparer.Ordinal).ToArray();
+    }
 }
 
 public sealed record WallTopologySpanExport(
@@ -1683,6 +1746,9 @@ public sealed record WallEdgeExport(
     string? WallComponentId,
     string? WallComponentKind,
     bool ExcludedFromStructuralTopology,
+    bool ReadyForCoordinatePlacement,
+    bool RequiresReview,
+    IReadOnlyList<string> ReviewReasons,
     LineExport? Line,
     LineExport? LineMillimeters,
     RectExport? Bounds,
@@ -1708,6 +1774,14 @@ public sealed record WallEdgeExport(
     {
         wallComponentLookup.TryGetValue(edge.WallId, out var component);
         wallEvidenceAssessments.TryGetValue(edge.WallId, out var evidenceAssessment);
+        var excludedFromStructuralTopology =
+            WallStructuralTrust.IsExcludedFromStructuralTopology(component, evidenceAssessment);
+        var reviewReasons = WallEvidenceExportHelpers.CoordinateReviewReasons(
+            topologySpan?.SourceWall,
+            component,
+            evidenceAssessment,
+            excludedFromStructuralTopology,
+            hasPlacementGeometry: topologySpan is not null);
         var scale = PlacementMetricTransform.ResolveMillimetersPerDrawingUnit(
             calibration,
             topologySpan?.SourceWall?.MeasurementScaleGroupId);
@@ -1722,7 +1796,10 @@ public sealed record WallEdgeExport(
             edge.WallId,
             component?.Id,
             component?.Kind.ToString(),
-            WallStructuralTrust.IsExcludedFromStructuralTopology(component, evidenceAssessment),
+            excludedFromStructuralTopology,
+            reviewReasons.Count == 0,
+            reviewReasons.Count > 0,
+            reviewReasons,
             topologySpan is null ? null : LineExport.From(topologySpan.CenterLine),
             topologySpan is null ? null : PlacementMetricTransform.ScaleLine(topologySpan.CenterLine, scale),
             topologySpan is null ? null : RectExport.From(topologySpan.Bounds),

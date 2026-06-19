@@ -6,6 +6,112 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.120] - 2026-06-19
+
+### Added
+- Scan JSON is now `openplantrace.scan.v68`.
+- Full scan wall and wall graph edge exports now include explicit
+  `readyForCoordinatePlacement`, `requiresReview`, and `reviewReasons` fields.
+  This gives downstream engines a direct import gate instead of forcing them to
+  infer readiness from nested wall evidence, graph component kind, topology
+  spans, and diagnostics.
+- Added the documented `openplantrace.scan.v68` schema artifact and updated the
+  compact scan schema to reference the new source scan schema version.
+- Retired the superseded `openplantrace.scan.v67` schema artifact from the
+  public tree; Git history remains the archive for old alpha scan contracts.
+
+### Verified
+- Added regression coverage for scan JSON marking review-only isolated wall
+  geometry as not coordinate-ready.
+- Focused export and schema tests passed with `89` tests.
+- Full test suite passed with `562` tests.
+- Rescanned the private medium PDF fixture `A20-102 PLAN 1. ETASJE.pdf`.
+  Output remained stable at `124` walls, `218` graph nodes, `186` graph edges,
+  `10` rooms, `31` openings, and `62` diagnostics.
+- Readiness audit on the scan JSON reported `37` coordinate-ready walls,
+  `87` review walls, `73` coordinate-ready wall graph edges, `113` review wall
+  graph edges, and `0` missing readiness flag sets.
+- Captured and inspected a source-underlay, placement-walls-only viewer
+  screenshot:
+  `real-pdf-output/private-medium-a20-102-user-v144/viewer-pdf-underlay-walls-only-v144.png`.
+  The viewer reached `Ready`, only `Placement walls` was enabled, and rendered
+  `0` visible off-axis placement wall lines.
+
+## [0.02.119] - 2026-06-18
+
+### Fixed
+- Scan JSON topology spans and wall graph edge placement lines now project back
+  onto the source wall axis before export. Averaged wall graph nodes can still
+  exist for diagnostics, but exported wall placement coordinates no longer bend
+  into tiny diagonal connector lines when a junction node is slightly off-axis.
+- Trusted endpoint repair now uses the perpendicular wall-axis intersection at
+  near corners and trims tiny approved endpoint tails, reducing noisy fragments
+  where real wall ends should meet cleanly.
+- Tiny trusted endpoint gaps just over the safe snap tolerance can now snap even
+  near opening evidence, while larger opening-sized gaps remain review-only.
+
+### Verified
+- Added regression coverage for full scan JSON exporting off-axis graph spans
+  back onto the orthogonal source wall axis.
+- Focused export and wall graph tests passed with `68` tests.
+- Full test suite passed with `561` tests.
+- Rescanned the new private medium PDF fixture
+  `A20-102 PLAN 1. ETASJE.pdf`. The scan produced `124` walls, `218` graph
+  nodes, `186` graph edges, `10` rooms, `31` openings, and `62` diagnostics.
+- Exported off-axis wall graph/topology lines on that fixture dropped from `19`
+  to `10`; the remaining off-axis graph lines are excluded `ObjectLikeIsland`
+  diagnostics, not visible placement walls.
+- Captured and inspected a source-underlay, placement-walls-only viewer
+  screenshot:
+  `real-pdf-output/private-medium-a20-102-user-v143/viewer-pdf-underlay-walls-only-v143.png`.
+  The viewer reached `Ready`, only `Placement walls` was enabled, and rendered
+  `0` visible off-axis placement wall lines.
+
+## [0.02.118] - 2026-06-18
+
+### Fixed
+- Short, isolated wall graph fragments with no topology-supported endpoints no
+  longer stay marked as placement-ready just because their earlier wall evidence
+  assessment accepted them. They are now kept as review-only medium wall
+  evidence with a diagnostic instead of being allowed to masquerade as exact
+  wall placement data.
+
+### Verified
+- Added regression coverage for an accepted short isolated wall candidate being
+  reclassified to review-only before placement export.
+- Focused wall graph tests passed with `22` tests.
+- Full test suite passed with `557` tests.
+- Rescanned the private medium PDF fixture. Evidence-ready wall assessments
+  dropped from `42` to `39`; the three affected walls now report
+  `placementReady = false` and remain available in review diagnostics.
+- Captured and inspected a source-underlay, placement-walls-only viewer
+  screenshot:
+  `real-pdf-output/private-medium-a20-102-v137/viewer-source-underlay-placement-walls-only-v137-ready.png`.
+  The viewer reached `Ready`, page `1 / 1`, and rendered `41` visible wall
+  overlay items. The isolated random wall candidates are reduced, while the next
+  major accuracy work remains interior wall continuity and wall-face pairing.
+
+## [0.02.117] - 2026-06-18
+
+### Fixed
+- Wall graph endpoint repair now preserves the original wall axis when it
+  normalizes snapped or trimmed endpoints. A horizontal or vertical wall can be
+  shortened, extended, or snapped into a better junction without being bent into
+  a diagonal placement wall.
+
+### Verified
+- Added regression coverage for axis-preserving wall endpoint normalization.
+- Focused wall graph tests passed with `21` tests.
+- Full test suite passed with `556` tests.
+- Rescanned the private medium PDF fixture. Placement-ready walls stayed at
+  `37`, omitted walls stayed at `87`, and placement-ready off-axis walls
+  dropped from `2` to `0`. Solid spans updated from `141` to `143`, openings
+  from `29` to `31`, and routing items from `107` to `110`.
+- Captured and inspected a source-underlay wall-only viewer screenshot for the
+  private medium fixture. The previous random sloped placement wall is gone;
+  remaining visible accuracy work is now mostly false-positive suppression
+  around furniture, casework, and detail lines rather than endpoint bending.
+
 ## [0.02.116] - 2026-06-18
 
 ### Added

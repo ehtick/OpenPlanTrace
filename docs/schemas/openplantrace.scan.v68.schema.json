@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:openplantrace:schema:scan:v67",
+  "$id": "urn:openplantrace:schema:scan:v68",
   "title": "OpenPlanTrace Scan Result",
   "description": "Schema for the schema-versioned JSON emitted by OpenPlanTrace scan exports. The contract is strict about stable top-level fields and core evidence shapes, while allowing additional detector-specific fields for forward-compatible evolution.",
   "type": "object",
   "additionalProperties": true,
-  "x-openplantrace-schemaVersion": "openplantrace.scan.v67",
+  "x-openplantrace-schemaVersion": "openplantrace.scan.v68",
   "required": [
     "schemaVersion",
     "generatedAt",
@@ -41,7 +41,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "openplantrace.scan.v67"
+      "const": "openplantrace.scan.v68"
     },
     "generatedAt": {
       "type": "string",
@@ -4939,6 +4939,9 @@
         "wallComponentId",
         "wallComponentKind",
         "excludedFromStructuralTopology",
+        "readyForCoordinatePlacement",
+        "requiresReview",
+        "reviewReasons",
         "drawingLength",
         "lengthMeters",
         "thicknessMillimeters",
@@ -4993,6 +4996,18 @@
         },
         "excludedFromStructuralTopology": {
           "type": "boolean"
+        },
+        "readyForCoordinatePlacement": {
+          "type": "boolean",
+          "description": "True only when this wall has clean coordinate geometry that can be imported without manual wall review."
+        },
+        "requiresReview": {
+          "type": "boolean",
+          "description": "True when this wall should be treated as diagnostic/review evidence instead of exact placement geometry."
+        },
+        "reviewReasons": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Human-readable reasons why this wall is not coordinate-placement ready."
         },
         "drawingLength": {
           "$ref": "#/$defs/nonNegativeNumber"
@@ -5235,6 +5250,9 @@
         "wallComponentId",
         "wallComponentKind",
         "excludedFromStructuralTopology",
+        "readyForCoordinatePlacement",
+        "requiresReview",
+        "reviewReasons",
         "line",
         "lineMillimeters",
         "bounds",
@@ -5274,6 +5292,18 @@
         },
         "excludedFromStructuralTopology": {
           "type": "boolean"
+        },
+        "readyForCoordinatePlacement": {
+          "type": "boolean",
+          "description": "True only when this graph edge represents import-ready wall placement geometry."
+        },
+        "requiresReview": {
+          "type": "boolean",
+          "description": "True when this edge is diagnostic/review geometry and should not be imported as a clean wall span."
+        },
+        "reviewReasons": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Human-readable reasons why this wall graph edge is not coordinate-placement ready."
         },
         "line": {
           "oneOf": [

@@ -28,6 +28,9 @@ public sealed record WallGraphTopologySpan(
 
 internal static class WallGraphTopologySpanBuilder
 {
+    private const double MaxDominantAxisSkewRatio = 0.04;
+    private const double MaxDominantAxisSkewDrawingUnits = 8.0;
+
     public static IReadOnlyList<WallGraphTopologySpan> Build(
         WallGraph graph,
         IReadOnlyList<WallSegment> walls)
@@ -49,13 +52,15 @@ internal static class WallGraphTopologySpanBuilder
                 continue;
             }
 
-            var centerLine = new PlanLineSegment(from.Position, to.Position);
+            var rawCenterLine = new PlanLineSegment(from.Position, to.Position);
+            wallsById.TryGetValue(edge.WallId, out var wall);
+            var projection = ProjectSpanToSourceAxis(rawCenterLine, wall);
+            var centerLine = projection.CenterLine;
             if (centerLine.Length <= 0.001)
             {
                 continue;
             }
 
-            wallsById.TryGetValue(edge.WallId, out var wall);
             var thickness = wall?.Thickness ?? 1.0;
             var bounds = centerLine.Bounds.Inflate(Math.Max(thickness / 2.0, 0.5));
             var sourcePrimitiveIds = wall?.SourcePrimitiveIds ?? Array.Empty<string>();
@@ -69,6 +74,12 @@ internal static class WallGraphTopologySpanBuilder
             if (wall is not null)
             {
                 evidence.AddRange(wall.Evidence);
+            }
+
+            if (projection.AxisShift > 0.001)
+            {
+                evidence.Add(
+                    $"topology span projected back to source wall axis by up to {Format(projection.AxisShift)} drawing units");
             }
 
             if (placement is not null)
@@ -105,6 +116,84 @@ internal static class WallGraphTopologySpanBuilder
         }
 
         return spans;
+    }
+
+    private static SourceAxisProjection ProjectSpanToSourceAxis(
+        PlanLineSegment span,
+        WallSegment? wall)
+    {
+        if (wall is null || wall.CenterLine.Length <= 0.001)
+        {
+            return new SourceAxisProjection(span, 0);
+        }
+
+        var orientation = ResolveDominantOrthogonalOrientation(wall.CenterLine);
+        if (orientation == PlacementRunOrientation.Unknown)
+        {
+            return new SourceAxisProjection(span, 0);
+        }
+
+        var sourceLine = wall.CenterLine;
+        var startParameter = Math.Clamp(sourceLine.ProjectParameter(span.Start), 0, 1);
+        var endParameter = Math.Clamp(sourceLine.ProjectParameter(span.End), 0, 1);
+        var sourceStart = sourceLine.PointAt(startParameter);
+        var sourceEnd = sourceLine.PointAt(endParameter);
+        var centerAxis = orientation == PlacementRunOrientation.Horizontal
+            ? (sourceLine.Start.Y + sourceLine.End.Y) / 2.0
+            : (sourceLine.Start.X + sourceLine.End.X) / 2.0;
+        var centerLine = orientation == PlacementRunOrientation.Horizontal
+            ? new PlanLineSegment(
+                new PlanPoint(sourceStart.X, centerAxis),
+                new PlanPoint(sourceEnd.X, centerAxis))
+            : new PlanLineSegment(
+                new PlanPoint(centerAxis, sourceStart.Y),
+                new PlanPoint(centerAxis, sourceEnd.Y));
+
+        return centerLine.Length <= 0.001
+            ? new SourceAxisProjection(centerLine, 0)
+            : new SourceAxisProjection(centerLine, MaxSourceAxisShift(span, centerLine, orientation));
+    }
+
+    private static PlacementRunOrientation ResolveDominantOrthogonalOrientation(PlanLineSegment line)
+    {
+        if (line.IsHorizontal())
+        {
+            return PlacementRunOrientation.Horizontal;
+        }
+
+        if (line.IsVertical())
+        {
+            return PlacementRunOrientation.Vertical;
+        }
+
+        var dx = Math.Abs(line.End.X - line.Start.X);
+        var dy = Math.Abs(line.End.Y - line.Start.Y);
+        var dominant = Math.Max(dx, dy);
+        var minor = Math.Min(dx, dy);
+        if (dominant <= 0.001
+            || minor > MaxDominantAxisSkewDrawingUnits
+            || minor / dominant > MaxDominantAxisSkewRatio)
+        {
+            return PlacementRunOrientation.Unknown;
+        }
+
+        return dx >= dy
+            ? PlacementRunOrientation.Horizontal
+            : PlacementRunOrientation.Vertical;
+    }
+
+    private static double MaxSourceAxisShift(
+        PlanLineSegment source,
+        PlanLineSegment projected,
+        PlacementRunOrientation orientation)
+    {
+        return orientation == PlacementRunOrientation.Horizontal
+            ? Math.Max(
+                Math.Abs(source.Start.Y - projected.Start.Y),
+                Math.Abs(source.End.Y - projected.End.Y))
+            : Math.Max(
+                Math.Abs(source.Start.X - projected.Start.X),
+                Math.Abs(source.End.X - projected.End.X));
     }
 
     private static SourceWallSpanPlacement? SourceWallPlacement(
@@ -146,4 +235,15 @@ internal static class WallGraphTopologySpanBuilder
         double CenterParameter,
         double StartProjectionDistance,
         double EndProjectionDistance);
+
+    private sealed record SourceAxisProjection(
+        PlanLineSegment CenterLine,
+        double AxisShift);
+
+    private enum PlacementRunOrientation
+    {
+        Unknown,
+        Horizontal,
+        Vertical
+    }
 }
