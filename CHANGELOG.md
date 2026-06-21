@@ -6,6 +6,102 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.160] - 2026-06-21
+
+### Improved
+- Placement JSON summaries now report source-backed fallback wall recovery with
+  `sourceBackedFallbackWallCount` and
+  `sourceBackedFallbackTopologySpanCount` at both document and page-summary
+  levels.
+- Placement summary evidence now calls out source-backed fallback topology spans
+  so downstream consumers and visual QA can see when wall placement was rescued
+  from paired wall-face evidence instead of normal graph topology.
+- The placement schema, CLI placement validator, and export contract tests now
+  enforce the new fallback recovery counters.
+
+### Verified
+- Targeted placement/schema/CLI tests passed with `17` tests.
+- A medium-difficulty supplied PDF was rescanned with the wall-QA profile:
+  placement-ready walls stayed at `26/118`, `no_clean_topology_spans` stayed at
+  `4`, and the placement summary reported `6` source-backed fallback walls and
+  `6` source-backed fallback topology spans.
+
+## [0.02.159] - 2026-06-21
+
+### Improved
+- Clean wall topology export now recovers strong paired wall bodies with
+  source-backed fallback spans when the wall graph has no surviving clean span.
+  Fallback spans are straight, centered from paired wall-face evidence, and kept
+  lower priority than normal graph spans.
+- Duplicate suppression now keeps source-backed fallback spans for different
+  wall IDs instead of deleting them because nearby graph geometry shares source
+  evidence. Same-wall fallback duplicates are still suppressed.
+
+### Verified
+- Export, wall graph topology, and wall placement readiness tests passed with
+  `119` tests.
+- A medium-difficulty supplied PDF was rescanned with the wall-QA profile:
+  placement-ready walls increased from `20` to `26`, omitted/review walls
+  dropped from `98` to `92`, `no_clean_topology_spans` dropped from `10` to `4`,
+  and `6` source-backed fallback spans were exported.
+- A wall-only screenshot crop was reviewed; the recovered spans are straight
+  and the previous random zig-zag failure was not visible in the wall-QA render,
+  but remaining room-boundary and door/detail issues still need more work.
+
+## [0.02.158] - 2026-06-21
+
+### Improved
+- Visual snapshots now include capped `omittedWallExamples` with wall IDs,
+  page-space bounds, centerlines, omission codes, wall type, detection kind,
+  confidence, source-reference counts, and short evidence snippets. This makes
+  wall-QA failures targetable instead of only reporting aggregate omission
+  counts.
+- The viewer Advanced tab now shows omitted wall examples with coordinates so
+  difficult PDFs can be reviewed directly from `visual-snapshot.json`.
+- Placement export reliability now marks walls with any `placementOmission` as
+  not coordinate-ready, preventing downstream consumers from trusting walls that
+  lack clean placement topology.
+
+### Verified
+- Export, schema, and viewer contract tests passed with `116` tests.
+- Full test suite passed with `619` tests.
+- A medium-difficulty supplied PDF was rescanned; wall-QA still reports `20`
+  placement-ready walls and `98` omitted/review walls, now with coordinate
+  examples for the highest-priority omissions.
+
+## [0.02.157] - 2026-06-21
+
+### Improved
+- Wall evidence refinement now demotes severe fragmented unlayered wall-pair
+  candidates from placement-ready output when they lack room, adjacency, side
+  evidence, or supported topology endpoints. This reduces exact-placement noise
+  from wall-looking detail fragments while preserving context-supported walls.
+- Wall-QA SVG overlays now include a faint source linework context layer when no
+  PDF background image is embedded, making wall-only screenshots readable
+  instead of floating colored geometry on a blank page.
+- Visual snapshots now report the wall-QA `sourceContext` layer count and
+  bounds when that context layer is rendered.
+
+### Verified
+- Wall refinement and wall-QA SVG contract tests passed with `16` tests.
+- Full test suite passed with `617` tests.
+- A medium-difficulty supplied PDF was rescanned locally; the wall-QA snapshot
+  reported `sourceContext` plus `wallTopologySpans` as visible layers.
+
+## [0.02.156] - 2026-06-21
+
+### Improved
+- The viewer now normalizes visual-snapshot `wallPlacement` data and shows
+  placement-ready wall counts, omitted/review wall counts, and top wall
+  omission reasons in the snapshot summary and Advanced tab. This makes wall QA
+  useful even when loading only `visual-snapshot.json`.
+- The viewer script cache key was bumped so browsers load the new snapshot wall
+  placement summary UI.
+
+### Verified
+- Viewer script contract tests passed with `8` tests.
+- Full test suite passed with `614` tests.
+
 ## [0.02.155] - 2026-06-21
 
 ### Added

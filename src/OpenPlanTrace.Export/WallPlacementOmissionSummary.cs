@@ -6,7 +6,8 @@ public sealed record PlanOverlayWallPlacementSummary(
     int PlacementReadyWallCount,
     int PlacementOmittedWallCount,
     IReadOnlyDictionary<string, int> OmissionCounts,
-    IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions)
+    IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions,
+    IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> OmittedWallExamples)
 {
     public IEnumerable<string> TopOmissionRows() =>
         TopOmissions.Select(item => $"omit: {item.Label} {item.Count.ToString(CultureInfo.InvariantCulture)}");
@@ -17,6 +18,22 @@ public sealed record PlanOverlayWallPlacementOmissionSummary(
     string Label,
     int Count,
     bool IsPriority);
+
+public sealed record PlanOverlayWallPlacementOmittedWallExample(
+    string WallId,
+    int PageNumber,
+    string Code,
+    string Label,
+    bool IsPriority,
+    string WallType,
+    string DetectionKind,
+    double Confidence,
+    double DrawingLength,
+    PlanRectSnapshot Bounds,
+    LineExport CenterLine,
+    int TopologySpanCount,
+    int SourcePrimitiveCount,
+    IReadOnlyList<string> Evidence);
 
 internal static class WallPlacementOmissionSummary
 {
@@ -30,7 +47,8 @@ internal static class WallPlacementOmissionSummary
     public static PlanOverlayWallPlacementSummary From(
         PlanScanResult result,
         int pageNumber,
-        int maxTopOmissions = 5)
+        int maxTopOmissions = 5,
+        int maxOmittedWallExamples = 12)
     {
         var componentByWallId = BuildWallComponentLookup(result.WallGraph.Components);
         var wallEvidenceAssessments = WallEvidenceExportHelpers.BuildAssessmentLookup(result.WallEvidenceMap);
@@ -44,6 +62,7 @@ internal static class WallPlacementOmissionSummary
             .GroupBy(span => span.WallId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         var omissionCodes = new List<string>();
+        var omittedWalls = new List<PlanOverlayWallPlacementOmittedWallExample>();
         var readyCount = 0;
 
         foreach (var wall in result.Walls.Where(wall => wall.PageNumber == pageNumber))
@@ -89,6 +108,7 @@ internal static class WallPlacementOmissionSummary
             else if (omission is not null)
             {
                 omissionCodes.Add(omission.Code);
+                omittedWalls.Add(ToOmittedWallExample(wall, omission, topologySpans));
             }
         }
 
@@ -101,8 +121,48 @@ internal static class WallPlacementOmissionSummary
             readyCount,
             omissionCodes.Count,
             omissionCounts,
-            topOmissions);
+            topOmissions,
+            TopOmittedWallExamples(omittedWalls, maxOmittedWallExamples));
     }
+
+    private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(
+        IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> examples,
+        int maxRows)
+    {
+        if (maxRows <= 0 || examples.Count == 0)
+        {
+            return Array.Empty<PlanOverlayWallPlacementOmittedWallExample>();
+        }
+
+        return examples
+            .OrderByDescending(item => item.IsPriority)
+            .ThenBy(item => OmissionSortRank(item.Code))
+            .ThenByDescending(item => item.Confidence)
+            .ThenByDescending(item => item.DrawingLength)
+            .ThenBy(item => item.WallId, StringComparer.Ordinal)
+            .Take(maxRows)
+            .ToArray();
+    }
+
+    private static PlanOverlayWallPlacementOmittedWallExample ToOmittedWallExample(
+        WallSegment wall,
+        PlacementWallOmissionExport omission,
+        IReadOnlyList<WallGraphTopologySpan> topologySpans) =>
+        new(
+            wall.Id,
+            wall.PageNumber,
+            omission.Code,
+            OmissionLabel(omission.Code),
+            PriorityOmissionCodes.Contains(omission.Code, StringComparer.Ordinal),
+            wall.WallType.ToString(),
+            wall.DetectionKind.ToString(),
+            PlanOverlaySnapshot.Round(wall.Confidence.Value),
+            PlanOverlaySnapshot.Round(wall.DrawingLength),
+            PlanRectSnapshot.From(wall.Bounds),
+            LineExport.From(wall.CenterLine),
+            topologySpans.Count,
+            wall.SourcePrimitiveIds.Count,
+            omission.Evidence.Take(4).ToArray());
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions(
         IReadOnlyDictionary<string, int> omissionCounts,
@@ -135,6 +195,26 @@ internal static class WallPlacementOmissionSummary
         int count,
         bool isPriority) =>
         new(code, OmissionLabel(code), count, isPriority);
+
+    private static int OmissionSortRank(string code)
+    {
+        var priorityIndex = Array.IndexOf(PriorityOmissionCodes, code);
+        if (priorityIndex >= 0)
+        {
+            return priorityIndex;
+        }
+
+        return code switch
+        {
+            "no_clean_topology_spans" => 10,
+            "wall_evidence_review_required" => 20,
+            "secondary_without_room_boundary_support" => 30,
+            "isolated_fragment" => 40,
+            "rejected_wall_evidence" => 50,
+            "duplicate_wall_face" => 60,
+            _ => 100
+        };
+    }
 
     private static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildWallReviewReasons(
         IReadOnlyList<PlanDiagnostic> diagnostics)

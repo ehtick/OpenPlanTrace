@@ -8254,6 +8254,7 @@ function renderAdvancedTabDetails() {
         ["Review queue", snapshot.reviewQueueCount ?? 0],
         ["Requires review", snapshot.requiresReview ? "Yes" : "No"]
       ]),
+      renderTabCard("Wall placement", visualSnapshotWallPlacementRows(snapshotPage)),
       renderTabListCard(
         "Densest layers",
         visualSnapshotDensestLayers(snapshotPage, 14).map((layer) => ({
@@ -8261,6 +8262,16 @@ function renderAdvancedTabDetails() {
           meta: visualSnapshotLayerMeta(layer)
         })),
         "No populated snapshot layers",
+        true),
+      renderTabListCard(
+        "Top wall omissions",
+        visualSnapshotWallOmissionItems(snapshotPage),
+        "No wall placement omissions",
+        true),
+      renderTabListCard(
+        "Omitted wall examples",
+        visualSnapshotOmittedWallExampleItems(snapshotPage),
+        "No omitted wall examples",
         true),
       renderTabListCard(
         "Visual issues",
@@ -9543,12 +9554,15 @@ function visualSnapshotCurrentPage(snapshot = state.visualSnapshot) {
 
 function visualSnapshotCountRows(snapshot = state.visualSnapshot) {
   const page = visualSnapshotCurrentPage(snapshot);
+  const wallPlacement = page?.wallPlacement;
   return [
     ["Pages", snapshot?.pages?.length ?? 0],
     ["Current page", page ? `${page.pageNumber}` : "-"],
     ["Snapshot layers", page?.layers?.length ?? 0],
     ["Drawable items", page?.drawableItemCount ?? 0],
     ["Primitive count", page?.primitiveCount ?? 0],
+    ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
+    ["Omitted/review walls", wallPlacement?.placementOmittedWallCount ?? 0],
     ["Review queue", snapshot?.reviewQueueCount ?? 0],
     ["Issues", visualSnapshotIssues(snapshot).length],
     ["Quality", snapshot?.qualityGrade ?? "-"]
@@ -9557,17 +9571,74 @@ function visualSnapshotCountRows(snapshot = state.visualSnapshot) {
 
 function visualSnapshotAnalysisRows(snapshot = state.visualSnapshot, page = visualSnapshotCurrentPage(snapshot), layerSummary = "-") {
   const issues = visualSnapshotIssuesForPage(page, snapshot);
+  const wallPlacement = page?.wallPlacement;
   return [
     ["Current page", page ? `${page.pageNumber}` : "-"],
     ["Page size", page ? `${formatCoordinateNumber(page.width)} x ${formatCoordinateNumber(page.height)}` : "-"],
     ["Visible layers", layerSummary],
     ["Visible items", visualSnapshotVisibleItemCount(page)],
     ["All detections", page?.drawableItemCount ?? 0],
+    ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
+    ["Omitted/review walls", wallPlacement?.placementOmittedWallCount ?? 0],
+    ["Top wall omission", visualSnapshotTopWallOmissionLabel(wallPlacement)],
     ["Source layers", page?.layers?.length ?? 0],
     ["Review queue", page?.reviewQueueCount ?? snapshot?.reviewQueueCount ?? 0],
     ["Diagnostics", issues.length],
     ["Quality", snapshot?.qualityGrade ?? "-"]
   ];
+}
+
+function visualSnapshotWallPlacementRows(page = visualSnapshotCurrentPage()) {
+  const wallPlacement = page?.wallPlacement;
+  const omissionCodes = Object.keys(wallPlacement?.omissionCounts ?? {}).length;
+  return [
+    ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
+    ["Omitted/review walls", wallPlacement?.placementOmittedWallCount ?? 0],
+    ["Omission codes", omissionCodes],
+    ["Top omission", visualSnapshotTopWallOmissionLabel(wallPlacement)]
+  ];
+}
+
+function visualSnapshotTopWallOmissionLabel(wallPlacement = null) {
+  const top = wallPlacement?.topOmissions?.[0];
+  if (!top) {
+    return "-";
+  }
+
+  const priority = top.isPriority ? "priority" : "count";
+  return `${top.label || top.code}: ${top.count} (${priority})`;
+}
+
+function visualSnapshotWallOmissionItems(page = visualSnapshotCurrentPage()) {
+  return (page?.wallPlacement?.topOmissions ?? [])
+    .map((item) => ({
+      title: item.label || item.code || "wall omission",
+      meta: [
+        `${item.count} wall${item.count === 1 ? "" : "s"}`,
+        item.code || "",
+        item.isPriority ? "priority" : ""
+      ].filter(Boolean).join(" / "),
+      className: item.isPriority ? "lifecycle-warning" : ""
+    }));
+}
+
+function visualSnapshotOmittedWallExampleItems(page = visualSnapshotCurrentPage()) {
+  return (page?.wallPlacement?.omittedWallExamples ?? [])
+    .map((item) => ({
+      title: item.wallId || item.code || "omitted wall",
+      meta: [
+        item.label || item.code || "omitted",
+        item.wallType ? `type ${item.wallType}` : "",
+        item.detectionKind || "",
+        Number.isFinite(Number(item.confidence)) ? `conf ${formatNumber(item.confidence)}` : "",
+        Number.isFinite(Number(item.drawingLength)) ? `${formatNumber(item.drawingLength)} units` : "",
+        item.bounds ? `bounds ${formatRectCoordinates(item.bounds)}` : "",
+        item.centerLine ? `line ${formatLineCoordinates(item.centerLine)}` : "",
+        item.sourcePrimitiveCount ? `${item.sourcePrimitiveCount} source refs` : "",
+        item.evidence?.[0] || ""
+      ].filter(Boolean).join(" / "),
+      className: item.isPriority ? "lifecycle-warning" : ""
+    }));
 }
 
 function visualSnapshotCoordinateRows(snapshot = state.visualSnapshot) {
@@ -14684,8 +14755,70 @@ function normalizeVisualSnapshotPage(page, index) {
     reviewQueueCount: nonNegativeInteger(page.reviewQueueCount),
     svgPath: page.svgPath || "",
     layers,
+    wallPlacement: normalizeVisualSnapshotWallPlacementSummary(page.wallPlacement),
     issues: Array.isArray(page.issues) ? page.issues : [],
     reviewQueue: Array.isArray(page.reviewQueue) ? page.reviewQueue : []
+  };
+}
+
+function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return {
+      placementReadyWallCount: 0,
+      placementOmittedWallCount: 0,
+      omissionCounts: {},
+      topOmissions: [],
+      omittedWallExamples: []
+    };
+  }
+
+  return {
+    placementReadyWallCount: nonNegativeInteger(summary.placementReadyWallCount),
+    placementOmittedWallCount: nonNegativeInteger(summary.placementOmittedWallCount),
+    omissionCounts: summary.omissionCounts && typeof summary.omissionCounts === "object"
+      ? Object.fromEntries(Object.entries(summary.omissionCounts)
+        .map(([key, value]) => [key, nonNegativeInteger(value)]))
+      : {},
+    topOmissions: (Array.isArray(summary.topOmissions) ? summary.topOmissions : [])
+      .map((item) => ({
+        code: String(item?.code || ""),
+        label: String(item?.label || item?.code || "omission"),
+        count: nonNegativeInteger(item?.count),
+        isPriority: Boolean(item?.isPriority)
+      }))
+      .filter((item) => item.code || item.count > 0),
+    omittedWallExamples: (Array.isArray(summary.omittedWallExamples) ? summary.omittedWallExamples : [])
+      .map(normalizeVisualSnapshotOmittedWallExample)
+      .filter(Boolean)
+  };
+}
+
+function normalizeVisualSnapshotOmittedWallExample(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const wallId = String(item.wallId || "");
+  const code = String(item.code || "");
+  if (!wallId && !code) {
+    return null;
+  }
+
+  return {
+    wallId,
+    pageNumber: nonNegativeInteger(item.pageNumber),
+    code,
+    label: String(item.label || item.code || "omitted wall"),
+    isPriority: Boolean(item.isPriority),
+    wallType: String(item.wallType || ""),
+    detectionKind: String(item.detectionKind || ""),
+    confidence: nullableFiniteNumber(item.confidence),
+    drawingLength: nullableFiniteNumber(item.drawingLength),
+    bounds: normalizeRect(item.bounds),
+    centerLine: normalizeLine(item.centerLine),
+    topologySpanCount: nonNegativeInteger(item.topologySpanCount),
+    sourcePrimitiveCount: nonNegativeInteger(item.sourcePrimitiveCount),
+    evidence: normalizeStringArray(item.evidence)
   };
 }
 

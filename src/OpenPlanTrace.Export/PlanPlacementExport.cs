@@ -313,6 +313,8 @@ public sealed record PlacementSummaryExport(
     int PlacementReadyWallCount,
     int PlacementOmittedWallCount,
     int WallTopologySpanCount,
+    int SourceBackedFallbackWallCount,
+    int SourceBackedFallbackTopologySpanCount,
     int WallSolidSpanCount,
     IReadOnlyDictionary<string, int> WallPlacementOmissionCounts,
     int RoomCount,
@@ -364,6 +366,8 @@ public sealed record PlacementSummaryExport(
         var placementReadyWallCount = CountPlacementReadyWalls(walls);
         var placementOmittedWallCount = walls.Count(wall => wall.PlacementOmission is not null);
         var wallTopologySpanCount = walls.Sum(wall => wall.TopologySpans.Count);
+        var sourceBackedFallbackWallCount = CountSourceBackedFallbackWalls(walls);
+        var sourceBackedFallbackTopologySpanCount = CountSourceBackedFallbackTopologySpans(walls);
         var wallSolidSpanCount = walls.Sum(wall => wall.SolidSpans.Count);
         var wallPlacementOmissionCounts = BuildWallPlacementOmissionCounts(walls);
         var reliabilityTrackedEntityCount = walls.Count + rooms.Count + openings.Count + objectAggregates.Count;
@@ -415,6 +419,8 @@ public sealed record PlacementSummaryExport(
             placementReadyWallCount,
             placementOmittedWallCount,
             wallTopologySpanCount,
+            sourceBackedFallbackWallCount,
+            sourceBackedFallbackTopologySpanCount,
             wallSolidSpanCount,
             wallPlacementOmissionCounts,
             rooms.Count,
@@ -465,7 +471,7 @@ public sealed record PlacementSummaryExport(
                     routingLayer,
                     issues))
                 .ToArray(),
-            BuildEvidence(result, reliabilityTrackedEntityCount, coordinateReadyEntityCount, metricReadyEntityCount, reviewRequiredEntityCount, placementReadyWallCount, placementOmittedWallCount, issues));
+            BuildEvidence(result, reliabilityTrackedEntityCount, coordinateReadyEntityCount, metricReadyEntityCount, reviewRequiredEntityCount, placementReadyWallCount, placementOmittedWallCount, sourceBackedFallbackTopologySpanCount, issues));
     }
 
     private static int CountRoutingItems(PlacementRoutingLayerExport routingLayer) =>
@@ -480,6 +486,15 @@ public sealed record PlacementSummaryExport(
 
     internal static int CountPlacementReadyWalls(IEnumerable<PlacementWallExport> walls) =>
         walls.Count(wall => wall.PlacementOmission is null && wall.Reliability.ReadyForCoordinatePlacement);
+
+    internal static int CountSourceBackedFallbackWalls(IEnumerable<PlacementWallExport> walls) =>
+        walls.Count(wall => wall.TopologySpans.Any(IsSourceBackedFallbackTopologySpan));
+
+    internal static int CountSourceBackedFallbackTopologySpans(IEnumerable<PlacementWallExport> walls) =>
+        walls.Sum(wall => wall.TopologySpans.Count(IsSourceBackedFallbackTopologySpan));
+
+    internal static bool IsSourceBackedFallbackTopologySpan(PlacementWallTopologySpanExport span) =>
+        span.Id.Contains(":source-backed-fallback:", StringComparison.Ordinal);
 
     internal static IReadOnlyDictionary<string, int> BuildWallPlacementOmissionCounts(
         IEnumerable<PlacementWallExport> walls) =>
@@ -541,6 +556,7 @@ public sealed record PlacementSummaryExport(
         int reviewRequiredEntityCount,
         int placementReadyWallCount,
         int placementOmittedWallCount,
+        int sourceBackedFallbackTopologySpanCount,
         IReadOnlyList<PlacementIssueExport> issues)
     {
         var evidence = new List<string>
@@ -551,6 +567,11 @@ public sealed record PlacementSummaryExport(
             $"placement-ready walls {placementReadyWallCount}/{result.Walls.Count}",
             $"placement-omitted walls {placementOmittedWallCount}/{result.Walls.Count}"
         };
+
+        if (sourceBackedFallbackTopologySpanCount > 0)
+        {
+            evidence.Add($"source-backed fallback topology spans {sourceBackedFallbackTopologySpanCount}");
+        }
 
         if (reviewRequiredEntityCount > 0)
         {
@@ -666,6 +687,8 @@ public sealed record PlacementPageSummaryExport(
     int PlacementReadyWallCount,
     int PlacementOmittedWallCount,
     int WallTopologySpanCount,
+    int SourceBackedFallbackWallCount,
+    int SourceBackedFallbackTopologySpanCount,
     int WallSolidSpanCount,
     IReadOnlyDictionary<string, int> WallPlacementOmissionCounts,
     int RoomCount,
@@ -699,6 +722,8 @@ public sealed record PlacementPageSummaryExport(
         var placementReadyWallCount = PlacementSummaryExport.CountPlacementReadyWalls(pageWalls);
         var placementOmittedWallCount = pageWalls.Count(wall => wall.PlacementOmission is not null);
         var wallTopologySpanCount = pageWalls.Sum(wall => wall.TopologySpans.Count);
+        var sourceBackedFallbackWallCount = PlacementSummaryExport.CountSourceBackedFallbackWalls(pageWalls);
+        var sourceBackedFallbackTopologySpanCount = PlacementSummaryExport.CountSourceBackedFallbackTopologySpans(pageWalls);
         var wallSolidSpanCount = pageWalls.Sum(wall => wall.SolidSpans.Count);
         var wallPlacementOmissionCounts = PlacementSummaryExport.BuildWallPlacementOmissionCounts(pageWalls);
         var pageRooms = rooms.Where(room => room.PageNumber == page.PageNumber).ToArray();
@@ -733,6 +758,8 @@ public sealed record PlacementPageSummaryExport(
             placementReadyWallCount,
             placementOmittedWallCount,
             wallTopologySpanCount,
+            sourceBackedFallbackWallCount,
+            sourceBackedFallbackTopologySpanCount,
             wallSolidSpanCount,
             wallPlacementOmissionCounts,
             pageRooms.Length,
@@ -1521,6 +1548,7 @@ public sealed record PlacementWallExport(
             excludedFromStructuralTopology,
             repairCandidates,
             combinedReviewReasons);
+        var exportReliability = ApplyPlacementOmissionToReliability(reliability, placementOmission);
 
         return new PlacementWallExport(
             wall.Id,
@@ -1548,12 +1576,34 @@ public sealed record PlacementWallExport(
             wall.Confidence.Value,
             wall.FragmentEvidence is null ? null : WallFragmentEvidenceExport.From(wall.FragmentEvidence),
             evidenceAssessment is null ? null : WallEvidenceAssessmentExport.From(evidenceAssessment),
-            reliability,
+            exportReliability,
             placementOmission,
             wallGraphRepairCandidateIds,
             wall.SourcePrimitiveIds,
             ExportSourceHelpers.SourceLayers(wall.SourcePrimitiveIds, sourceLookup),
             wall.Evidence);
+    }
+
+    private static PlacementReliabilityExport ApplyPlacementOmissionToReliability(
+        PlacementReliabilityExport reliability,
+        PlacementWallOmissionExport? placementOmission)
+    {
+        if (placementOmission is null)
+        {
+            return reliability;
+        }
+
+        var omissionReason = $"wall omitted from clean placement topology ({placementOmission.Code})";
+        return reliability with
+        {
+            ReadyForCoordinatePlacement = false,
+            ReadyForMetricPlacement = false,
+            RequiresReview = true,
+            Reasons = reliability.Reasons
+                .Append(omissionReason)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray()
+        };
     }
 
     private static string WallGraphRepairReviewReason(WallGraphRepairCandidate candidate)

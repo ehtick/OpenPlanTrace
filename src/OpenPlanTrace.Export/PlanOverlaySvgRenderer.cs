@@ -38,6 +38,8 @@ public static class PlanOverlaySvgRenderer
         builder.AppendLine("""
             .sheet-bg { fill: var(--background, #ffffff); }
             .sheet-image { image-rendering: auto; }
+            .source-context { stroke: #242933; stroke-width: 0.34; stroke-linecap: round; stroke-linejoin: round; fill: none; opacity: 0.22; vector-effect: non-scaling-stroke; }
+            .source-context-rect { fill: none; opacity: 0.18; }
             .region { fill: rgba(20, 124, 114, 0.045); stroke: #147c72; stroke-width: 1.1; vector-effect: non-scaling-stroke; }
             .region-title { fill: rgba(201, 124, 24, 0.11); stroke: #c97c18; }
             .region-secondary { fill: rgba(120, 84, 168, 0.09); stroke: #7854a8; }
@@ -102,6 +104,10 @@ public static class PlanOverlaySvgRenderer
         if (!string.IsNullOrWhiteSpace(options.BackgroundImageHref))
         {
             builder.AppendLine($"""<image class="sheet-image" href="{Esc(options.BackgroundImageHref!)}" x="0" y="0" width="{N(pageWidth)}" height="{N(pageHeight)}" preserveAspectRatio="none" opacity="{N(Math.Clamp(options.BackgroundImageOpacity, 0, 1))}"><title>Source PDF page background for alignment QA</title></image>""");
+        }
+        else if (options.IncludeSourceContext)
+        {
+            AppendSourceContext(builder, page, options);
         }
 
         if (options.IncludeRooms)
@@ -449,6 +455,84 @@ public static class PlanOverlaySvgRenderer
         return builder.ToString();
     }
 
+    private static void AppendSourceContext(
+        StringBuilder builder,
+        PlanPage page,
+        SvgOverlayRenderOptions options)
+    {
+        var limit = Math.Max(0, options.MaxSourceContextPrimitives);
+        if (limit == 0 || page.Primitives.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("""<g id="source-context" aria-label="Faint source linework context">""");
+        var rendered = 0;
+        foreach (var primitive in page.Primitives)
+        {
+            if (rendered >= limit)
+            {
+                break;
+            }
+
+            switch (primitive)
+            {
+                case LinePrimitive line:
+                    builder.AppendLine($"""<line class="source-context" x1="{N(line.Segment.Start.X)}" y1="{N(line.Segment.Start.Y)}" x2="{N(line.Segment.End.X)}" y2="{N(line.Segment.End.Y)}" />""");
+                    rendered++;
+                    break;
+                case PolylinePrimitive polyline when polyline.Points.Count >= 2:
+                    if (polyline.Closed)
+                    {
+                        builder.AppendLine($"""<polygon class="source-context" points="{Esc(Points(polyline.Points))}" />""");
+                    }
+                    else
+                    {
+                        builder.AppendLine($"""<polyline class="source-context" points="{Esc(Points(polyline.Points))}" />""");
+                    }
+                    rendered++;
+                    break;
+                case RectanglePrimitive rectangle:
+                    builder.AppendLine($"""<rect class="source-context source-context-rect" x="{N(rectangle.Rectangle.X)}" y="{N(rectangle.Rectangle.Y)}" width="{N(rectangle.Rectangle.Width)}" height="{N(rectangle.Rectangle.Height)}" />""");
+                    rendered++;
+                    break;
+                case ArcPrimitive arc:
+                    AppendSourceContextArc(builder, arc);
+                    rendered++;
+                    break;
+            }
+        }
+
+        if (page.Primitives.Count > limit)
+        {
+            builder.AppendLine($"""<metadata>source context capped at {limit.ToString(CultureInfo.InvariantCulture)} of {page.Primitives.Count.ToString(CultureInfo.InvariantCulture)} primitives</metadata>""");
+        }
+
+        builder.AppendLine("</g>");
+    }
+
+    private static void AppendSourceContextArc(StringBuilder builder, ArcPrimitive arc)
+    {
+        if (arc.Radius <= 0 || Math.Abs(arc.SweepAngleRadians) <= 0.0001)
+        {
+            return;
+        }
+
+        var start = new PlanPoint(
+            arc.Center.X + Math.Cos(arc.StartAngleRadians) * arc.Radius,
+            arc.Center.Y + Math.Sin(arc.StartAngleRadians) * arc.Radius);
+        var endAngle = arc.StartAngleRadians + arc.SweepAngleRadians;
+        var end = new PlanPoint(
+            arc.Center.X + Math.Cos(endAngle) * arc.Radius,
+            arc.Center.Y + Math.Sin(endAngle) * arc.Radius);
+        var largeArc = Math.Abs(arc.SweepAngleRadians) > Math.PI ? 1 : 0;
+        var sweep = arc.SweepAngleRadians >= 0 ? 1 : 0;
+        builder.AppendLine($"""<path class="source-context" d="M {N(start.X)} {N(start.Y)} A {N(arc.Radius)} {N(arc.Radius)} 0 {largeArc} {sweep} {N(end.X)} {N(end.Y)}" />""");
+    }
+
+    private static string Points(IReadOnlyList<PlanPoint> points) =>
+        string.Join(" ", points.Select(point => $"{N(point.X)},{N(point.Y)}"));
+
     private static void AppendRect(
         StringBuilder builder,
         PlanRect rect,
@@ -523,6 +607,10 @@ public static class PlanOverlaySvgRenderer
         else if (options.Profile == SvgOverlayRenderProfile.WallQa)
         {
             rows.Add("Walls-only placement QA");
+            if (options.IncludeSourceContext && string.IsNullOrWhiteSpace(options.BackgroundImageHref))
+            {
+                rows.Add("Faint source linework context");
+            }
         }
 
         var visibleTopologySpanCount = WallTopologySpanCount(result, page.Number, options);

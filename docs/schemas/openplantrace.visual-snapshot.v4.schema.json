@@ -172,6 +172,38 @@
         }
       }
     },
+    "point": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/point"
+        },
+        "end": {
+          "$ref": "#/$defs/point"
+        }
+      }
+    },
     "layerSnapshot": {
       "type": "object",
       "additionalProperties": true,
@@ -341,6 +373,12 @@
           "items": {
             "$ref": "#/$defs/wallPlacementOmissionSummary"
           }
+        },
+        "omittedWallExamples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/wallPlacementOmittedWallExample"
+          }
         }
       }
     },
@@ -367,6 +405,76 @@
         },
         "isPriority": {
           "type": "boolean"
+        }
+      }
+    },
+    "wallPlacementOmittedWallExample": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "wallId",
+        "pageNumber",
+        "code",
+        "label",
+        "isPriority",
+        "wallType",
+        "detectionKind",
+        "confidence",
+        "drawingLength",
+        "bounds",
+        "centerLine",
+        "topologySpanCount",
+        "sourcePrimitiveCount",
+        "evidence"
+      ],
+      "properties": {
+        "wallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pageNumber": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "isPriority": {
+          "type": "boolean"
+        },
+        "wallType": {
+          "type": "string"
+        },
+        "detectionKind": {
+          "type": "string"
+        },
+        "confidence": {
+          "$ref": "#/$defs/ratio"
+        },
+        "drawingLength": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "centerLine": {
+          "$ref": "#/$defs/line"
+        },
+        "topologySpanCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "sourcePrimitiveCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

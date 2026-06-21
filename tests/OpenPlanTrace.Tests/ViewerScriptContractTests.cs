@@ -153,6 +153,30 @@ public sealed class ViewerScriptContractTests
         Assert.DoesNotContain("{ key: \"rawWalls\", label: \"Raw detected walls\", layer: \"rawWalls\"", normalized);
     }
 
+    [Fact]
+    public void ViewerVisualSnapshots_ShowWallPlacementSummary()
+    {
+        var script = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "app.js"));
+        var normalized = script.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains("function normalizeVisualSnapshotWallPlacementSummary", normalized);
+        Assert.Contains("wallPlacement: normalizeVisualSnapshotWallPlacementSummary(page.wallPlacement)", normalized);
+        Assert.Contains("[\"Placement-ready walls\", wallPlacement?.placementReadyWallCount ?? 0]", normalized);
+        Assert.Contains("[\"Omitted/review walls\", wallPlacement?.placementOmittedWallCount ?? 0]", normalized);
+        Assert.Contains("function visualSnapshotWallPlacementRows", normalized);
+        Assert.Contains("function visualSnapshotWallOmissionItems", normalized);
+        Assert.Contains("function visualSnapshotOmittedWallExampleItems", normalized);
+        Assert.Contains("function normalizeVisualSnapshotOmittedWallExample", normalized);
+        Assert.Contains("renderTabCard(\"Wall placement\", visualSnapshotWallPlacementRows(snapshotPage))", normalized);
+        Assert.Contains("Top wall omissions", normalized);
+        Assert.Contains("Omitted wall examples", normalized);
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -56,6 +56,10 @@ public sealed record SvgOverlayRenderOptions
 
     public bool IncludeRoutingLayer { get; init; }
 
+    public bool IncludeSourceContext { get; init; }
+
+    public int MaxSourceContextPrimitives { get; init; } = 12000;
+
     public string BackgroundColor { get; init; } = "#ffffff";
 
     public string? BackgroundImageHref { get; init; }
@@ -125,7 +129,8 @@ public sealed record SvgOverlayRenderOptions
                 IncludeWallBodyFootprints = false,
                 IncludeReviewOnlyWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
-                IncludeRoutingLayer = false
+                IncludeRoutingLayer = false,
+                IncludeSourceContext = true
             },
             _ => new SvgOverlayRenderOptions()
             {

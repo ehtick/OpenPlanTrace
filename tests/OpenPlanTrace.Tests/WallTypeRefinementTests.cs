@@ -567,6 +567,99 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DemotesUnsupportedHighScoreFragmentedUnlayeredPair()
+    {
+        var wall = new WallSegment(
+            "wall-unsupported-high-score-fragmented-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(260, 100)),
+            7,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "parallel wall-face pair",
+                "pair score 0,91",
+                "first face merged 12 fragments",
+                "second face merged 88 fragments",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall evidence: strong double-edge wall body"
+            }
+        };
+        var context = CreateContext("demote-unsupported-high-score-fragmented-pair");
+        context.Walls.Add(wall);
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var demoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(demoted.PlacementReady);
+        Assert.True(demoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, demoted.Decision);
+        Assert.Contains(
+            demoted.Evidence,
+            item => item.Contains("unsupported severe fragmented-face evidence", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("side room hits 0", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("supported endpoints 0", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsRoomSupportedHighScoreFragmentedUnlayeredPairPlacementReady()
+    {
+        var wall = new WallSegment(
+            "wall-room-supported-high-score-fragmented-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(260, 100)),
+            7,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "parallel wall-face pair",
+                "pair score 0,91",
+                "first face merged 12 fragments",
+                "second face merged 88 fragments",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall evidence: strong double-edge wall body"
+            }
+        };
+        var context = CreateContext("keep-room-supported-high-score-fragmented-pair");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room("room-a", RoomUseKind.Office, wall.Id));
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(retained.PlacementReady);
+        Assert.False(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("unsupported severe fragmented-face evidence", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_DoesNotPromoteOneSidedRoomReference()
     {
         var wall = new WallSegment(

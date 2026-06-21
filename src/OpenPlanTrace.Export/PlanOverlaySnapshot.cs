@@ -183,6 +183,9 @@ public sealed record PlanOverlayPageSnapshot(
         Add(options.IncludeObjects, "objects", "objectGroups");
         Add(options.IncludeObjectAggregates, "objectAggregates");
         Add(
+            options.IncludeSourceContext && string.IsNullOrWhiteSpace(options.BackgroundImageHref),
+            "sourceContext");
+        Add(
             options.IncludeRoutingLayer,
             "routingBarriers",
             "routingPassages",
@@ -220,6 +223,18 @@ public sealed record PlanOverlayPageSnapshot(
             BuildLayer(name, items, bounds, confidence, pageBounds, breakdown);
 
         var routing = result.RoutingLayer;
+        var page = result.Document.Pages.FirstOrDefault(item => item.Number == pageNumber);
+
+        if (page is not null
+            && options.IncludeSourceContext
+            && string.IsNullOrWhiteSpace(options.BackgroundImageHref))
+        {
+            yield return Layer(
+                "sourceContext",
+                SourceContextPrimitives(page, options),
+                item => item.Bounds,
+                _ => Confidence.Low);
+        }
 
         yield return Layer(
             "regions",
@@ -453,6 +468,17 @@ public sealed record PlanOverlayPageSnapshot(
             confidenceValues.Length == 0 ? null : PlanOverlaySnapshot.Round(confidenceValues.Max()),
             breakdown ?? new Dictionary<string, int>(StringComparer.Ordinal));
     }
+
+    private static IEnumerable<PlanPrimitive> SourceContextPrimitives(
+        PlanPage page,
+        SvgOverlayRenderOptions options) =>
+        page.Primitives
+            .Where(primitive =>
+                primitive is LinePrimitive
+                or PolylinePrimitive
+                or RectanglePrimitive
+                or ArcPrimitive)
+            .Take(Math.Max(0, options.MaxSourceContextPrimitives));
 
     private static double NormalizedDensity(int count, PlanRectSnapshot normalizedBounds)
     {

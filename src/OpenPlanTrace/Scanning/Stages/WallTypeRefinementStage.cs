@@ -116,6 +116,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     updatedWall,
                     assessment,
                     context.Options,
+                    component,
+                    wallRoomIds.Length,
+                    sharedWallIds.Contains(wall.Id),
+                    sideEvidence,
+                    supportedTopologyEndpointCountsByWallId.TryGetValue(wall.Id, out var demotionSupportedEndpointCount)
+                        ? demotionSupportedEndpointCount
+                        : 0,
                     out var demotedAssessment,
                     out var demotionEvidence))
             {
@@ -482,6 +489,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         WallSegment wall,
         WallEvidenceWallAssessment assessment,
         ScannerOptions options,
+        WallGraphComponent? component,
+        int roomReferenceCount,
+        bool isSharedByRoomAdjacency,
+        RoomSideEvidence sideEvidence,
+        int supportedTopologyEndpointCount,
         out WallEvidenceWallAssessment demotedAssessment,
         out IReadOnlyList<string> demotionEvidence)
     {
@@ -502,23 +514,39 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .ToArray();
         if (!HasUnknownOrWeakLayerEvidence(evidence)
             || !TryReadPairScore(evidence, out var pairScore)
-            || pairScore >= 0.68
             || !TryReadFaceFragmentCounts(evidence, out var faceFragments))
         {
             return false;
         }
 
         var maxTrustedLength = Math.Max(90, options.MinWallLength * 4.0);
-        if (wall.DrawingLength > maxTrustedLength
-            || faceFragments.MaxFaceFragmentCount < 40
-            || faceFragments.TotalFaceFragmentCount < 50)
+        var shortLowScoreFragmentedPair =
+            pairScore < 0.68
+            && wall.DrawingLength <= maxTrustedLength
+            && faceFragments.MaxFaceFragmentCount >= 40
+            && faceFragments.TotalFaceFragmentCount >= 50;
+        var unsupportedSeverelyFragmentedPair =
+            pairScore < 0.95
+            && wall.DrawingLength <= Math.Max(180, options.MinWallLength * 7.5)
+            && faceFragments.MaxFaceFragmentCount >= 70
+            && faceFragments.TotalFaceFragmentCount >= 80
+            && !HasPlacementContextSupport(
+                component,
+                roomReferenceCount,
+                isSharedByRoomAdjacency,
+                sideEvidence,
+                supportedTopologyEndpointCount);
+        if (!shortLowScoreFragmentedPair && !unsupportedSeverelyFragmentedPair)
         {
             return false;
         }
 
+        var reason = unsupportedSeverelyFragmentedPair
+            ? "unsupported severe fragmented-face evidence"
+            : "severe fragmented-face evidence";
         demotionEvidence = new[]
         {
-            $"wall evidence: demoted from placement-ready because short unlayered parallel-face pair has severe fragmented-face evidence; pair score {pairScore.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}, max face fragments {faceFragments.MaxFaceFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, total face fragments {faceFragments.TotalFaceFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+            $"wall evidence: demoted from placement-ready because unlayered parallel-face pair has {reason}; pair score {pairScore.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}, max face fragments {faceFragments.MaxFaceFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, total face fragments {faceFragments.TotalFaceFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, room refs {roomReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, side room hits {(sideEvidence.PositiveRoomHits + sideEvidence.NegativeRoomHits).ToString(System.Globalization.CultureInfo.InvariantCulture)}, supported endpoints {supportedTopologyEndpointCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
         };
         demotedAssessment = assessment with
         {
@@ -531,6 +559,27 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             Evidence = AppendEvidence(assessment.Evidence, demotionEvidence)
         };
         return true;
+    }
+
+    private static bool HasPlacementContextSupport(
+        WallGraphComponent? component,
+        int roomReferenceCount,
+        bool isSharedByRoomAdjacency,
+        RoomSideEvidence sideEvidence,
+        int supportedTopologyEndpointCount)
+    {
+        if (roomReferenceCount > 0
+            || isSharedByRoomAdjacency
+            || sideEvidence.PositiveRoomHits + sideEvidence.NegativeRoomHits > 0
+            || supportedTopologyEndpointCount >= 2)
+        {
+            return true;
+        }
+
+        return component is not null
+            && component.Kind == WallGraphComponentKind.MainStructural
+            && component.WallIds.Count >= 4
+            && component.DrawingLength >= 240;
     }
 
     private static bool IsTrustedShortStructuralReturnWall(

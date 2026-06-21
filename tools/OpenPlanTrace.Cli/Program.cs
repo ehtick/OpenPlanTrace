@@ -2039,6 +2039,8 @@ internal static class OpenPlanTraceCli
         var placementReadyWallCount = PlacementReadyWallCount(walls);
         var placementOmittedWallCount = PlacementOmittedWallCount(walls);
         var wallTopologySpanCount = WallSpanCount(walls, "topologySpans");
+        var sourceBackedFallbackWallCount = SourceBackedFallbackWallCount(walls);
+        var sourceBackedFallbackTopologySpanCount = SourceBackedFallbackTopologySpanCount(walls);
         var wallSolidSpanCount = WallSpanCount(walls, "solidSpans");
         var wallPlacementOmissionCounts = WallPlacementOmissionCounts(walls);
         var reliabilityTrackedEntityCount = walls.Length + rooms.Length + openings.Length + objectAggregates.Length;
@@ -2063,6 +2065,8 @@ internal static class OpenPlanTraceCli
         AddExpectedIntegerMessage(Prefix, "placementReadyWallCount", placementReadyWallCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "placementOmittedWallCount", placementOmittedWallCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "wallTopologySpanCount", wallTopologySpanCount, summary, messages);
+        AddExpectedIntegerMessage(Prefix, "sourceBackedFallbackWallCount", sourceBackedFallbackWallCount, summary, messages);
+        AddExpectedIntegerMessage(Prefix, "sourceBackedFallbackTopologySpanCount", sourceBackedFallbackTopologySpanCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "wallSolidSpanCount", wallSolidSpanCount, summary, messages);
         ValidateExpectedIntegerMap(Prefix, "wallPlacementOmissionCounts", wallPlacementOmissionCounts, summary, messages);
         AddExpectedIntegerMessage(Prefix, "roomCount", rooms.Length, summary, messages);
@@ -2199,6 +2203,8 @@ internal static class OpenPlanTraceCli
         var placementReadyWallCount = PlacementReadyWallCount(pageWalls);
         var placementOmittedWallCount = PlacementOmittedWallCount(pageWalls);
         var wallTopologySpanCount = WallSpanCount(pageWalls, "topologySpans");
+        var sourceBackedFallbackWallCount = SourceBackedFallbackWallCount(pageWalls);
+        var sourceBackedFallbackTopologySpanCount = SourceBackedFallbackTopologySpanCount(pageWalls);
         var wallSolidSpanCount = WallSpanCount(pageWalls, "solidSpans");
         var wallPlacementOmissionCounts = WallPlacementOmissionCounts(pageWalls);
         var pageRooms = rooms.Where(item => ReadInt32Property(item, "pageNumber") == pageNumber.Value).ToArray();
@@ -2216,6 +2222,8 @@ internal static class OpenPlanTraceCli
         AddExpectedIntegerMessage(prefix, "placementReadyWallCount", placementReadyWallCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "placementOmittedWallCount", placementOmittedWallCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "wallTopologySpanCount", wallTopologySpanCount, summary, messages);
+        AddExpectedIntegerMessage(prefix, "sourceBackedFallbackWallCount", sourceBackedFallbackWallCount, summary, messages);
+        AddExpectedIntegerMessage(prefix, "sourceBackedFallbackTopologySpanCount", sourceBackedFallbackTopologySpanCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "wallSolidSpanCount", wallSolidSpanCount, summary, messages);
         ValidateExpectedIntegerMap(prefix, "wallPlacementOmissionCounts", wallPlacementOmissionCounts, summary, messages);
         AddExpectedIntegerMessage(prefix, "roomCount", pageRooms.Length, summary, messages);
@@ -2251,6 +2259,20 @@ internal static class OpenPlanTraceCli
             wall.TryGetProperty(propertyName, out var spans) && spans.ValueKind == JsonValueKind.Array
                 ? spans.GetArrayLength()
                 : 0);
+
+    private static int SourceBackedFallbackWallCount(JsonElement[] walls) =>
+        walls.Count(wall => TopologySpans(wall).Any(IsSourceBackedFallbackSpan));
+
+    private static int SourceBackedFallbackTopologySpanCount(JsonElement[] walls) =>
+        walls.Sum(wall => TopologySpans(wall).Count(IsSourceBackedFallbackSpan));
+
+    private static IEnumerable<JsonElement> TopologySpans(JsonElement wall) =>
+        wall.TryGetProperty("topologySpans", out var spans) && spans.ValueKind == JsonValueKind.Array
+            ? spans.EnumerateArray()
+            : Array.Empty<JsonElement>();
+
+    private static bool IsSourceBackedFallbackSpan(JsonElement span) =>
+        ReadStringProperty(span, "id")?.Contains(":source-backed-fallback:", StringComparison.Ordinal) == true;
 
     private static IReadOnlyDictionary<string, int> WallPlacementOmissionCounts(JsonElement[] walls) =>
         walls

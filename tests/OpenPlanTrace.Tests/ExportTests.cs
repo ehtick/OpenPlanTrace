@@ -999,7 +999,7 @@ public sealed class ExportTests
     }
 
     [Fact]
-    public void SvgRenderer_WallQaProfileDrawsOnlyCleanWallPlacementLines()
+    public void SvgRenderer_WallQaProfileDrawsCleanWallPlacementLinesWithSourceContext()
     {
         var result = WithEndpointToWallHostRepairCandidate(
             WithReviewOnlyWallAssessment(
@@ -1013,6 +1013,8 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa\"", svg);
         Assert.Contains("Walls-only placement QA", svg);
+        Assert.Contains("Faint source linework context", svg);
+        Assert.Contains("id=\"source-context\"", svg);
         Assert.Contains("id=\"wall-topology-spans\"", svg);
         Assert.Contains("clean wall topology span detail-host:clean-run:1", svg);
         Assert.Contains("1 visible topology spans", svg);
@@ -1022,6 +1024,22 @@ public sealed class ExportTests
         Assert.DoesNotContain("id=\"wall-graph-repairs\"", svg);
         Assert.DoesNotContain("id=\"walls\"", svg);
         Assert.DoesNotContain("edge-tooth-1", svg);
+    }
+
+    [Fact]
+    public void SvgRenderer_WallQaProfileSuppressesSourceContextWhenBackgroundImageIsPresent()
+    {
+        var result = CreateDenseMinorRoutingDetailResult();
+        var options = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQa) with
+        {
+            BackgroundImageHref = "page-1.png"
+        };
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(result, 1, options);
+
+        Assert.Contains("class=\"sheet-image\"", svg);
+        Assert.DoesNotContain("id=\"source-context\"", svg);
+        Assert.DoesNotContain("Faint source linework context", svg);
     }
 
     [Fact]
@@ -1043,6 +1061,8 @@ public sealed class ExportTests
             new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQa));
         var page = Assert.Single(snapshot.Pages);
+        Assert.Contains("sourceContext", page.VisibleLayerNames);
+        Assert.Contains(page.Layers, layer => layer.Name == "sourceContext" && layer.Count > 0);
         var firstOmission = page.WallPlacement.TopOmissions[0];
         Assert.Equal("fragmented_pair_review_required", firstOmission.Code);
         Assert.True(firstOmission.IsPriority);
@@ -1282,6 +1302,7 @@ public sealed class ExportTests
         Assert.True(pageWallPlacement.GetProperty("placementOmittedWallCount").GetInt32() >= 0);
         Assert.Equal(JsonValueKind.Object, pageWallPlacement.GetProperty("omissionCounts").ValueKind);
         Assert.Equal(JsonValueKind.Array, pageWallPlacement.GetProperty("topOmissions").ValueKind);
+        Assert.Equal(JsonValueKind.Array, pageWallPlacement.GetProperty("omittedWallExamples").ValueKind);
         Assert.Contains(
             document.RootElement.GetProperty("pages")[0].GetProperty("layers").EnumerateArray(),
             layer => layer.GetProperty("name").GetString() == "walls"
@@ -1296,6 +1317,61 @@ public sealed class ExportTests
         Assert.Equal(
             snapshot.ReviewQueueCount,
             document.RootElement.GetProperty("reviewQueueCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task VisualSnapshotExporter_RecordsOmittedWallExamplesWithCoordinates()
+    {
+        var result = await CreateScanResultAsync();
+        var wall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        wall.Id,
+                        wall.PageNumber,
+                        wall.Bounds,
+                        WallEvidenceCategory.WeakSingleLine,
+                        new Confidence(0.43),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: wall.SourcePrimitiveIds,
+                        Evidence: new[] { "test evidence: visual snapshot omitted wall coordinate sample" })
+                })
+        };
+
+        var snapshot = PlanOverlaySnapshot.From(result);
+        var page = Assert.Single(snapshot.Pages);
+        var example = Assert.Single(page.WallPlacement.OmittedWallExamples, item => item.WallId == wall.Id);
+
+        Assert.Equal("wall_evidence_review_required", example.Code);
+        Assert.Equal(wall.PageNumber, example.PageNumber);
+        Assert.Equal(wall.WallType.ToString(), example.WallType);
+        Assert.Equal(wall.DetectionKind.ToString(), example.DetectionKind);
+        Assert.False(example.Bounds.IsEmpty);
+        Assert.Equal(Math.Round(wall.Bounds.X, 3, MidpointRounding.AwayFromZero), example.Bounds.X);
+        Assert.Equal(wall.CenterLine.Start.X, example.CenterLine.Start.X);
+        Assert.Contains(example.Evidence, item => item.Contains("visual snapshot omitted wall", StringComparison.OrdinalIgnoreCase));
+
+        var json = PlanOverlaySnapshotJsonExporter.Serialize(
+            snapshot,
+            new PlanOverlaySnapshotJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(json);
+        var jsonExample = Assert.Single(
+            document.RootElement
+                .GetProperty("pages")[0]
+                .GetProperty("wallPlacement")
+                .GetProperty("omittedWallExamples")
+                .EnumerateArray(),
+            item => item.GetProperty("wallId").GetString() == wall.Id);
+        Assert.Equal("wall_evidence_review_required", jsonExample.GetProperty("code").GetString());
+        Assert.Equal(JsonValueKind.Object, jsonExample.GetProperty("bounds").ValueKind);
+        Assert.Equal(JsonValueKind.Object, jsonExample.GetProperty("centerLine").ValueKind);
     }
 
     [Fact]
@@ -1572,6 +1648,12 @@ public sealed class ExportTests
             exportedWalls.Count(item => item.GetProperty("placementOmission").ValueKind != JsonValueKind.Null),
             summary.GetProperty("placementOmittedWallCount").GetInt32());
         Assert.Equal(exportedWalls.Sum(item => item.GetProperty("topologySpans").GetArrayLength()), summary.GetProperty("wallTopologySpanCount").GetInt32());
+        Assert.Equal(
+            exportedWalls.Count(item => item.GetProperty("topologySpans").EnumerateArray().Any(IsSourceBackedFallbackSpan)),
+            summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(
+            exportedWalls.Sum(item => item.GetProperty("topologySpans").EnumerateArray().Count(IsSourceBackedFallbackSpan)),
+            summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
         Assert.Equal(exportedWalls.Sum(item => item.GetProperty("solidSpans").GetArrayLength()), summary.GetProperty("wallSolidSpanCount").GetInt32());
         Assert.Empty(summary.GetProperty("wallPlacementOmissionCounts").EnumerateObject());
         Assert.Equal(root.GetProperty("rooms").GetArrayLength(), summary.GetProperty("roomCount").GetInt32());
@@ -1606,6 +1688,8 @@ public sealed class ExportTests
         Assert.Equal(summary.GetProperty("placementReadyWallCount").GetInt32(), pageSummary.GetProperty("placementReadyWallCount").GetInt32());
         Assert.Equal(summary.GetProperty("placementOmittedWallCount").GetInt32(), pageSummary.GetProperty("placementOmittedWallCount").GetInt32());
         Assert.Equal(summary.GetProperty("wallTopologySpanCount").GetInt32(), pageSummary.GetProperty("wallTopologySpanCount").GetInt32());
+        Assert.Equal(summary.GetProperty("sourceBackedFallbackWallCount").GetInt32(), pageSummary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32(), pageSummary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
         Assert.Equal(summary.GetProperty("wallSolidSpanCount").GetInt32(), pageSummary.GetProperty("wallSolidSpanCount").GetInt32());
         Assert.Equal("OpenPlanTracePageCoordinates", root.GetProperty("coordinateSystem").GetProperty("coordinateSpace").GetString());
         Assert.Equal("TopLeft", root.GetProperty("coordinateSystem").GetProperty("origin").GetString());
@@ -1896,6 +1980,99 @@ public sealed class ExportTests
                 .GetProperty("wallPlacementOmissionCounts")
                 .GetProperty("fragmented_pair_review_required")
                 .GetInt32());
+    }
+
+    [Fact]
+    public async Task PlacementExporter_DoesNotMarkOmittedWallsCoordinateReady()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallGraph = WallGraph.Empty
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        Assert.Equal(
+            "no_clean_topology_spans",
+            wall.GetProperty("placementOmission").GetProperty("code").GetString());
+        var reliability = wall.GetProperty("reliability");
+        Assert.False(reliability.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.False(reliability.GetProperty("readyForMetricPlacement").GetBoolean());
+        Assert.True(reliability.GetProperty("requiresReview").GetBoolean());
+        Assert.Contains(
+            reliability.GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetString()?.Contains("wall omitted from clean placement topology", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public void PlacementExporter_RecoversSourceBackedSpanWhenStrongPairedWallBodyHasNoGraphSpan()
+    {
+        var result = CreateSourceBackedFallbackWallResult();
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("pair score 0.93", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(100, topologySpan.GetProperty("drawingLength").GetDouble(), precision: 3);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_KeepsSourceBackedFallbackWhenNearbyDifferentSourceSpanWouldContainIt()
+    {
+        var result = CreateSourceBackedFallbackWallResult(includeNearbyGraphSpan: true);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+
+        var fallbackWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+        var fallbackSpan = Assert.Single(fallbackWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", fallbackSpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, fallbackWall.GetProperty("placementOmission").ValueKind);
+        Assert.True(fallbackWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+
+        var graphWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "nearby-graph-wall");
+        Assert.Single(graphWall.GetProperty("topologySpans").EnumerateArray());
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
     }
 
     [Fact]
@@ -3349,6 +3526,145 @@ public sealed class ExportTests
                 Array.Empty<WallEvidenceBand>(),
                 assessments,
                 walls.Length,
+            0)
+        };
+    }
+
+    private static PlanScanResult CreateSourceBackedFallbackWallResult(bool includeNearbyGraphSpan = false)
+    {
+        var wall = SyntheticWall("source-backed-fallback-wall", 80, 120, 180, 120) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(80, 116), new PlanPoint(180, 116)),
+                new PlanLineSegment(new PlanPoint(80, 124), new PlanPoint(180, 124)),
+                FaceSeparation: 8,
+                OverlapRatio: 1,
+                Score: 0.93,
+                FirstFaceFragmentCount: 2,
+                SecondFaceFragmentCount: 2,
+                FirstFaceSourcePrimitiveIds: ["fallback-face-a"],
+                SecondFaceSourcePrimitiveIds: ["fallback-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "wall evidence: strong double-edge wall body",
+                "pair score 0.93"
+            ]
+        };
+        var walls = new List<WallSegment> { wall };
+        var nodes = new List<WallNode>();
+        var edges = new List<WallEdge>();
+        if (includeNearbyGraphSpan)
+        {
+            var nearbyWall = SyntheticWall("nearby-graph-wall", 60, 121, 220, 121) with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                WallType = WallType.Interior,
+                SourcePrimitiveIds = ["nearby-graph-wall-source"],
+                Evidence = ["synthetic nearby graph span from different source geometry"]
+            };
+            walls.Add(nearbyWall);
+            nodes.Add(SyntheticNode("nearby-graph-node-a", 60, 121, WallNodeKind.Endpoint));
+            nodes.Add(SyntheticNode("nearby-graph-node-b", 220, 121, WallNodeKind.Endpoint));
+            edges.Add(new WallEdge(
+                "nearby-graph-edge",
+                1,
+                nodes[0].Id,
+                nodes[1].Id,
+                nearbyWall.Id,
+                Confidence.High));
+        }
+
+        var component = new WallGraphComponent(
+            "source-backed-fallback-component",
+            1,
+            WallGraphComponentKind.MainStructural,
+            UnionBounds(walls.Select(item => item.Bounds)),
+            walls.Select(item => item.Id).ToArray(),
+            nodes.Select(item => item.Id).ToArray(),
+            edges.Select(item => item.Id).ToArray(),
+            walls.SelectMany(item => item.SourcePrimitiveIds).ToArray(),
+            walls.Sum(item => item.DrawingLength),
+            Confidence.High,
+            ["synthetic main structural wall body without graph topology"]);
+        var assessments = walls
+            .Select(item => new WallEvidenceWallAssessment(
+                item.Id,
+                item.PageNumber,
+                item.Bounds,
+                WallEvidenceCategory.StrongWallBody,
+                Confidence.High,
+                PlacementReady: true,
+                RequiresReview: false,
+                RejectedAsNoise: false,
+                item.SourcePrimitiveIds,
+                item.Id == wall.Id
+                    ? [
+                        "parallel wall-face pair",
+                        "wall evidence: strong double-edge wall body",
+                        "pair score 0.93"
+                    ]
+                    : ["synthetic accepted nearby graph wall body"]))
+            .Select(item => item with { Decision = WallEvidenceDecision.Accept })
+            .ToArray();
+        var now = DateTimeOffset.UtcNow;
+
+        return new PlanScanResult(
+            new PlanDocument(
+                "source-backed-fallback",
+                [
+                    new PlanPage(
+                        1,
+                        new PlanSize(260, 220),
+                        walls.Select(item => WallLine(item.Id, item.CenterLine.Start, item.CenterLine.End))
+                            .Cast<PlanPrimitive>()
+                            .ToArray())
+                ])
+            {
+                Metadata = new PlanMetadata
+                {
+                    SourceName = "source-backed-fallback.pdf",
+                    SourcePath = @"C:\plans\source-backed-fallback.pdf",
+                    Properties = new Dictionary<string, string>
+                    {
+                        ["format"] = "pdf",
+                        ["loader"] = "synthetic",
+                        ["sourceKind"] = PlanSourceKind.Pdf.ToString(),
+                        ["effectiveSourceKind"] = PlanSourceKind.Pdf.ToString()
+                    }
+                }
+            },
+            PlanLayerAnalysis.Empty,
+            PlanCalibration.Empty,
+            MeasurementConsistencyReport.Empty,
+            Array.Empty<TitleBlockAnalysis>(),
+            Array.Empty<DimensionAnnotation>(),
+            Array.Empty<PlanAnnotationBlock>(),
+            Array.Empty<GridAxis>(),
+            Array.Empty<GridBaySpacing>(),
+            Array.Empty<SheetRegion>(),
+            Array.Empty<SurfacePatternCandidate>(),
+            walls,
+            new WallGraph(nodes, edges, [component]),
+            Array.Empty<RoomRegion>(),
+            RoomAdjacencyGraph.Empty,
+            Array.Empty<OpeningCandidate>(),
+            Array.Empty<ObjectCandidate>(),
+            Array.Empty<ObjectCandidateGroup>(),
+            Array.Empty<ObjectAggregate>(),
+            new PipelineDiagnostics(
+                now,
+                now,
+                Array.Empty<PipelineStageReport>(),
+                Array.Empty<PlanDiagnostic>()))
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                assessments,
+                walls.Count,
                 0)
         };
     }
@@ -4322,6 +4638,16 @@ public sealed class ExportTests
             Evidence = ["synthetic wall"]
         };
 
+    private static PlanRect UnionBounds(IEnumerable<PlanRect> bounds)
+    {
+        var items = bounds.ToArray();
+        var minX = items.Min(item => item.X);
+        var minY = items.Min(item => item.Y);
+        var maxX = items.Max(item => item.X + item.Width);
+        var maxY = items.Max(item => item.Y + item.Height);
+        return new PlanRect(minX, minY, maxX - minX, maxY - minY);
+    }
+
     private static WallNode SyntheticNode(string id, double x, double y, WallNodeKind kind) =>
         new(id, 1, new PlanPoint(x, y), kind, 2, Array.Empty<string>(), Confidence.High, ["synthetic wall node"]);
 
@@ -4437,6 +4763,9 @@ public sealed class ExportTests
         array.EnumerateArray()
             .Select(item => item.GetInt32())
             .ToArray();
+
+    private static bool IsSourceBackedFallbackSpan(JsonElement span) =>
+        span.GetProperty("id").GetString()?.Contains(":source-backed-fallback:", StringComparison.Ordinal) == true;
 
     private static string FeatureType(JsonElement feature) =>
         feature.GetProperty("properties").GetProperty("featureType").GetString()!;

@@ -296,6 +296,8 @@
         "placementReadyWallCount",
         "placementOmittedWallCount",
         "wallTopologySpanCount",
+        "sourceBackedFallbackWallCount",
+        "sourceBackedFallbackTopologySpanCount",
         "wallSolidSpanCount",
         "wallPlacementOmissionCounts",
         "roomCount",
@@ -358,6 +360,14 @@
         "wallTopologySpanCount": {
           "$ref": "#/$defs/nonNegativeInteger",
           "description": "Total clean wall topology span count across exported walls."
+        },
+        "sourceBackedFallbackWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Walls that have at least one clean topology span recovered directly from strong source wall-body evidence."
+        },
+        "sourceBackedFallbackTopologySpanCount": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Clean wall topology spans recovered directly from source wall-body evidence when graph topology had no surviving clean span."
         },
         "wallSolidSpanCount": {
           "$ref": "#/$defs/nonNegativeInteger",
@@ -524,6 +534,8 @@
         "placementReadyWallCount",
         "placementOmittedWallCount",
         "wallTopologySpanCount",
+        "sourceBackedFallbackWallCount",
+        "sourceBackedFallbackTopologySpanCount",
         "wallSolidSpanCount",
         "wallPlacementOmissionCounts",
         "roomCount",
@@ -574,6 +586,12 @@
           "$ref": "#/$defs/nonNegativeInteger"
         },
         "wallTopologySpanCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "sourceBackedFallbackWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "sourceBackedFallbackTopologySpanCount": {
           "$ref": "#/$defs/nonNegativeInteger"
         },
         "wallSolidSpanCount": {
