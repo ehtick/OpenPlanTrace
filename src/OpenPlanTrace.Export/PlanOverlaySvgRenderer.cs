@@ -1018,6 +1018,7 @@ public static class PlanOverlaySvgRenderer
         code switch
         {
             "duplicate_wall_face" => "duplicate faces",
+            "fragmented_pair_review_required" => "fragmented pairs",
             "isolated_fragment" => "isolated fragments",
             "no_clean_topology_spans" => "no clean spans",
             "object_like_linework" => "object linework",

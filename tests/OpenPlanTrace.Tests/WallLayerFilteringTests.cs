@@ -1398,6 +1398,299 @@ public sealed class WallLayerFilteringTests
     }
 
     [Fact]
+    public async Task WallEvidenceRefinement_MarksShortFragmentedParallelPairForReviewEvenWithEndpointSupport()
+    {
+        var firstFace = new PlanLineSegment(new PlanPoint(180, 110), new PlanPoint(228, 110));
+        var secondFace = new PlanLineSegment(new PlanPoint(180, 116), new PlanPoint(228, 116));
+        var document = new PlanDocument(
+            "wall-evidence-short-fragmented-pair-review",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(520, 320),
+                    new PlanPrimitive[]
+                    {
+                        Line("host-left", "A-WALL", new PlanPoint(180, 40), new PlanPoint(180, 220)),
+                        Line("host-right", "A-WALL", new PlanPoint(228, 40), new PlanPoint(228, 220)),
+                        UnlayeredLine("fragmented-detail-face-a", firstFace.Start, firstFace.End),
+                        UnlayeredLine("fragmented-detail-face-b", secondFace.Start, secondFace.End)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                EnableWallEvidenceNoiseRejection = true,
+                MinWallLength = 24,
+                DefaultWallThickness = 4
+            })
+        {
+            LayerAnalysis = new PlanLayerAnalysis(new[]
+            {
+                Layer("A-WALL", LayerCategory.Wall, Confidence.High)
+            })
+        };
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host-left",
+            1,
+            new PlanLineSegment(new PlanPoint(180, 40), new PlanPoint(180, 220)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-left" },
+            Evidence = new[] { "test structural endpoint support wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host-right",
+            1,
+            new PlanLineSegment(new PlanPoint(228, 40), new PlanPoint(228, 220)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-right" },
+            Evidence = new[] { "test structural endpoint support wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-short-fragmented-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(180, 113), new PlanPoint(228, 113)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            SourcePrimitiveIds = new[] { "fragmented-detail-face-a", "fragmented-detail-face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.69,
+                FirstFaceFragmentCount: 30,
+                SecondFaceFragmentCount: 4,
+                FirstFaceSourcePrimitiveIds: new[] { "fragmented-detail-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "fragmented-detail-face-b" }),
+            Evidence = new[] { "test low-scoring fragmented pair candidate with endpoint support" }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Contains(context.Walls, wall => wall.SourcePrimitiveIds.Contains("host-left"));
+        Assert.Contains(context.Walls, wall => wall.SourcePrimitiveIds.Contains("host-right"));
+        Assert.Contains(context.Walls, wall => wall.SourcePrimitiveIds.Contains("fragmented-detail-face-a"));
+
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.SourcePrimitiveIds.Contains("fragmented-detail-face-a"));
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+        Assert.False(assessment.PlacementReady);
+        Assert.True(assessment.RequiresReview);
+        Assert.False(assessment.RejectedAsNoise);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains("noisy fragmented face evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("wall-short-fragmented-pair", context.WallTopologyPreparation.ReviewGraphWallIds);
+        Assert.DoesNotContain("wall-short-fragmented-pair", context.WallTopologyPreparation.AutomaticCoordinateRepairWallIds);
+    }
+
+    [Fact]
+    public async Task WallEvidenceRefinement_MarksShortFragmentedParallelPairFromEvidenceTextForReview()
+    {
+        var firstFace = new PlanLineSegment(new PlanPoint(180, 110), new PlanPoint(247, 110));
+        var secondFace = new PlanLineSegment(new PlanPoint(180, 116), new PlanPoint(247, 116));
+        var document = new PlanDocument(
+            "wall-evidence-short-fragmented-pair-text-review",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(520, 320),
+                    new PlanPrimitive[]
+                    {
+                        Line("host-left", "A-WALL", new PlanPoint(180, 40), new PlanPoint(180, 220)),
+                        Line("host-right", "A-WALL", new PlanPoint(247, 40), new PlanPoint(247, 220)),
+                        UnlayeredLine("fragmented-text-face-a", firstFace.Start, firstFace.End),
+                        UnlayeredLine("fragmented-text-face-b", secondFace.Start, secondFace.End)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                EnableWallEvidenceNoiseRejection = true,
+                MinWallLength = 24,
+                DefaultWallThickness = 4
+            })
+        {
+            LayerAnalysis = new PlanLayerAnalysis(new[]
+            {
+                Layer("A-WALL", LayerCategory.Wall, Confidence.High)
+            })
+        };
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host-left",
+            1,
+            new PlanLineSegment(new PlanPoint(180, 40), new PlanPoint(180, 220)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-left" },
+            Evidence = new[] { "test structural endpoint support wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host-right",
+            1,
+            new PlanLineSegment(new PlanPoint(247, 40), new PlanPoint(247, 220)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-right" },
+            Evidence = new[] { "test structural endpoint support wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-short-fragmented-text-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(180, 113), new PlanPoint(247, 113)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            SourcePrimitiveIds = new[] { "fragmented-text-face-a", "fragmented-text-face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.64,
+                FirstFaceFragmentCount: 4,
+                SecondFaceFragmentCount: 4,
+                FirstFaceSourcePrimitiveIds: new[] { "fragmented-text-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "fragmented-text-face-b" }),
+            Evidence = new[]
+            {
+                "parallel wall-face pair",
+                "pair score 0,64",
+                "first face merged 4 fragments",
+                "second face merged 107 fragments"
+            }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.SourcePrimitiveIds.Contains("fragmented-text-face-a"));
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+        Assert.False(assessment.PlacementReady);
+        Assert.True(assessment.RequiresReview);
+        Assert.False(assessment.RejectedAsNoise);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains("max face fragments 107", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("total face fragments 111", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("wall-short-fragmented-text-pair", context.WallTopologyPreparation.ReviewGraphWallIds);
+        Assert.DoesNotContain("wall-short-fragmented-text-pair", context.WallTopologyPreparation.AutomaticCoordinateRepairWallIds);
+    }
+
+    [Fact]
+    public async Task WallEvidenceRefinement_MarksVeryShortLowScoreParallelPairForReview()
+    {
+        var firstFace = new PlanLineSegment(new PlanPoint(180, 110), new PlanPoint(206, 110));
+        var secondFace = new PlanLineSegment(new PlanPoint(180, 116), new PlanPoint(206, 116));
+        var document = new PlanDocument(
+            "wall-evidence-very-short-low-score-pair-review",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(520, 320),
+                    new PlanPrimitive[]
+                    {
+                        Line("host-left", "A-WALL", new PlanPoint(180, 40), new PlanPoint(180, 220)),
+                        Line("host-right", "A-WALL", new PlanPoint(206, 40), new PlanPoint(206, 220)),
+                        UnlayeredLine("very-short-face-a", firstFace.Start, firstFace.End),
+                        UnlayeredLine("very-short-face-b", secondFace.Start, secondFace.End)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                EnableWallEvidenceNoiseRejection = true,
+                MinWallLength = 24,
+                DefaultWallThickness = 4
+            })
+        {
+            LayerAnalysis = new PlanLayerAnalysis(new[]
+            {
+                Layer("A-WALL", LayerCategory.Wall, Confidence.High)
+            })
+        };
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host-left",
+            1,
+            new PlanLineSegment(new PlanPoint(180, 40), new PlanPoint(180, 220)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-left" },
+            Evidence = new[] { "test structural endpoint support wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host-right",
+            1,
+            new PlanLineSegment(new PlanPoint(206, 40), new PlanPoint(206, 220)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-right" },
+            Evidence = new[] { "test structural endpoint support wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-very-short-low-score-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(180, 113), new PlanPoint(206, 113)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            SourcePrimitiveIds = new[] { "very-short-face-a", "very-short-face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.74,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: new[] { "very-short-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "very-short-face-b" }),
+            Evidence = new[] { "test very short low-scoring pair candidate with endpoint support" }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.SourcePrimitiveIds.Contains("very-short-face-a"));
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+        Assert.False(assessment.PlacementReady);
+        Assert.True(assessment.RequiresReview);
+        Assert.False(assessment.RejectedAsNoise);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains("very short unlayered parallel-face candidate", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("wall-very-short-low-score-pair", context.WallTopologyPreparation.ReviewGraphWallIds);
+        Assert.DoesNotContain("wall-very-short-low-score-pair", context.WallTopologyPreparation.AutomaticCoordinateRepairWallIds);
+    }
+
+    [Fact]
     public async Task WallEvidenceRefinement_RejectsDimensionGridParallelPairBeforeStrongWallAcceptance()
     {
         var firstFace = new PlanLineSegment(new PlanPoint(140, 185), new PlanPoint(340, 185));

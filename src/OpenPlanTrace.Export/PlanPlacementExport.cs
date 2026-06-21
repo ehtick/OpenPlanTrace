@@ -1237,6 +1237,16 @@ public sealed record PlacementWallOmissionExport(
                 "Confirm the wall endpoints and thickness before importing exact coordinates.");
         }
 
+        if (ContainsEvidence(evidence, "demoted from placement-ready")
+            && ContainsEvidence(evidence, "severe fragmented-face evidence"))
+        {
+            return new PlacementWallOmissionClassification(
+                "fragmented_pair_review_required",
+                "FragmentedPairReview",
+                "Wall is omitted from clean placement topology because a short paired-wall candidate was demoted after severe face fragmentation was detected.",
+                "Review the source PDF linework before importing this wall; it may be stitched door, opening, fixture, or detail geometry rather than a wall.");
+        }
+
         if (evidenceAssessment is not null
             && (!evidenceAssessment.PlacementReady
                 || evidenceAssessment.RequiresReview
@@ -1282,7 +1292,7 @@ public sealed record PlacementWallOmissionExport(
         IReadOnlyList<WallGraphRepairCandidate> repairCandidates,
         IReadOnlyList<string> reviewReasons)
     {
-        return reliability.Reasons
+        var evidence = reliability.Reasons
             .Concat(reviewReasons)
             .Concat(evidenceAssessment?.Evidence ?? Array.Empty<string>())
             .Concat(wall.Evidence)
@@ -1290,9 +1300,18 @@ public sealed record PlacementWallOmissionExport(
             .Concat(repairCandidates.SelectMany(candidate => candidate.Evidence))
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        return evidence
+            .Where(IsHighPriorityPlacementOmissionEvidence)
+            .Concat(evidence.Where(item => !IsHighPriorityPlacementOmissionEvidence(item)))
             .Take(12)
             .ToArray();
     }
+
+    private static bool IsHighPriorityPlacementOmissionEvidence(string evidence) =>
+        evidence.Contains("demoted from placement-ready", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("severe fragmented-face evidence", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<string> ExtractLinkedWallIds(
         string wallId,

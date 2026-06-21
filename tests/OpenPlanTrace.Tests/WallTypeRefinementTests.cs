@@ -460,6 +460,113 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DoesNotPromoteNoisyShortStructuralReturnWithLargeHealedGap()
+    {
+        var wall = new WallSegment(
+            "wall-noisy-short-room-return",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 134)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "parallel wall-face pair",
+                "pair score 0.852",
+                "second face healed 5,783 drawing units of gaps; max gap 5,783"
+            }
+        };
+        var context = CreateContext("noisy-short-return-stays-review");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room("room-a", RoomUseKind.Office, wall.Id));
+        context.WallGraph = SupportedEndpointGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            new[]
+            {
+                "wall evidence assessment: MediumWallBody / review / confidence 0.84",
+                "parallel wall-face pair",
+                "pair score 0.852",
+                "second face healed 5,783 drawing units of gaps; max gap 5,783",
+                "wall evidence: short unlayered parallel-face candidate has only one structurally supported endpoint and short paired wall evidence; keep for topology but block exact placement until reviewed"
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(retained.PlacementReady);
+        Assert.True(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retained.Decision);
+        Assert.Contains(
+            retained.Evidence,
+            item => item.Contains("max gap 5,783", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("short structural return promoted", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DemotesPlacementReadyShortFragmentedUnlayeredPair()
+    {
+        var wall = new WallSegment(
+            "wall-short-fragmented-placement-ready-pair",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(167, 100)),
+            7,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "parallel wall-face pair",
+                "pair score 0,642",
+                "first face merged 4 fragments",
+                "second face merged 107 fragments",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall evidence: strong double-edge wall body"
+            }
+        };
+        var context = CreateContext("demote-short-fragmented-placement-ready-pair");
+        context.Walls.Add(wall);
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var demoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, demoted.Category);
+        Assert.False(demoted.PlacementReady);
+        Assert.True(demoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, demoted.Decision);
+        Assert.Contains(
+            demoted.Evidence,
+            item => item.Contains("demoted from placement-ready", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("max face fragments 107", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            Assert.Single(context.Walls).Evidence,
+            item => item.Contains("severe fragmented-face evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["fragmentedPairPlacementDemotedWallCount"] == "1");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_DoesNotPromoteOneSidedRoomReference()
     {
         var wall = new WallSegment(

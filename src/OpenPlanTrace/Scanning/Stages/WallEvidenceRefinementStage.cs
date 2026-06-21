@@ -189,6 +189,22 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             placementReady = true;
             evidence.Add(continuityEvidence);
         }
+        else if (TryClassifyVeryShortLowScorePairedWallReview(wall, context, out var veryShortPairEvidence))
+        {
+            category = WallEvidenceCategory.MediumWallBody;
+            confidence = new Confidence(Math.Max(wall.Confidence.Value, 0.62));
+            placementReady = false;
+            requiresReview = true;
+            evidence.Add(veryShortPairEvidence);
+        }
+        else if (TryClassifyShortFragmentedPairedWallReview(wall, context, out var fragmentedPairEvidence))
+        {
+            category = WallEvidenceCategory.MediumWallBody;
+            confidence = new Confidence(Math.Max(wall.Confidence.Value, 0.62));
+            placementReady = false;
+            requiresReview = true;
+            evidence.Add(fragmentedPairEvidence);
+        }
         else if (TryClassifyShortWeaklySupportedPairedWallReview(wall, context, out var shortPairEvidence))
         {
             category = WallEvidenceCategory.MediumWallBody;
@@ -533,6 +549,135 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
 
         evidence = $"wall evidence: continuity-supported short paired wall body; {continuitySupportCount.ToString(CultureInfo.InvariantCulture)} collinear structural continuation wall(s)";
         return true;
+    }
+
+    private static bool TryClassifyVeryShortLowScorePairedWallReview(
+        WallSegment wall,
+        ScanContext context,
+        out string evidence)
+    {
+        evidence = string.Empty;
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is null
+            || IsWallLayerBacked(wall, context)
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || wall.DrawingLength > VeryShortLowScorePairedWallReviewLength(context.Options)
+            || wall.PairEvidence.Score >= 0.78)
+        {
+            return false;
+        }
+
+        evidence = string.Format(
+            CultureInfo.InvariantCulture,
+            "wall evidence: very short unlayered parallel-face candidate has low pair score {0:0.###}; keep for topology but block exact placement until reviewed",
+            wall.PairEvidence.Score);
+        return true;
+    }
+
+    private static double VeryShortLowScorePairedWallReviewLength(ScannerOptions options) =>
+        Math.Max(options.MinWallLength * 1.15, options.DefaultWallThickness * 7.0);
+
+    private static bool TryClassifyShortFragmentedPairedWallReview(
+        WallSegment wall,
+        ScanContext context,
+        out string evidence)
+    {
+        evidence = string.Empty;
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is null
+            || IsWallLayerBacked(wall, context)
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || wall.DrawingLength > ShortFragmentedPairedWallReviewLength(context.Options))
+        {
+            return false;
+        }
+
+        var pair = wall.PairEvidence;
+        if (pair.Score >= 0.72)
+        {
+            return false;
+        }
+
+        var evidenceFragmentCounts = ReadFaceFragmentCountsFromEvidence(wall.Evidence);
+        var maxFaceFragments = Math.Max(
+            Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount),
+            evidenceFragmentCounts.MaxFaceFragments);
+        var totalFaceFragments = Math.Max(
+            pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount,
+            evidenceFragmentCounts.TotalFaceFragments);
+        if (maxFaceFragments < 24 && totalFaceFragments < 36)
+        {
+            return false;
+        }
+
+        evidence = string.Format(
+            CultureInfo.InvariantCulture,
+            "wall evidence: short unlayered parallel-face candidate has noisy fragmented face evidence (score {0:0.###}, max face fragments {1}, total face fragments {2}); keep for topology but block exact placement until reviewed",
+            pair.Score,
+            maxFaceFragments,
+            totalFaceFragments);
+        return true;
+    }
+
+    private static double ShortFragmentedPairedWallReviewLength(ScannerOptions options) =>
+        Math.Max(options.MinWallLength * 3.0, options.DefaultWallThickness * 18.0);
+
+    private static FaceFragmentCounts ReadFaceFragmentCountsFromEvidence(IEnumerable<string> evidence)
+    {
+        var maxFaceFragments = 0;
+        var totalFaceFragments = 0;
+        foreach (var item in evidence)
+        {
+            if (string.IsNullOrWhiteSpace(item)
+                || !item.Contains("face merged", StringComparison.OrdinalIgnoreCase)
+                || !TryReadIntegerBeforeMarker(item, "fragments", out var fragments))
+            {
+                continue;
+            }
+
+            maxFaceFragments = Math.Max(maxFaceFragments, fragments);
+            totalFaceFragments += fragments;
+        }
+
+        return new FaceFragmentCounts(maxFaceFragments, totalFaceFragments);
+    }
+
+    private static bool TryReadIntegerBeforeMarker(
+        string value,
+        string marker,
+        out int parsed)
+    {
+        var markerIndex = value.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex <= 0)
+        {
+            parsed = 0;
+            return false;
+        }
+
+        var end = markerIndex - 1;
+        while (end >= 0 && char.IsWhiteSpace(value[end]))
+        {
+            end--;
+        }
+
+        var start = end;
+        while (start >= 0 && char.IsDigit(value[start]))
+        {
+            start--;
+        }
+
+        start++;
+        if (start > end)
+        {
+            parsed = 0;
+            return false;
+        }
+
+        return int.TryParse(
+            value[start..(end + 1)],
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out parsed);
     }
 
     private static bool TryClassifyShortWeaklySupportedPairedWallReview(
@@ -3074,6 +3219,10 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     {
         public static NearbyArcSupport Empty { get; } = new(0, null, PlanRect.Empty);
     }
+
+    private readonly record struct FaceFragmentCounts(
+        int MaxFaceFragments,
+        int TotalFaceFragments);
 
     private enum WallOrientation
     {

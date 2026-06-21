@@ -1790,6 +1790,62 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForDemotedFragmentedPairedWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.62),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence: Enumerable.Range(1, 14)
+                            .Select(index => $"test lower-priority wall evidence {index}")
+                            .Append("wall evidence: demoted from placement-ready because short unlayered parallel-face pair has severe fragmented-face evidence; pair score 0.642, max face fragments 107, total face fragments 111")
+                            .ToArray())
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("fragmented_pair_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("FragmentedPairReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("fragmentation", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("source PDF", placementOmission.GetProperty("recommendedAction").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            placementOmission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("max face fragments 107", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("fragmented_pair_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
     public async Task PlacementExporter_FlagsRejectedStrongWallBodiesForVisualReview()
     {
         var result = WithRejectedStrongObjectLikeWallBody(await CreateScanResultAsync());

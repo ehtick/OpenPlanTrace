@@ -6,6 +6,103 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.150] - 2026-06-21
+
+### Improved
+- Placement JSON now reports short fragmented paired-wall demotions with a
+  specific `fragmented_pair_review_required` omission code instead of folding
+  them into the generic wall-evidence review bucket.
+- High-priority omission evidence is now kept ahead of lower-priority evidence
+  when the placement evidence list is capped, so the exported reason still
+  includes the demotion sentence, pair score, and fragment counts.
+
+### Verified
+- Added export regression coverage where the demotion evidence is buried behind
+  many lower-priority evidence lines but still controls the omission code.
+- Export tests passed with `58` tests.
+- Full test suite passed with `609` tests.
+- Rescanned an ignored local medium-difficulty PDF fixture. Placement geometry
+  stayed stable, while two random-line candidates now export under
+  `fragmented_pair_review_required` with max face fragment counts of `107` and
+  `124`.
+
+## [0.02.149] - 2026-06-21
+
+### Improved
+- Placement-ready wall evidence now gets a late-stage sanity check for short,
+  unlayered parallel-face candidates with low pair scores and extreme
+  one-sided face fragmentation. Candidates that look like stitched detail or
+  door/opening linework are demoted to review-only before placement and routing
+  export.
+- The demotion is preserved in wall evidence diagnostics with the pair score,
+  max face fragment count, and total face fragment count so the viewer and
+  downstream importers can explain why a visually noisy candidate was withheld.
+
+### Verified
+- Added regression coverage for a placement-ready short fragmented unlayered
+  pair with pair score `0.642` and `107` fragments on one face.
+- Wall type refinement and wall layer filtering tests passed with `42` tests.
+- Full test suite passed with `608` tests.
+- Rescanned an ignored local medium-difficulty PDF fixture. Clean placement
+  topology spans dropped from `26` to `24`, placement-ready walls dropped from
+  `22` to `20`, and routing items dropped from `91` to `88`; two random-line
+  wall candidates were demoted to review-only instead of being exported as
+  exact placement walls.
+
+## [0.02.148] - 2026-06-21
+
+### Improved
+- Very short, unlayered parallel-face candidates with low pair scores now stay
+  review-only unless stronger continuity evidence confirms them. This prevents
+  barely-threshold detail fragments from entering clean placement JSON as exact
+  wall geometry.
+
+### Verified
+- Added regression coverage for a very short low-score parallel-face candidate
+  with endpoint support.
+- Wall layer filtering tests passed with `30` tests.
+- Rescanned an ignored local medium-difficulty PDF fixture. Clean placement
+  topology spans dropped from `27` to `26`, placement-ready walls dropped from
+  `23` to `22`, graph edges dropped from `185` to `183` across the latest wall
+  evidence guards, and routing items dropped from `92` to `91`.
+
+## [0.02.147] - 2026-06-21
+
+### Improved
+- Short unlayered parallel-face wall candidates with weak pair scores and
+  severe one-face fragmentation are now held for review before strong-wall
+  acceptance. This reduces exact-placement noise from dense door/window/detail
+  linework while keeping the source geometry and evidence available for QA.
+
+### Verified
+- Added regression coverage for a short fragmented parallel-face pair that has
+  two structural endpoint supports but should still remain review-only.
+- Wall layer filtering tests passed with `29` tests.
+- Rescanned an ignored local medium-difficulty PDF fixture. Clean placement
+  topology spans dropped from `30` to `27`, placement-ready walls dropped from
+  `26` to `23`, and three short fragmented unlayered candidates were removed
+  from clean placement output.
+
+## [0.02.146] - 2026-06-21
+
+### Improved
+- Room-confirmed short wall-return promotion is now stricter when paired-face
+  evidence was heavily healed. A short, one-sided room boundary with a large
+  healed face gap now stays review-only instead of becoming clean
+  placement-ready geometry.
+- Placement JSON now omits these noisy short returns with a
+  `wall_evidence_review_required` omission reason while preserving the wall,
+  evidence, and source geometry for human review.
+
+### Verified
+- Added regression coverage that keeps legitimate short structural returns
+  promotable while blocking noisy short returns with large healed face gaps.
+- Wall type refinement tests passed with `10` tests.
+- Rescanned an ignored local medium-difficulty PDF fixture. Clean placement
+  topology spans dropped from `31` to `30`, placement-ready walls dropped from
+  `27` to `26`, and routing items dropped from `95` to `93` after a noisy short
+  room-promoted return stayed review-only.
+
 ## [0.02.145] - 2026-06-21
 
 ### Improved

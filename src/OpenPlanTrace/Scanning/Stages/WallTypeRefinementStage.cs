@@ -33,7 +33,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var oneSidedRoomEvidence = 0;
         var rejectedEvidenceProtected = 0;
         var roomConfirmedPlacementPromoted = 0;
-        var promotedAssessmentsByWallId = new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal);
+        var fragmentedPairPlacementDemoted = 0;
+        var updatedAssessmentsByWallId = new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal);
 
         for (var index = 0; index < context.Walls.Count; index++)
         {
@@ -109,7 +110,26 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 }
             }
 
-            if (evidenceByWallId.TryGetValue(wall.Id, out var assessment)
+            evidenceByWallId.TryGetValue(wall.Id, out var assessment);
+            if (assessment is not null
+                && TryDemoteFragmentedPlacementReadyWallEvidence(
+                    updatedWall,
+                    assessment,
+                    context.Options,
+                    out var demotedAssessment,
+                    out var demotionEvidence))
+            {
+                updatedAssessmentsByWallId[wall.Id] = demotedAssessment;
+                updatedWall = updatedWall with
+                {
+                    Evidence = AppendEvidence(updatedWall.Evidence, demotionEvidence)
+                };
+                fragmentedPairPlacementDemoted++;
+                evidenceUpdated++;
+                assessment = demotedAssessment;
+            }
+
+            if (assessment is not null
                 && TryPromoteRoomConfirmedWallEvidence(
                     updatedWall,
                     assessment,
@@ -121,10 +141,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                         : 0,
                     hasOutdoorRoomReference,
                     sideEvidence,
+                    context.Options,
                     out var promotedAssessment,
                     out var promotionEvidence))
             {
-                promotedAssessmentsByWallId[wall.Id] = promotedAssessment;
+                updatedAssessmentsByWallId[wall.Id] = promotedAssessment;
                 updatedWall = updatedWall with
                 {
                     Evidence = AppendEvidence(updatedWall.Evidence, promotionEvidence)
@@ -139,13 +160,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             }
         }
 
-        if (promotedAssessmentsByWallId.Count > 0)
+        if (updatedAssessmentsByWallId.Count > 0)
         {
             context.WallEvidenceMap = context.WallEvidenceMap with
             {
                 WallAssessments = context.WallEvidenceMap.WallAssessments
-                    .Select(assessment => promotedAssessmentsByWallId.TryGetValue(assessment.WallId, out var promoted)
-                        ? promoted
+                    .Select(assessment => updatedAssessmentsByWallId.TryGetValue(assessment.WallId, out var updated)
+                        ? updated
                         : assessment)
                     .ToArray()
             };
@@ -159,7 +180,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             twoSidedRoomEvidence,
             oneSidedRoomEvidence,
             rejectedEvidenceProtected,
-            roomConfirmedPlacementPromoted);
+            roomConfirmedPlacementPromoted,
+            fragmentedPairPlacementDemoted);
         return ValueTask.CompletedTask;
     }
 
@@ -382,6 +404,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int supportedTopologyEndpointCount,
         bool hasOutdoorRoomReference,
         RoomSideEvidence sideEvidence,
+        ScannerOptions options,
         out WallEvidenceWallAssessment promotedAssessment,
         out IReadOnlyList<string> promotionEvidence)
     {
@@ -425,7 +448,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var hasShortStructuralReturnConfirmation =
             roomReferenceCount >= 1
             && supportedTopologyEndpointCount >= 2
-            && IsTrustedShortStructuralReturnWall(wall, assessment);
+            && IsTrustedShortStructuralReturnWall(wall, assessment, options);
         if (!hasStrongRoomConfirmation && !hasShortStructuralReturnConfirmation)
         {
             return false;
@@ -455,9 +478,65 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         return true;
     }
 
+    private static bool TryDemoteFragmentedPlacementReadyWallEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        ScannerOptions options,
+        out WallEvidenceWallAssessment demotedAssessment,
+        out IReadOnlyList<string> demotionEvidence)
+    {
+        demotedAssessment = assessment;
+        demotionEvidence = Array.Empty<string>();
+
+        if (!assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair)
+        {
+            return false;
+        }
+
+        var evidence = assessment.Evidence
+            .Concat(wall.Evidence)
+            .ToArray();
+        if (!HasUnknownOrWeakLayerEvidence(evidence)
+            || !TryReadPairScore(evidence, out var pairScore)
+            || pairScore >= 0.68
+            || !TryReadFaceFragmentCounts(evidence, out var faceFragments))
+        {
+            return false;
+        }
+
+        var maxTrustedLength = Math.Max(90, options.MinWallLength * 4.0);
+        if (wall.DrawingLength > maxTrustedLength
+            || faceFragments.MaxFaceFragmentCount < 40
+            || faceFragments.TotalFaceFragmentCount < 50)
+        {
+            return false;
+        }
+
+        demotionEvidence = new[]
+        {
+            $"wall evidence: demoted from placement-ready because short unlayered parallel-face pair has severe fragmented-face evidence; pair score {pairScore.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}, max face fragments {faceFragments.MaxFaceFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, total face fragments {faceFragments.TotalFaceFragmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+        };
+        demotedAssessment = assessment with
+        {
+            Category = assessment.Category == WallEvidenceCategory.StrongWallBody
+                ? WallEvidenceCategory.MediumWallBody
+                : assessment.Category,
+            PlacementReady = false,
+            RequiresReview = true,
+            Decision = WallEvidenceDecision.Review,
+            Evidence = AppendEvidence(assessment.Evidence, demotionEvidence)
+        };
+        return true;
+    }
+
     private static bool IsTrustedShortStructuralReturnWall(
         WallSegment wall,
-        WallEvidenceWallAssessment assessment)
+        WallEvidenceWallAssessment assessment,
+        ScannerOptions options)
     {
         if (wall.DrawingLength > 90
             || assessment.Category != WallEvidenceCategory.MediumWallBody
@@ -475,8 +554,92 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return false;
         }
 
+        if (HasNoisyShortReturnPairEvidence(wall, evidence, options))
+        {
+            return false;
+        }
+
         return TryReadPairScore(evidence, out var pairScore)
             && pairScore >= 0.82;
+    }
+
+    private static bool HasNoisyShortReturnPairEvidence(
+        WallSegment wall,
+        IReadOnlyList<string> evidence,
+        ScannerOptions options)
+    {
+        if (wall.PairEvidence is { } pairEvidence
+            && pairEvidence.FirstFaceFragmentCount + pairEvidence.SecondFaceFragmentCount >= 10)
+        {
+            return true;
+        }
+
+        if (!TryReadMaxHealedFaceGap(evidence, out var maxHealedGap))
+        {
+            return false;
+        }
+
+        var localThickness = wall.Thickness > 0
+            ? wall.Thickness
+            : options.DefaultWallThickness;
+        var maxTrustedGap = Math.Max(
+            Math.Max(options.WallSnapTolerance * 1.5, 2.5),
+            Math.Min(localThickness * 0.9, wall.DrawingLength * 0.12));
+        return maxHealedGap > maxTrustedGap;
+    }
+
+    private static bool TryReadMaxHealedFaceGap(
+        IEnumerable<string> evidence,
+        out double maxHealedGap)
+    {
+        maxHealedGap = 0;
+        foreach (var item in evidence)
+        {
+            if (string.IsNullOrWhiteSpace(item))
+            {
+                continue;
+            }
+
+            const string marker = "max gap";
+            var index = item.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            var valueStart = index + marker.Length;
+            while (valueStart < item.Length
+                && (char.IsWhiteSpace(item[valueStart])
+                    || item[valueStart] == ':'
+                    || item[valueStart] == '='))
+            {
+                valueStart++;
+            }
+
+            var valueEnd = valueStart;
+            while (valueEnd < item.Length
+                && (char.IsDigit(item[valueEnd]) || item[valueEnd] == '.' || item[valueEnd] == ','))
+            {
+                valueEnd++;
+            }
+
+            if (valueEnd == valueStart)
+            {
+                continue;
+            }
+
+            var value = item[valueStart..valueEnd].Replace(',', '.');
+            if (double.TryParse(
+                    value,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var parsed))
+            {
+                maxHealedGap = Math.Max(maxHealedGap, parsed);
+            }
+        }
+
+        return maxHealedGap > 0;
     }
 
     private static bool TryReadPairScore(IEnumerable<string> evidence, out double pairScore)
@@ -522,6 +685,76 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         pairScore = 0;
         return false;
     }
+
+    private static bool TryReadFaceFragmentCounts(
+        IEnumerable<string> evidence,
+        out FaceFragmentCounts faceFragments)
+    {
+        var first = 0;
+        var second = 0;
+        foreach (var item in evidence)
+        {
+            if (string.IsNullOrWhiteSpace(item))
+            {
+                continue;
+            }
+
+            if (item.Contains("first face merged", StringComparison.OrdinalIgnoreCase)
+                && TryReadIntegerBeforeMarker(item, "fragments", out var firstCount))
+            {
+                first = Math.Max(first, firstCount);
+            }
+
+            if (item.Contains("second face merged", StringComparison.OrdinalIgnoreCase)
+                && TryReadIntegerBeforeMarker(item, "fragments", out var secondCount))
+            {
+                second = Math.Max(second, secondCount);
+            }
+        }
+
+        faceFragments = new FaceFragmentCounts(first, second);
+        return faceFragments.TotalFaceFragmentCount > 0;
+    }
+
+    private static bool TryReadIntegerBeforeMarker(
+        string value,
+        string marker,
+        out int parsed)
+    {
+        parsed = 0;
+        var markerIndex = value.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex <= 0)
+        {
+            return false;
+        }
+
+        var end = markerIndex - 1;
+        while (end >= 0 && char.IsWhiteSpace(value[end]))
+        {
+            end--;
+        }
+
+        var start = end;
+        while (start >= 0 && char.IsDigit(value[start]))
+        {
+            start--;
+        }
+
+        if (start == end)
+        {
+            return false;
+        }
+
+        return int.TryParse(
+            value[(start + 1)..(end + 1)],
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out parsed);
+    }
+
+    private static bool HasUnknownOrWeakLayerEvidence(IEnumerable<string> evidence) =>
+        evidence.Any(item => item.Contains("layer (unlayered) classified", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("layer evidence: no strong layer", StringComparison.OrdinalIgnoreCase));
 
     private static bool HasRoomConfirmedPromotionBlocker(
         WallSegment wall,
@@ -683,7 +916,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int twoSidedRoomEvidence,
         int oneSidedRoomEvidence,
         int rejectedEvidenceProtected,
-        int roomConfirmedPlacementPromoted)
+        int roomConfirmedPlacementPromoted,
+        int fragmentedPairPlacementDemoted)
     {
         var exterior = context.Walls.Count(wall => wall.WallType == WallType.Exterior);
         var interior = context.Walls.Count(wall => wall.WallType == WallType.Interior);
@@ -705,6 +939,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["oneSidedRoomEvidenceWallCount"] = oneSidedRoomEvidence.ToString(),
                 ["rejectedEvidenceProtectedWallCount"] = rejectedEvidenceProtected.ToString(),
                 ["roomConfirmedPlacementPromotedWallCount"] = roomConfirmedPlacementPromoted.ToString(),
+                ["fragmentedPairPlacementDemotedWallCount"] = fragmentedPairPlacementDemoted.ToString(),
                 ["exteriorWallCount"] = exterior.ToString(),
                 ["interiorWallCount"] = interior.ToString(),
                 ["unknownWallCount"] = unknown.ToString()
@@ -724,6 +959,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         public bool HasRoomsOnExactlyOneSide => PositiveRoomHits > 0 != NegativeRoomHits > 0;
 
         public bool HasOutdoorRoomSide => PositiveOutdoorRoomHits > 0 || NegativeOutdoorRoomHits > 0;
+    }
+
+    private readonly record struct FaceFragmentCounts(int FirstFaceFragmentCount, int SecondFaceFragmentCount)
+    {
+        public int MaxFaceFragmentCount => Math.Max(FirstFaceFragmentCount, SecondFaceFragmentCount);
+
+        public int TotalFaceFragmentCount => FirstFaceFragmentCount + SecondFaceFragmentCount;
     }
 
     private sealed record WallTypeRefinement(WallType WallType, string Evidence);
