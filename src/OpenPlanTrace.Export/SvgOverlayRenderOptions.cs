@@ -5,7 +5,8 @@ public enum SvgOverlayRenderProfile
     Full,
     StructuralReview,
     PlacementReview,
-    WallQa
+    WallQa,
+    WallQaFocus
 }
 
 public sealed record SvgOverlayRenderOptions
@@ -65,6 +66,10 @@ public sealed record SvgOverlayRenderOptions
     public string? BackgroundImageHref { get; init; }
 
     public double BackgroundImageOpacity { get; init; } = 0.68;
+
+    public bool CropToFloorplanContent { get; init; }
+
+    public double ViewportPaddingDrawingUnits { get; init; } = 24.0;
 
     public static SvgOverlayRenderOptions ForProfile(SvgOverlayRenderProfile profile) =>
         profile switch
@@ -132,6 +137,34 @@ public sealed record SvgOverlayRenderOptions
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true
             },
+            SvgOverlayRenderProfile.WallQaFocus => new SvgOverlayRenderOptions
+            {
+                Profile = SvgOverlayRenderProfile.WallQaFocus,
+                IncludeLegend = true,
+                IncludeDiagnostics = true,
+                IncludeRegions = false,
+                IncludeDimensions = false,
+                IncludeAnnotations = false,
+                IncludeGridAxes = false,
+                IncludeGridBaySpacings = false,
+                IncludeWalls = false,
+                IncludeWallComponents = false,
+                IncludeWallNodes = false,
+                IncludeRooms = false,
+                IncludeRoomClusters = false,
+                IncludeRoomAdjacency = false,
+                IncludeOpenings = false,
+                IncludeObjects = false,
+                IncludeObjectAggregates = false,
+                IncludeSurfacePatterns = false,
+                IncludeWallTopologySpans = true,
+                IncludeWallBodyFootprints = false,
+                IncludeReviewOnlyWallTopologySpans = false,
+                IncludeWallGraphRepairs = false,
+                IncludeRoutingLayer = false,
+                IncludeSourceContext = true,
+                CropToFloorplanContent = true
+            },
             _ => new SvgOverlayRenderOptions()
             {
                 IncludeWallTopologySpans = true,
@@ -171,6 +204,15 @@ public sealed record SvgOverlayRenderOptions
             case "cleanwallsonly":
                 profile = SvgOverlayRenderProfile.WallQa;
                 return true;
+            case "wallqafocus":
+            case "wallaccuracyfocus":
+            case "wallaccuracyreviewfocus":
+            case "focusedwallqa":
+            case "focusedwalls":
+            case "wallqazoom":
+            case "wallszoom":
+                profile = SvgOverlayRenderProfile.WallQaFocus;
+                return true;
             default:
                 profile = SvgOverlayRenderProfile.Full;
                 return false;
@@ -180,6 +222,7 @@ public sealed record SvgOverlayRenderOptions
     public static string ProfileName(SvgOverlayRenderProfile profile) =>
         profile switch
         {
+            SvgOverlayRenderProfile.WallQaFocus => "wall-qa-focus",
             SvgOverlayRenderProfile.WallQa => "wall-qa",
             SvgOverlayRenderProfile.PlacementReview => "placement-review",
             SvgOverlayRenderProfile.StructuralReview => "structural-review",

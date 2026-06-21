@@ -1043,6 +1043,66 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void SvgRenderer_WallQaFocusProfileCropsWallTopologyAndKeepsLegendVisible()
+    {
+        var result = CreateDenseMinorRoutingDetailResult() with
+        {
+            SheetRegions =
+            [
+                new SheetRegion(
+                    "main-floorplan",
+                    1,
+                    RegionKind.MainFloorPlan,
+                    new PlanRect(80, 80, 260, 80),
+                    Confidence.High)
+            ]
+        };
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
+
+        Assert.Contains("data-profile=\"wall-qa-focus\"", svg);
+        Assert.Contains("data-viewport=\"focused-wall-qa\"", svg);
+        Assert.Contains("viewBox=\"74 74 520", svg);
+        Assert.Contains("<rect class=\"sheet-bg\" x=\"74\" y=\"74\" width=\"520\"", svg);
+        Assert.Contains("<g id=\"legend\" transform=\"translate(342 86)\"", svg);
+        Assert.Contains("Focused wall topology crop", svg);
+        Assert.Contains("Faint source linework context", svg);
+        Assert.Contains("id=\"source-context\"", svg);
+        Assert.Contains("id=\"wall-topology-spans\"", svg);
+        Assert.DoesNotContain("viewBox=\"0 0", svg);
+    }
+
+    [Fact]
+    public void SvgRenderer_WallQaFocusProfileFallsBackToCleanWallBoundsWhenMainRegionIsFullSheet()
+    {
+        var result = CreateDenseMinorRoutingDetailResult() with
+        {
+            SheetRegions =
+            [
+                new SheetRegion(
+                    "oversized-main-floorplan",
+                    1,
+                    RegionKind.MainFloorPlan,
+                    new PlanRect(0, 0, 500, 400),
+                    Confidence.Medium)
+            ]
+        };
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
+
+        Assert.Contains("data-profile=\"wall-qa-focus\"", svg);
+        Assert.Contains("Focused wall topology crop", svg);
+        Assert.DoesNotContain("viewBox=\"0 0 768 400\"", svg);
+        Assert.DoesNotContain("<rect class=\"sheet-bg\" x=\"0\" y=\"0\" width=\"768\"", svg);
+    }
+
+    [Fact]
     public void SvgRenderer_WallQaLegendKeepsPriorityOmissionRowsVisible()
     {
         var result = WithOmissionLegendPriorityFixture(CreateDenseMinorRoutingDetailResult());
@@ -1078,6 +1138,17 @@ public sealed class ExportTests
         Assert.True(SvgOverlayRenderOptions.TryParseProfile(value, out var profile));
         Assert.Equal(SvgOverlayRenderProfile.WallQa, profile);
         Assert.Equal("wall-qa", SvgOverlayRenderOptions.ProfileName(profile));
+    }
+
+    [Theory]
+    [InlineData("wall-qa-focus")]
+    [InlineData("focused-wall-qa")]
+    [InlineData("wall-qa-zoom")]
+    public void SvgOverlayRenderOptions_ParsesWallQaFocusProfileAliases(string value)
+    {
+        Assert.True(SvgOverlayRenderOptions.TryParseProfile(value, out var profile));
+        Assert.Equal(SvgOverlayRenderProfile.WallQaFocus, profile);
+        Assert.Equal("wall-qa-focus", SvgOverlayRenderOptions.ProfileName(profile));
     }
 
     [Fact]

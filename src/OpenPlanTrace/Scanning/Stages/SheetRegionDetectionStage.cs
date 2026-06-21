@@ -188,6 +188,7 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
                 {
                     ["candidateCount"] = contentRegion.CandidateCount.ToString(),
                     ["gridEndpointAnchorCount"] = contentRegion.GridEndpointAnchorCount.ToString(),
+                    ["refinementProfile"] = contentRegion.Profile,
                     ["sourcePrimitiveIdCount"] = contentRegion.SourcePrimitiveIds.Length.ToString(),
                     ["fallbackBounds"] = FormatBounds(fallback),
                     ["refinedBounds"] = FormatBounds(main)
@@ -220,24 +221,61 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
             return null;
         }
 
-        var left = WeightedQuantile(candidates.Select(candidate => new WeightedValue(candidate.Bounds.Left, candidate.Score)), 0.02);
-        var top = WeightedQuantile(candidates.Select(candidate => new WeightedValue(candidate.Bounds.Top, candidate.Score)), 0.02);
-        var right = WeightedQuantile(candidates.Select(candidate => new WeightedValue(candidate.Bounds.Right, candidate.Score)), 0.98);
-        var bottom = WeightedQuantile(candidates.Select(candidate => new WeightedValue(candidate.Bounds.Bottom, candidate.Score)), 0.98);
         var padding = Math.Max(context.Options.SheetMargin, Math.Min(page.Size.Width, page.Size.Height) * 0.025);
-        var bounds = PlanRect.FromEdges(left, top, right, bottom)
-            .Inflate(padding)
-            .ClampTo(page.Bounds);
         var gridEndpointAnchors = EnumerateGridEndpointMainRegionAnchors(page, context, titleBlock).ToArray();
-        if (gridEndpointAnchors.Length > 0)
+        var rawBounds = BuildMainContentBounds(
+            candidates,
+            gridEndpointAnchors,
+            fallback,
+            page,
+            context.Options,
+            padding,
+            0.02,
+            0.98,
+            "broad-content");
+        var coreBounds = BuildMainContentBounds(
+            candidates,
+            gridEndpointAnchors,
+            fallback,
+            page,
+            context.Options,
+            padding,
+            0.08,
+            0.92,
+            "structural-core");
+        var selectedBounds = SelectMainContentBounds(
+            rawBounds,
+            coreBounds,
+            fallback,
+            titleBlock,
+            page,
+            context.Options);
+        if (selectedBounds is null)
         {
-            bounds = PlanRect.Union(
-                    bounds,
-                    PlanRect.Union(gridEndpointAnchors.Select(anchor => anchor.Bounds))
-                        .Inflate(padding)
-                        .ClampTo(page.Bounds))
-                .ClampTo(page.Bounds);
+            context.AddDiagnostic(
+                "layout.main_region.content_refine_rejected",
+                DiagnosticSeverity.Info,
+                Name,
+                "Main floorplan content crop was rejected; using the broad sheet fallback region.",
+                page.Number,
+                fallback,
+                Confidence.Low,
+                DiagnosticScope.Region,
+                Array.Empty<string>(),
+                new Dictionary<string, string>
+                {
+                    ["rawBounds"] = FormatBounds(rawBounds.Bounds),
+                    ["rawAccepted"] = IsAcceptableMainContentBounds(rawBounds.Bounds, fallback, titleBlock, page, context.Options).ToString(),
+                    ["coreBounds"] = FormatBounds(coreBounds.Bounds),
+                    ["coreAccepted"] = IsAcceptableMainContentBounds(coreBounds.Bounds, fallback, titleBlock, page, context.Options).ToString(),
+                    ["fallbackBounds"] = FormatBounds(fallback),
+                    ["candidateCount"] = candidates.Length.ToString(),
+                    ["gridEndpointAnchorCount"] = gridEndpointAnchors.Length.ToString()
+                });
+            return null;
         }
+
+        var bounds = selectedBounds.Bounds;
 
         if (bounds.IsEmpty
             || bounds.Area < page.Bounds.Area * 0.015
@@ -261,12 +299,203 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
             .Where(candidate => bounds.Contains(candidate.Bounds.Center, context.Options.SheetMargin))
             .OrderByDescending(candidate => candidate.Score)
             .Select(candidate => candidate.SourcePrimitiveId)
-            .Concat(gridEndpointAnchors.SelectMany(anchor => anchor.SourcePrimitiveIds))
+            .Concat(selectedBounds.GridEndpointAnchors.SelectMany(anchor => anchor.SourcePrimitiveIds))
             .Distinct(StringComparer.Ordinal)
             .Take(MaxMainRegionSourcePrimitiveIds)
             .ToArray();
 
-        return new MainContentRegion(bounds, candidates.Length, gridEndpointAnchors.Length, sourceIds);
+        return new MainContentRegion(
+            bounds,
+            candidates.Length,
+            selectedBounds.GridEndpointAnchors.Length,
+            selectedBounds.Profile,
+            sourceIds);
+    }
+
+    private static MainContentBounds BuildMainContentBounds(
+        IReadOnlyList<MainContentCandidate> candidates,
+        IReadOnlyList<MainContentAnchor> gridEndpointAnchors,
+        PlanRect fallback,
+        PlanPage page,
+        ScannerOptions options,
+        double padding,
+        double lowerQuantile,
+        double upperQuantile,
+        string profile)
+    {
+        var boundsCandidates = profile == "structural-core"
+            ? SelectStructuralCoreCandidates(candidates, page, options)
+            : candidates;
+        if (boundsCandidates.Count < 4)
+        {
+            boundsCandidates = candidates;
+        }
+
+        var left = WeightedQuantile(
+            boundsCandidates.Select(candidate => new WeightedValue(candidate.Bounds.Left, candidate.Score)),
+            lowerQuantile);
+        var top = WeightedQuantile(
+            boundsCandidates.Select(candidate => new WeightedValue(candidate.Bounds.Top, candidate.Score)),
+            lowerQuantile);
+        var right = WeightedQuantile(
+            boundsCandidates.Select(candidate => new WeightedValue(candidate.Bounds.Right, candidate.Score)),
+            upperQuantile);
+        var bottom = WeightedQuantile(
+            boundsCandidates.Select(candidate => new WeightedValue(candidate.Bounds.Bottom, candidate.Score)),
+            upperQuantile);
+
+        var bounds = PlanRect.FromEdges(left, top, right, bottom)
+            .Inflate(padding)
+            .ClampTo(fallback);
+        var anchorSearch = bounds.Inflate(Math.Max(padding * 3.0, Math.Min(page.Size.Width, page.Size.Height) * 0.08));
+        var nearbyAnchors = profile == "structural-core"
+            ? gridEndpointAnchors
+                .Where(anchor => anchor.Bounds.Intersects(anchorSearch)
+                    || bounds.Contains(anchor.Bounds.Center, Math.Max(padding, options.SheetMargin)))
+                .ToArray()
+            : gridEndpointAnchors.ToArray();
+
+        if (nearbyAnchors.Length > 0)
+        {
+            bounds = PlanRect.Union(
+                    bounds,
+                    PlanRect.Union(nearbyAnchors.Select(anchor => anchor.Bounds))
+                        .Inflate(padding)
+                        .ClampTo(fallback))
+                .ClampTo(fallback);
+        }
+
+        return new MainContentBounds(bounds, nearbyAnchors, profile);
+    }
+
+    private static IReadOnlyList<MainContentCandidate> SelectStructuralCoreCandidates(
+        IReadOnlyList<MainContentCandidate> candidates,
+        PlanPage page,
+        ScannerOptions options)
+    {
+        if (candidates.Count < 8)
+        {
+            return candidates;
+        }
+
+        var supportRadius = Math.Max(
+            Math.Max(90, options.MinWallLength * 2.0),
+            Math.Min(page.Size.Width, page.Size.Height) * 0.16);
+        var support = new double[candidates.Count];
+        for (var firstIndex = 0; firstIndex < candidates.Count; firstIndex++)
+        {
+            var first = candidates[firstIndex];
+            var firstCenter = first.Bounds.Center;
+            for (var secondIndex = 0; secondIndex < candidates.Count; secondIndex++)
+            {
+                var second = candidates[secondIndex];
+                var secondCenter = second.Bounds.Center;
+                if (Math.Abs(firstCenter.X - secondCenter.X) > supportRadius
+                    || Math.Abs(firstCenter.Y - secondCenter.Y) > supportRadius)
+                {
+                    continue;
+                }
+
+                if (firstCenter.DistanceTo(secondCenter) <= supportRadius
+                    || first.Bounds.Inflate(supportRadius * 0.35).Intersects(second.Bounds))
+                {
+                    support[firstIndex] += second.Score;
+                }
+            }
+        }
+
+        var strongestSupport = support.Length == 0 ? 0 : support.Max();
+        if (strongestSupport <= 0)
+        {
+            return candidates;
+        }
+
+        var selected = new bool[candidates.Count];
+        var seedIndex = Array.IndexOf(support, strongestSupport);
+        selected[seedIndex] = true;
+        var clusterBounds = candidates[seedIndex].Bounds;
+
+        var expansionRadius = Math.Max(supportRadius * 0.75, options.MinWallLength);
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            var searchBounds = clusterBounds.Inflate(expansionRadius);
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                if (selected[index])
+                {
+                    continue;
+                }
+
+                var candidate = candidates[index];
+                if (!searchBounds.Contains(candidate.Bounds.Center)
+                    && !candidate.Bounds.Intersects(searchBounds))
+                {
+                    continue;
+                }
+
+                selected[index] = true;
+                clusterBounds = PlanRect.Union(clusterBounds, candidate.Bounds);
+                changed = true;
+            }
+        }
+
+        var result = candidates
+            .Where((_, index) => selected[index])
+            .ToArray();
+
+        return result.Length < 4 ? candidates : result;
+    }
+
+    private static MainContentBounds? SelectMainContentBounds(
+        MainContentBounds rawBounds,
+        MainContentBounds coreBounds,
+        PlanRect fallback,
+        SheetRegion? titleBlock,
+        PlanPage page,
+        ScannerOptions options)
+    {
+        var rawAccepted = IsAcceptableMainContentBounds(rawBounds.Bounds, fallback, titleBlock, page, options);
+        var coreAccepted = IsAcceptableMainContentBounds(coreBounds.Bounds, fallback, titleBlock, page, options);
+        if (!rawAccepted)
+        {
+            return coreAccepted ? coreBounds : null;
+        }
+
+        if (!coreAccepted)
+        {
+            return rawBounds;
+        }
+
+        var fallbackRatio = fallback.Area <= 0 ? 0 : rawBounds.Bounds.Area / fallback.Area;
+        var coreRatio = rawBounds.Bounds.Area <= 0 ? 1 : coreBounds.Bounds.Area / rawBounds.Bounds.Area;
+        return fallbackRatio > 0.72 && coreRatio is >= 0.25 and <= 0.86
+            ? coreBounds
+            : rawBounds;
+    }
+
+    private static bool IsAcceptableMainContentBounds(
+        PlanRect bounds,
+        PlanRect fallback,
+        SheetRegion? titleBlock,
+        PlanPage page,
+        ScannerOptions options)
+    {
+        if (bounds.IsEmpty
+            || bounds.Area < page.Bounds.Area * 0.015
+            || bounds.Width < Math.Max(80, page.Size.Width * 0.08)
+            || bounds.Height < Math.Max(80, page.Size.Height * 0.08))
+        {
+            return false;
+        }
+
+        if (fallback.Area > 0 && bounds.Area > fallback.Area * 0.97)
+        {
+            return false;
+        }
+
+        return !CrossesTitleBoundary(bounds, titleBlock, page, options);
     }
 
     private IEnumerable<MainContentAnchor> EnumerateGridEndpointMainRegionAnchors(
@@ -376,8 +605,17 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
 
         var title = titleBlock.Bounds;
         var margin = Math.Max(0, options.SheetMargin);
-        return title.Left > page.Size.Width * 0.45 && bounds.Right > title.Left - margin
-            || title.Top > page.Size.Height * 0.45 && bounds.Bottom > title.Top - margin;
+        if (bounds.OverlapArea(title.Inflate(margin)) > 1)
+        {
+            return true;
+        }
+
+        var titleLooksLikeRightStrip = title.Left > page.Size.Width * 0.45
+            && title.Height >= page.Size.Height * 0.45;
+        var titleLooksLikeBottomStrip = title.Top > page.Size.Height * 0.45
+            && title.Width >= page.Size.Width * 0.45;
+        return titleLooksLikeRightStrip && bounds.Right > title.Left - margin
+            || titleLooksLikeBottomStrip && bounds.Bottom > title.Top - margin;
     }
 
     private IEnumerable<MainContentCandidate> EnumerateMainContentCandidates(
@@ -630,18 +868,17 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
                 && (titleBounds is null || !titleBounds.Value.Contains(text.Bounds.Center)))
             .ToArray();
 
-        if (noteText.Length >= 2)
+        foreach (var noteCluster in DetectNoteTextClusters(noteText, page, context.Options).Take(4))
         {
-            var bounds = PlanRect.Union(noteText.Select(item => item.Primitive.Bounds)).Inflate(6).ClampTo(page.Bounds);
             yield return new SheetRegion(
-                $"page:{page.Number}:notes",
+                $"page:{page.Number}:notes:{noteCluster.Index}",
                 page.Number,
                 RegionKind.Notes,
-                bounds,
+                noteCluster.Bounds,
                 Confidence.Medium)
             {
                 Label = "Notes",
-                SourcePrimitiveIds = noteText
+                SourcePrimitiveIds = noteCluster.Items
                     .Select(item => context.PrimitiveId(page.Number, item.Index, item.Primitive))
                     .ToArray()
             };
@@ -670,6 +907,135 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
                     .ToArray()
             };
         }
+    }
+
+    private static IEnumerable<TextCluster> DetectNoteTextClusters(
+        IReadOnlyList<PrimitiveWithIndex> noteText,
+        PlanPage page,
+        ScannerOptions options)
+    {
+        if (noteText.Count < 2)
+        {
+            yield break;
+        }
+
+        var horizontalGap = Math.Max(55, Math.Min(page.Size.Width, page.Size.Height) * 0.09);
+        var verticalGap = Math.Max(22, Math.Min(page.Size.Width, page.Size.Height) * 0.04);
+        var visited = new bool[noteText.Count];
+        var clusterIndex = 1;
+        var clusters = new List<TextCluster>();
+
+        for (var startIndex = 0; startIndex < noteText.Count; startIndex++)
+        {
+            if (visited[startIndex])
+            {
+                continue;
+            }
+
+            var queue = new Queue<int>();
+            var items = new List<PrimitiveWithIndex>();
+            visited[startIndex] = true;
+            queue.Enqueue(startIndex);
+
+            while (queue.Count > 0)
+            {
+                var currentIndex = queue.Dequeue();
+                var current = noteText[currentIndex];
+                items.Add(current);
+
+                for (var candidateIndex = 0; candidateIndex < noteText.Count; candidateIndex++)
+                {
+                    if (visited[candidateIndex])
+                    {
+                        continue;
+                    }
+
+                    if (!AreNoteTextBlocksRelated(current.Primitive.Bounds, noteText[candidateIndex].Primitive.Bounds, horizontalGap, verticalGap))
+                    {
+                        continue;
+                    }
+
+                    visited[candidateIndex] = true;
+                    queue.Enqueue(candidateIndex);
+                }
+            }
+
+            if (items.Count < 2)
+            {
+                continue;
+            }
+
+            var bounds = PlanRect.Union(items.Select(item => item.Primitive.Bounds))
+                .Inflate(6)
+                .ClampTo(page.Bounds);
+            if (bounds.Area > page.Bounds.Area * 0.18
+                || bounds.Width > page.Size.Width * 0.65
+                || bounds.Height > page.Size.Height * 0.45)
+            {
+                continue;
+            }
+
+            var score = NoteClusterScore(items, bounds, page);
+            if (score < 3.0)
+            {
+                continue;
+            }
+
+            clusters.Add(new TextCluster(clusterIndex++, items.ToArray(), bounds, score));
+        }
+
+        foreach (var cluster in clusters
+            .OrderByDescending(cluster => cluster.Score)
+            .ThenBy(cluster => cluster.Bounds.Top)
+            .ThenBy(cluster => cluster.Bounds.Left))
+        {
+            yield return cluster;
+        }
+    }
+
+    private static bool AreNoteTextBlocksRelated(
+        PlanRect first,
+        PlanRect second,
+        double horizontalGap,
+        double verticalGap)
+    {
+        if (!first.Inflate(horizontalGap, verticalGap).Intersects(second))
+        {
+            return false;
+        }
+
+        var verticalGapBetween = Math.Max(0, Math.Max(second.Top - first.Bottom, first.Top - second.Bottom));
+        if (verticalGapBetween > verticalGap)
+        {
+            return false;
+        }
+
+        var horizontalOverlap = Math.Max(0, Math.Min(first.Right, second.Right) - Math.Max(first.Left, second.Left));
+        var minWidth = Math.Max(1, Math.Min(first.Width, second.Width));
+        var leftDelta = Math.Abs(first.Left - second.Left);
+        var centerDelta = Math.Abs(first.Center.X - second.Center.X);
+        return horizontalOverlap / minWidth >= 0.15
+            || leftDelta <= horizontalGap * 0.75
+            || centerDelta <= horizontalGap;
+    }
+
+    private static double NoteClusterScore(
+        IReadOnlyList<PrimitiveWithIndex> items,
+        PlanRect bounds,
+        PlanPage page)
+    {
+        var texts = items
+            .Select(item => ((TextPrimitive)item.Primitive).Text.Trim())
+            .ToArray();
+        var headingCount = texts.Count(LooksLikeNoteHeadingText);
+        var numberedCount = texts.Count(LooksLikeNumberedNoteText);
+        var instructionCount = texts.Count(LooksLikeInstructionNoteText);
+        var areaPenalty = page.Bounds.Area <= 0 ? 0 : bounds.Area / page.Bounds.Area * 6.0;
+        return items.Count
+            + headingCount * 3.0
+            + numberedCount * 2.0
+            + instructionCount
+            - areaPenalty;
     }
 
     private static double ScoreRegion(PlanPage page, PlanRect region)
@@ -796,6 +1162,36 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
     private static bool LooksLikeAreaMeasurementText(string text) =>
         AreaMeasurementRegex.IsMatch(text);
 
+    private static bool LooksLikeNoteHeadingText(string text) =>
+        text.Contains("note", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("merknad", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("keynote", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("forklaring", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksLikeNumberedNoteText(string text)
+    {
+        var trimmed = text.TrimStart();
+        if (trimmed.Length < 3 || !char.IsDigit(trimmed[0]))
+        {
+            return false;
+        }
+
+        return trimmed[1] is '.' or ')' or ':'
+            || trimmed.Length > 2
+            && char.IsDigit(trimmed[1])
+            && trimmed[2] is '.' or ')' or ':';
+    }
+
+    private static bool LooksLikeInstructionNoteText(string text) =>
+        text.Contains("verify", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("coordinate", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("shall", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("existing", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("kontroll", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("utføres", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("gjelder", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("mål", StringComparison.OrdinalIgnoreCase);
+
     private static bool LooksLikeTitleBlockText(string text)
     {
         if (text.Length is < 2 or > 80)
@@ -828,9 +1224,20 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
 
     private sealed record PrimitiveWithIndex(PlanPrimitive Primitive, int Index);
 
+    private sealed record TextCluster(
+        int Index,
+        PrimitiveWithIndex[] Items,
+        PlanRect Bounds,
+        double Score);
+
     private sealed record MainContentCandidate(PlanRect Bounds, double Score, string SourcePrimitiveId);
 
     private sealed record MainContentAnchor(PlanRect Bounds, string[] SourcePrimitiveIds);
+
+    private sealed record MainContentBounds(
+        PlanRect Bounds,
+        MainContentAnchor[] GridEndpointAnchors,
+        string Profile);
 
     private sealed record GridEndpointLabel(
         TextPrimitive Text,
@@ -843,6 +1250,7 @@ internal sealed class SheetRegionDetectionStage : IPipelineStage
         PlanRect Bounds,
         int CandidateCount,
         int GridEndpointAnchorCount,
+        string Profile,
         string[] SourcePrimitiveIds);
 
     private readonly record struct WeightedValue(double Value, double Weight);

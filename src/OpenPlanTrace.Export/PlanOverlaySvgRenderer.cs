@@ -22,17 +22,18 @@ public static class PlanOverlaySvgRenderer
 
         var pageWidth = page.Size.Width;
         var pageHeight = page.Size.Height;
-        var sidePanelWidth = QaSidePanelWidth(page);
+        var contentBounds = ResolveContentBounds(result, page, options);
+        var sidePanelWidth = QaSidePanelWidth(contentBounds);
         var reservesQaPanel = options.IncludeLegend || options.IncludeDiagnostics;
         var width = reservesQaPanel
-            ? pageWidth + QaPanelGap + sidePanelWidth + QaPanelMargin
-            : pageWidth;
+            ? contentBounds.Width + QaPanelGap + sidePanelWidth + QaPanelMargin
+            : contentBounds.Width;
         var height = reservesQaPanel
-            ? Math.Max(pageHeight, QaPanelRequiredHeight(result, page, options))
-            : pageHeight;
+            ? Math.Max(contentBounds.Height, QaPanelRequiredHeight(result, page, options))
+            : contentBounds.Height;
         var builder = new StringBuilder();
 
-        builder.AppendLine($"""<svg xmlns="http://www.w3.org/2000/svg" width="{N(width)}" height="{N(height)}" viewBox="0 0 {N(width)} {N(height)}" role="img" aria-label="OpenPlanTrace overlay for page {page.Number}" data-profile="{Esc(SvgOverlayRenderOptions.ProfileName(options.Profile))}">""");
+        builder.AppendLine($"""<svg xmlns="http://www.w3.org/2000/svg" width="{N(width)}" height="{N(height)}" viewBox="{N(contentBounds.X)} {N(contentBounds.Y)} {N(width)} {N(height)}" role="img" aria-label="OpenPlanTrace overlay for page {page.Number}" data-profile="{Esc(SvgOverlayRenderOptions.ProfileName(options.Profile))}" data-viewport="{Esc(ViewportName(options))}">""");
         builder.AppendLine("<defs>");
         builder.AppendLine("<style>");
         builder.AppendLine("""
@@ -99,7 +100,7 @@ public static class PlanOverlaySvgRenderer
         builder.AppendLine("</style>");
         builder.AppendLine("</defs>");
 
-        builder.AppendLine($"""<rect class="sheet-bg" x="0" y="0" width="{N(width)}" height="{N(height)}" style="--background:{Esc(options.BackgroundColor)}" />""");
+        builder.AppendLine($"""<rect class="sheet-bg" x="{N(contentBounds.X)}" y="{N(contentBounds.Y)}" width="{N(width)}" height="{N(height)}" style="--background:{Esc(options.BackgroundColor)}" />""");
 
         if (!string.IsNullOrWhiteSpace(options.BackgroundImageHref))
         {
@@ -443,12 +444,12 @@ public static class PlanOverlaySvgRenderer
 
         if (options.IncludeLegend)
         {
-            AppendLegend(builder, result, page, options);
+            AppendLegend(builder, result, page, options, contentBounds);
         }
 
         if (options.IncludeDiagnostics)
         {
-            AppendDiagnostics(builder, result, page, options);
+            AppendDiagnostics(builder, result, page, options, contentBounds);
         }
 
         builder.AppendLine("</svg>");
@@ -533,6 +534,73 @@ public static class PlanOverlaySvgRenderer
     private static string Points(IReadOnlyList<PlanPoint> points) =>
         string.Join(" ", points.Select(point => $"{N(point.X)},{N(point.Y)}"));
 
+    private static PlanRect ResolveContentBounds(
+        PlanScanResult result,
+        PlanPage page,
+        SvgOverlayRenderOptions options)
+    {
+        var pageBounds = new PlanRect(0, 0, page.Size.Width, page.Size.Height);
+        if (!options.CropToFloorplanContent)
+        {
+            return pageBounds;
+        }
+
+        var cleanTopologyBounds = PlanRect.Union(
+            WallTopologySpanVisibility.BuildVisibleTopologySpans(result, page.Number, options)
+                .Select(span => span.Bounds));
+        if (!cleanTopologyBounds.IsEmpty)
+        {
+            return FinalizeFocusedBounds(cleanTopologyBounds, pageBounds, options);
+        }
+
+        var floorplanRegionBounds = PlanRect.Union(
+            result.SheetRegions
+                .Where(region => region.PageNumber == page.Number && region.Kind == RegionKind.MainFloorPlan)
+                .Select(region => region.Bounds));
+        if (!floorplanRegionBounds.IsEmpty && IsUsefulFocusBounds(floorplanRegionBounds, pageBounds))
+        {
+            return FinalizeFocusedBounds(floorplanRegionBounds, pageBounds, options);
+        }
+
+        var wallBounds = PlanRect.Union(
+            result.Walls
+                .Where(wall => wall.PageNumber == page.Number)
+                .Select(wall => wall.Bounds));
+        if (!wallBounds.IsEmpty)
+        {
+            return FinalizeFocusedBounds(wallBounds, pageBounds, options);
+        }
+
+        return floorplanRegionBounds.IsEmpty
+            ? pageBounds
+            : FinalizeFocusedBounds(floorplanRegionBounds, pageBounds, options);
+    }
+
+    private static PlanRect FinalizeFocusedBounds(
+        PlanRect focusedBounds,
+        PlanRect pageBounds,
+        SvgOverlayRenderOptions options)
+    {
+        var padding = Math.Max(0, options.ViewportPaddingDrawingUnits);
+        var clamped = focusedBounds.Inflate(padding).ClampTo(pageBounds);
+        return clamped.IsEmpty || clamped.Width <= 0 || clamped.Height <= 0
+            ? pageBounds
+            : clamped;
+    }
+
+    private static bool IsUsefulFocusBounds(PlanRect focusedBounds, PlanRect pageBounds)
+    {
+        if (focusedBounds.IsEmpty || pageBounds.Area <= 0)
+        {
+            return false;
+        }
+
+        var areaRatio = focusedBounds.Area / pageBounds.Area;
+        var widthRatio = focusedBounds.Width / Math.Max(pageBounds.Width, 0.001);
+        var heightRatio = focusedBounds.Height / Math.Max(pageBounds.Height, 0.001);
+        return areaRatio < 0.86 || widthRatio < 0.92 || heightRatio < 0.92;
+    }
+
     private static void AppendRect(
         StringBuilder builder,
         PlanRect rect,
@@ -568,15 +636,16 @@ public static class PlanOverlaySvgRenderer
         StringBuilder builder,
         PlanScanResult result,
         PlanPage page,
-        SvgOverlayRenderOptions options)
+        SvgOverlayRenderOptions options,
+        PlanRect contentBounds)
     {
         var lineHeight = 18.0;
         var rows = LegendRows(result, page, options);
 
-        var legendWidth = Math.Min(260.0, QaSidePanelWidth(page));
+        var legendWidth = Math.Min(260.0, QaSidePanelWidth(contentBounds));
         var legendHeight = 18 + (rows.Length * lineHeight);
-        var x = QaSidePanelX(page);
-        var y = QaPanelMargin;
+        var x = QaSidePanelX(contentBounds);
+        var y = contentBounds.Top + QaPanelMargin;
         builder.AppendLine($"""<g id="legend" transform="translate({N(x)} {N(y)})">""");
         builder.AppendLine($"""<rect class="legend-bg" x="0" y="0" width="{N(legendWidth)}" height="{N(legendHeight)}" rx="6" />""");
 
@@ -604,9 +673,14 @@ public static class PlanOverlaySvgRenderer
         {
             rows.Add("Placement-ready wall spans");
         }
-        else if (options.Profile == SvgOverlayRenderProfile.WallQa)
+        else if (options.Profile is SvgOverlayRenderProfile.WallQa or SvgOverlayRenderProfile.WallQaFocus)
         {
             rows.Add("Walls-only placement QA");
+            if (options.CropToFloorplanContent)
+            {
+                rows.Add("Focused wall topology crop");
+            }
+
             if (options.IncludeSourceContext && string.IsNullOrWhiteSpace(options.BackgroundImageHref))
             {
                 rows.Add("Faint source linework context");
@@ -661,7 +735,8 @@ public static class PlanOverlaySvgRenderer
         StringBuilder builder,
         PlanScanResult result,
         PlanPage page,
-        SvgOverlayRenderOptions options)
+        SvgOverlayRenderOptions options,
+        PlanRect contentBounds)
     {
         var messages = result.Diagnostics.Messages
             .Where(message => message.PageNumber is null || message.PageNumber == page.Number)
@@ -673,12 +748,12 @@ public static class PlanOverlaySvgRenderer
             return;
         }
 
-        var panelWidth = QaSidePanelWidth(page);
+        var panelWidth = QaSidePanelWidth(contentBounds);
         var panelHeight = 18 + (messages.Length * 16);
-        var x = QaSidePanelX(page);
+        var x = QaSidePanelX(contentBounds);
         var y = options.IncludeLegend
-            ? QaPanelMargin + 18 + (LegendRows(result, page, options).Length * 18.0) + QaPanelMargin
-            : QaPanelMargin;
+            ? contentBounds.Top + QaPanelMargin + 18 + (LegendRows(result, page, options).Length * 18.0) + QaPanelMargin
+            : contentBounds.Top + QaPanelMargin;
         builder.AppendLine($"""<g id="diagnostics" transform="translate({N(x)} {N(y)})">""");
         builder.AppendLine($"""<rect class="diagnostic-bg" x="0" y="0" width="{N(panelWidth)}" height="{N(panelHeight)}" rx="6" />""");
 
@@ -691,11 +766,11 @@ public static class PlanOverlaySvgRenderer
         builder.AppendLine("</g>");
     }
 
-    private static double QaSidePanelX(PlanPage page) =>
-        page.Size.Width + QaPanelGap;
+    private static double QaSidePanelX(PlanRect contentBounds) =>
+        contentBounds.Right + QaPanelGap;
 
-    private static double QaSidePanelWidth(PlanPage page) =>
-        Math.Clamp(page.Size.Width * 0.28, 240.0, 360.0);
+    private static double QaSidePanelWidth(PlanRect contentBounds) =>
+        Math.Clamp(contentBounds.Width * 0.28, 240.0, 360.0);
 
     private static double QaPanelRequiredHeight(
         PlanScanResult result,
@@ -721,6 +796,9 @@ public static class PlanOverlaySvgRenderer
 
         return height;
     }
+
+    private static string ViewportName(SvgOverlayRenderOptions options) =>
+        options.CropToFloorplanContent ? "focused-wall-qa" : "full-page";
 
     private static string Shorten(string value, int maxLength) =>
         value.Length <= maxLength

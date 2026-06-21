@@ -91,6 +91,95 @@ public sealed class ScannerPipelineTests
     }
 
     [Fact]
+    public async Task ScanAsync_KeepsMainFloorplanOnStructuralCoreWhenOutlyingLineworkIsNoisy()
+    {
+        var document = new PlanDocument(
+            "region-noisy-sheet-plan",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(1000, 800),
+                    new PlanPrimitive[]
+                    {
+                        new RectanglePrimitive(new PlanRect(0, 0, 1000, 800)) { SourceId = "sheet-frame" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(250, 160), new PlanPoint(650, 160))) { SourceId = "plan-wall-top" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(650, 160), new PlanPoint(650, 480))) { SourceId = "plan-wall-right" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(650, 480), new PlanPoint(250, 480))) { SourceId = "plan-wall-bottom" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(250, 480), new PlanPoint(250, 160))) { SourceId = "plan-wall-left" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(420, 160), new PlanPoint(420, 480))) { SourceId = "plan-wall-mid-vertical" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(250, 310), new PlanPoint(650, 310))) { SourceId = "plan-wall-mid-horizontal" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(330, 160), new PlanPoint(330, 480))) { SourceId = "plan-partition-left" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(535, 160), new PlanPoint(535, 480))) { SourceId = "plan-partition-right" },
+                        new TextPrimitive("Room 12.0 m2", new PlanRect(455, 225, 95, 16)) { SourceId = "room-label" },
+                        new TextPrimitive("8 400", new PlanRect(420, 610, 55, 16)) { SourceId = "dim-bottom" },
+                        new TextPrimitive("6 280", new PlanRect(930, 330, 55, 16)) { SourceId = "dim-right" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(70, 700), new PlanPoint(530, 700))) { SourceId = "note-rule-bottom" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(70, 740), new PlanPoint(530, 740))) { SourceId = "note-rule-bottom-2" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(900, 120), new PlanPoint(900, 640))) { SourceId = "far-facade-axis" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(850, 210), new PlanPoint(940, 210))) { SourceId = "far-leader-line" },
+                        new RectanglePrimitive(new PlanRect(65, 690, 470, 60)) { SourceId = "bottom-detail-box" },
+                        new RectanglePrimitive(new PlanRect(720, 620, 240, 140)) { SourceId = "title-grid" },
+                        new TextPrimitive("Prosjekt OpenPlanTrace", new PlanRect(735, 640, 150, 16)) { SourceId = "title-project" },
+                        new TextPrimitive("Malestokk 1:100", new PlanRect(735, 685, 120, 16)) { SourceId = "title-scale" },
+                        new TextPrimitive("Dato 2026-06-21", new PlanRect(735, 725, 120, 16)) { SourceId = "title-date" }
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        var main = Assert.Single(result.SheetRegions.Where(region => region.Kind == RegionKind.MainFloorPlan));
+        Assert.True(main.Bounds.Left > 190, $"Main region should trim noisy left/bottom details, got {main.Bounds}.");
+        Assert.True(main.Bounds.Right < 735, $"Main region should not stretch to far exterior/detail lines, got {main.Bounds}.");
+        Assert.True(main.Bounds.Bottom < 565, $"Main region should not include bottom note/detail linework, got {main.Bounds}.");
+        Assert.Contains(
+            result.Diagnostics.Messages,
+            message => message.Code == "layout.main_region.content_refined"
+                && message.Properties.TryGetValue("refinementProfile", out var profile)
+                && profile == "structural-core");
+    }
+
+    [Fact]
+    public async Task ScanAsync_ClustersSecondaryNotesWithoutSwallowingScatteredPlanText()
+    {
+        var scatteredRoomText = new TextPrimitive("Remote room label", new PlanRect(60, 700, 120, 16)) { SourceId = "remote-room-label" };
+        var document = new PlanDocument(
+            "clustered-notes-plan",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(1000, 800),
+                    new PlanPrimitive[]
+                    {
+                        new RectanglePrimitive(new PlanRect(0, 0, 1000, 800)) { SourceId = "sheet-frame" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(230, 160), new PlanPoint(540, 160))) { SourceId = "plan-wall-top" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(540, 160), new PlanPoint(540, 420))) { SourceId = "plan-wall-right" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(540, 420), new PlanPoint(230, 420))) { SourceId = "plan-wall-bottom" },
+                        new LinePrimitive(new PlanLineSegment(new PlanPoint(230, 420), new PlanPoint(230, 160))) { SourceId = "plan-wall-left" },
+                        new TextPrimitive("Room 12.0 m2", new PlanRect(345, 260, 95, 16)) { SourceId = "room-label" },
+                        new TextPrimitive("GENERAL NOTES", new PlanRect(700, 120, 130, 18)) { SourceId = "notes-heading" },
+                        new TextPrimitive("1. VERIFY ALL DIMENSIONS", new PlanRect(700, 145, 180, 18)) { SourceId = "notes-1" },
+                        scatteredRoomText,
+                        new TextPrimitive("Loose detail label", new PlanRect(820, 520, 115, 16)) { SourceId = "loose-detail-label" },
+                        new RectanglePrimitive(new PlanRect(720, 620, 240, 140)) { SourceId = "title-grid" },
+                        new TextPrimitive("Prosjekt OpenPlanTrace", new PlanRect(735, 640, 150, 16)) { SourceId = "title-project" },
+                        new TextPrimitive("Malestokk 1:100", new PlanRect(735, 685, 120, 16)) { SourceId = "title-scale" }
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        var notes = Assert.Single(result.SheetRegions.Where(region => region.Kind == RegionKind.Notes));
+        Assert.True(notes.Bounds.Width < 240, $"Notes region should stay local to the notes block, got {notes.Bounds}.");
+        Assert.True(notes.Bounds.Height < 80, $"Notes region should stay local to the notes block, got {notes.Bounds}.");
+        Assert.False(notes.Bounds.Contains(scatteredRoomText.Bounds.Center), "Scattered outside-main text should not be absorbed into notes.");
+        Assert.Contains("notes-heading", notes.SourcePrimitiveIds);
+        Assert.Contains("notes-1", notes.SourcePrimitiveIds);
+        Assert.DoesNotContain("remote-room-label", notes.SourcePrimitiveIds);
+    }
+
+    [Fact]
     public async Task ScanAsync_ClassifiesDoorOpeningWhenGapHasArc()
     {
         var document = new PlanDocument(

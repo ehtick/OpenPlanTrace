@@ -1250,6 +1250,17 @@ public sealed record PlacementWallOmissionExport(
 
         if (ContainsEvidence(
             evidence,
+            WallPlacementContextGuards.FragmentMergedInteriorWithoutRoomBoundarySupportReason))
+        {
+            return new PlacementWallOmissionClassification(
+                "fragmented_interior_without_room_boundary_support",
+                "FragmentedInteriorReview",
+                "Wall is omitted from clean placement topology because it is a suspicious fragment-merged interior line that is not used by any detected room boundary.",
+                "Review the source PDF before importing it; this may be stitched door, fixture, stair, or furniture linework rather than a real partition.");
+        }
+
+        if (ContainsEvidence(
+            evidence,
             WallPlacementContextGuards.SecondaryStructuralWithoutRoomBoundarySupportReason))
         {
             return new PlacementWallOmissionClassification(

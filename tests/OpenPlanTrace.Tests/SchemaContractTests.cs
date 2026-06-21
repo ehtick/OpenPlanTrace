@@ -524,6 +524,14 @@ public sealed class SchemaContractTests
                 pageProperties.TryGetProperty(optionalProfileProperty, out _),
                 $"Visual snapshot page schema is missing optional property '{optionalProfileProperty}'.");
         }
+
+        var svgProfiles = pageProperties
+            .GetProperty("svgProfile")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Contains("wall-qa-focus", svgProfiles);
     }
 
     [Fact]
@@ -542,6 +550,7 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "surfacePattern", "id", "pageNumber", "kind", "orientation", "bounds", "boundsMillimeters", "center", "centerMillimeters", "millimetersPerDrawingUnit", "sourceRegionId", "lineCount", "horizontalLineCount", "verticalLineCount", "intersectionCount", "horizontalMedianSpacing", "verticalMedianSpacing", "medianSpacing", "excludedFromWallDetection", "excludedFromStructuralTopology", "confidence", "requiresReview", "recommendedAction", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "wall", "id", "pageNumber", "centerLine", "bounds", "drawingLength", "thicknessDrawingUnits", "wallType", "confidence", "fragmentEvidence", "reliability", "wallGraphRepairCandidateIds", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallPlacementOmission", "code", "category", "message", "recommendedAction", "linkedWallIds", "repairCandidateIds", "evidence");
+        AssertPlacementSchemaWallOmissionCodes(schemaDocument);
         AssertDefinitionRequires(schemaDocument, "wallOpeningCutout", "id", "openingId", "pageNumber", "type", "operation", "centerLine", "startPoint", "endPoint", "startParameter", "endParameter", "centerParameter", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "lengthDrawingUnits", "sourceHostWallId", "anchorWallIds", "crossWallOffsetDrawingUnits", "confidence", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallTopologySpan", "id", "wallGraphEdgeId", "sourceWallGraphEdgeIds", "pageNumber", "wallId", "fromNodeId", "toNodeId", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "drawingLength", "lengthMeters", "thicknessDrawingUnits", "thicknessMillimeters", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallSolidSpan", "id", "pageNumber", "wallId", "sequence", "centerLine", "centerLineMillimeters", "bodyPolygon", "bodyPolygonMillimeters", "bodyBounds", "bodyBoundsMillimeters", "alongVector", "normalVector", "thicknessDrawingUnits", "thicknessMillimeters", "startParameter", "endParameter", "centerParameter", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "drawingLength", "lengthMeters", "adjacentOpeningIds", "evidence");
@@ -3122,6 +3131,36 @@ public sealed class SchemaContractTests
         {
             Assert.Contains(requiredName, required);
         }
+    }
+
+    private static void AssertPlacementSchemaWallOmissionCodes(JsonDocument schemaDocument)
+    {
+        var codes = ReadStringArray(schemaDocument.RootElement
+            .GetProperty("$defs")
+            .GetProperty("wallPlacementOmission")
+            .GetProperty("properties")
+            .GetProperty("code")
+            .GetProperty("enum"));
+        var expected = new[]
+        {
+            "topology_import_blocked",
+            "duplicate_wall_face",
+            "rejected_wall_evidence",
+            "object_like_linework",
+            "isolated_fragment",
+            "secondary_object_linework_without_room_boundary_support",
+            "fragmented_interior_without_room_boundary_support",
+            "secondary_without_room_boundary_support",
+            "structural_topology_excluded",
+            "fragment_geometry_review",
+            "fragmented_pair_review_required",
+            "wall_evidence_review_required",
+            "no_clean_topology_spans",
+            "coordinate_review_required",
+            "not_placement_ready"
+        };
+
+        Assert.Equal(expected.Order(StringComparer.Ordinal), codes.Order(StringComparer.Ordinal));
     }
 
     private static string[] ReadStringArray(JsonElement element) =>

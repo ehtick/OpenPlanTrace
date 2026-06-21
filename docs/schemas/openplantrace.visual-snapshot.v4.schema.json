@@ -539,7 +539,8 @@
             "full",
             "placement-review",
             "structural-review",
-            "wall-qa"
+            "wall-qa",
+            "wall-qa-focus"
           ]
         },
         "visibleDrawableItemCount": {

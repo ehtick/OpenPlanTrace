@@ -6,6 +6,128 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.170] - 2026-06-21
+
+### Improved
+- Secondary note-region detection now clusters nearby note-like text instead of
+  unioning every text primitive outside the main floorplan. This prevents room
+  labels, title fragments, loose detail labels, and distant plan text from
+  becoming one huge sheet-sized `Notes` region.
+- Note clusters now require local text proximity plus note-like evidence such
+  as notes/keynotes headings, numbered note lines, or instruction keywords.
+  Oversized clusters are rejected so downstream annotation, object, and quality
+  stages receive cleaner secondary regions.
+
+### Verified
+- Added regression coverage for a real notes block mixed with scattered
+  outside-main plan text.
+- Rescanned a supplied medium-difficulty fixture with `wall-qa-focus`; the
+  former near-whole-sheet notes region split into small local note clusters,
+  quality returned to `Usable`, and object candidates recovered from `81` to
+  `140`.
+- Placement deep validation, visual-snapshot validation, annotation/scanner
+  targeted tests, and the full solution test suite passed (`635` tests).
+
+## [0.02.169] - 2026-06-21
+
+### Improved
+- Main floorplan region detection now has a shape-aware title-block boundary
+  check. Compact bottom-right title blocks no longer reject valid floorplan
+  content that extends to the right above the title block, while full-height
+  side title strips and full-width bottom title strips still protect their
+  sheet bands.
+- Added a dense structural-core refinement fallback for noisy sheets. When the
+  broad content crop is still sheet-like, OpenPlanTrace can now seed from the
+  strongest local drawing cluster and grow through nearby geometry instead of
+  letting isolated note/detail/facade linework stretch the main floorplan
+  region.
+- Broad-content region refinement now preserves endpoint grid-axis anchors, so
+  dense unlayered PDFs can still infer grid axes from nearby label bubbles.
+
+### Diagnostics
+- Added `layout.main_region.content_refine_rejected` telemetry when a content
+  crop is rejected and the scanner falls back to broad sheet extents.
+
+### Verified
+- Added a regression test for noisy outlying linework that should not stretch
+  the main floorplan bounds.
+- Rescanned a supplied medium-difficulty fixture with
+  `--svg-profile wall-qa-focus`; the main floorplan crop tightened from roughly
+  `x=12,w=1166` to `x=83,w=852`, and the walls-only QA screenshot was rendered
+  for visual review.
+- Placement deep validation, visual-snapshot validation, and the full solution
+  test suite passed (`634` tests).
+
+## [0.02.168] - 2026-06-21
+
+### Added
+- Added a `wall-qa-focus` SVG profile for cropped wall-accuracy screenshots.
+  The profile keeps the walls-only QA layer set, crops the SVG viewBox around
+  clean wall topology, and keeps the right-side QA legend in-frame so review
+  screenshots are readable on difficult PDFs.
+
+### Improved
+- Wall-QA focus rendering now prefers clean wall topology bounds before falling
+  back to broad floorplan regions. This avoids accepting oversized
+  main-floorplan regions that cover almost the whole sheet.
+- CLI help, README documentation, and the visual-snapshot v4 schema now include
+  the new `wall-qa-focus` profile.
+
+### Verified
+- Added export contract tests for focused wall-QA viewBox cropping, legend
+  placement, profile aliases, and oversized-region fallback behavior.
+- Added schema contract coverage for the `wall-qa-focus` visual-snapshot
+  profile enum.
+- Rescanned a supplied medium-difficulty fixture with
+  `--svg-profile wall-qa-focus` and rendered a local walls-only QA screenshot
+  for visual review.
+
+## [0.02.167] - 2026-06-21
+
+### Improved
+- Placement readiness now blocks suspicious unpaired, fragment-merged interior
+  walls when they are not used by any detected room boundary. These noisy wall
+  chains stay in the scan as review evidence, but downstream engines should no
+  longer import them as exact partition geometry.
+- Added the machine-readable placement omission code
+  `fragmented_interior_without_room_boundary_support` and included it in the
+  placement v9 schema, wall-QA omission summaries, and README placement
+  contract notes.
+
+### Verified
+- Added regression coverage for blocking unsupported fragmented interior
+  linework while still allowing the same geometry when room detection uses it as
+  a boundary.
+- Rescanned a supplied medium-difficulty fixture:
+  placement-ready walls changed from `25/118` to `24/118`, omitted/review walls
+  changed from `93` to `94`, and `page:1:wall:77` plus
+  `page:1:wall:156` are now blocked with
+  `fragmented_interior_without_room_boundary_support`.
+- The updated medium-PDF placement JSON passed deep placement validation.
+
+## [0.02.166] - 2026-06-21
+
+### Fixed
+- Placement v9 JSON Schema now lists every wall `placementOmission.code`
+  currently emitted by the exporter, including
+  `fragmented_pair_review_required`,
+  `secondary_without_room_boundary_support`, and
+  `secondary_object_linework_without_room_boundary_support`.
+- Added schema contract coverage that pins the complete omission-code enum so
+  future exporter/schema drift is caught by tests.
+
+### Documented
+- README placement-contract notes now explain that omission-code totals and
+  enum values are intended downstream import signals for topology blockers,
+  duplicate faces, rejected evidence, object/detail linework, secondary walls,
+  fragmented-pair review, missing clean spans, and coordinate-review gates.
+
+### Verified
+- Schema contract tests passed with `45` tests.
+- The latest medium-PDF placement JSON containing
+  `secondary_object_linework_without_room_boundary_support` passed deep
+  placement validation.
+
 ## [0.02.165] - 2026-06-21
 
 ### Improved

@@ -923,6 +923,195 @@ public sealed class ScanQualityTests
     }
 
     [Fact]
+    public void PlacementExporter_BlocksFragmentMergedInteriorWithoutRoomBoundarySupport()
+    {
+        var regions = new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 600, 400), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(0, 0, 600, 400), Confidence.High)
+        };
+        var roomBoundary = SyntheticWall("room-boundary", 120, 100, 260, 100);
+        var suspiciousWall = SyntheticWall("fragmented-interior-detail", 180, 180, 310, 180) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = Enumerable.Range(1, 24).Select(index => $"fragment-source-{index}").ToArray(),
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "layer (unlayered) classified Unknown (0.35)",
+                "layer evidence: no strong layer name or geometry evidence"
+            ],
+            FragmentEvidence = new WallFragmentEvidence(
+                24,
+                2.8,
+                2.8,
+                0,
+                0.024,
+                RequiresGeometryReview: false,
+                ["fragment geometry: 24 fragment(s)"])
+        };
+        var wallGraph = new WallGraph(
+            [
+                SyntheticNode("n1", 120, 100),
+                SyntheticNode("n2", 260, 100),
+                SyntheticNode("n3", 180, 180),
+                SyntheticNode("n4", 310, 180)
+            ],
+            [
+                SyntheticEdge("e1", "n1", "n2", roomBoundary.Id),
+                SyntheticEdge("e2", "n3", "n4", suspiciousWall.Id)
+            ],
+            [
+                new WallGraphComponent(
+                    "component-main",
+                    1,
+                    WallGraphComponentKind.MainStructural,
+                    new PlanRect(116, 96, 198, 88),
+                    [roomBoundary.Id, suspiciousWall.Id],
+                    ["n1", "n2", "n3", "n4"],
+                    ["e1", "e2"],
+                    [roomBoundary.Id, suspiciousWall.Id],
+                    270,
+                    Confidence.High,
+                    ["synthetic main structural component"])
+            ]);
+        var result = CreateSyntheticResult(
+            regions: regions,
+            walls: [roomBoundary, suspiciousWall],
+            wallGraph: wallGraph,
+            rooms: [SyntheticRoom("r1", new PlanRect(120, 100, 140, 120), [roomBoundary.Id])],
+            wallEvidenceMap: new WallEvidenceMap(
+                [],
+                [],
+                [
+                    StrongPairedWallEvidence(roomBoundary, "both endpoints supported by structural context"),
+                    new WallEvidenceWallAssessment(
+                        suspiciousWall.Id,
+                        suspiciousWall.PageNumber,
+                        suspiciousWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        suspiciousWall.Confidence,
+                        PlacementReady: true,
+                        RequiresReview: false,
+                        RejectedAsNoise: false,
+                        suspiciousWall.SourcePrimitiveIds,
+                        ["wall evidence: medium wall body from wall-like layer, length, or structural context"])
+                    {
+                        Decision = WallEvidenceDecision.Accept
+                    }
+                ])) with
+        {
+            Quality = UsableQuality()
+        };
+
+        var reasons = WallPlacementContextGuards.BuildReviewReasons(result);
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var exportedWall = document.RootElement.GetProperty("walls").EnumerateArray().Single(item =>
+            item.GetProperty("id").GetString() == suspiciousWall.Id);
+
+        Assert.Contains(suspiciousWall.Id, reasons.Keys);
+        Assert.Contains(
+            WallPlacementContextGuards.FragmentMergedInteriorWithoutRoomBoundarySupportReason,
+            reasons[suspiciousWall.Id]);
+        Assert.False(exportedWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Equal(
+            "fragmented_interior_without_room_boundary_support",
+            exportedWall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.Equal(
+            1,
+            document.RootElement.GetProperty("summary").GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("fragmented_interior_without_room_boundary_support")
+                .GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_AllowsFragmentMergedInteriorWhenItIsRoomBoundary()
+    {
+        var regions = new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 600, 400), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(0, 0, 600, 400), Confidence.High)
+        };
+        var wall = SyntheticWall("fragmented-room-boundary", 180, 180, 310, 180) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = Enumerable.Range(1, 24).Select(index => $"fragment-source-{index}").ToArray(),
+            FragmentEvidence = new WallFragmentEvidence(
+                24,
+                2.8,
+                2.8,
+                0,
+                0.024,
+                RequiresGeometryReview: false,
+                ["fragment geometry: 24 fragment(s)"])
+        };
+        var wallGraph = new WallGraph(
+            [SyntheticNode("n1", 180, 180), SyntheticNode("n2", 310, 180)],
+            [SyntheticEdge("e1", "n1", "n2", wall.Id)],
+            [
+                new WallGraphComponent(
+                    "component-main",
+                    1,
+                    WallGraphComponentKind.MainStructural,
+                    new PlanRect(176, 176, 138, 8),
+                    [wall.Id],
+                    ["n1", "n2"],
+                    ["e1"],
+                    [wall.Id],
+                    130,
+                    Confidence.High,
+                    ["synthetic main structural component"])
+            ]);
+        var result = CreateSyntheticResult(
+            regions: regions,
+            walls: [wall],
+            wallGraph: wallGraph,
+            rooms: [SyntheticRoom("r1", new PlanRect(180, 120, 130, 120), [wall.Id])],
+            wallEvidenceMap: new WallEvidenceMap(
+                [],
+                [],
+                [
+                    new WallEvidenceWallAssessment(
+                        wall.Id,
+                        wall.PageNumber,
+                        wall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        wall.Confidence,
+                        PlacementReady: true,
+                        RequiresReview: false,
+                        RejectedAsNoise: false,
+                        wall.SourcePrimitiveIds,
+                        ["wall evidence: medium wall body from wall-like layer, length, or structural context"])
+                    {
+                        Decision = WallEvidenceDecision.Accept
+                    }
+                ])) with
+        {
+            Quality = UsableQuality()
+        };
+
+        var reasons = WallPlacementContextGuards.BuildReviewReasons(result);
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var exportedWall = document.RootElement.GetProperty("walls").EnumerateArray().Single(item =>
+            item.GetProperty("id").GetString() == wall.Id);
+
+        Assert.DoesNotContain(wall.Id, reasons.Keys);
+        Assert.True(exportedWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, exportedWall.GetProperty("placementOmission").ValueKind);
+        Assert.False(
+            document.RootElement.GetProperty("summary").GetProperty("wallPlacementOmissionCounts")
+                .TryGetProperty("fragmented_interior_without_room_boundary_support", out _));
+    }
+
+    [Fact]
     public void PlacementExporter_AllowsTrustedCompactPairedSecondaryReturnWithoutRoomBoundarySupport()
     {
         var regions = new[]

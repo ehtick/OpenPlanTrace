@@ -124,5 +124,8 @@ public static class WallPlacementReadinessEvaluator
             StringComparison.OrdinalIgnoreCase)
         || reason.Contains(
             WallPlacementContextGuards.SecondaryStructuralObjectLineworkWithoutRoomBoundarySupportReason,
+            StringComparison.OrdinalIgnoreCase)
+        || reason.Contains(
+            WallPlacementContextGuards.FragmentMergedInteriorWithoutRoomBoundarySupportReason,
             StringComparison.OrdinalIgnoreCase);
 }

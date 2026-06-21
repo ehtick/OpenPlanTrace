@@ -8,6 +8,9 @@ public static class WallPlacementContextGuards
     public const string SecondaryStructuralObjectLineworkWithoutRoomBoundarySupportReason =
         "secondary structural wall overlaps detected stair/object linework without room-boundary support";
 
+    public const string FragmentMergedInteriorWithoutRoomBoundarySupportReason =
+        "fragment-merged interior wall has suspicious linework and lacks room-boundary support";
+
     public static IReadOnlyDictionary<string, IReadOnlyList<string>> BuildReviewReasons(PlanScanResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
@@ -31,7 +34,20 @@ public static class WallPlacementContextGuards
         foreach (var wall in result.Walls)
         {
             componentByWallId.TryGetValue(wall.Id, out var component);
+            var wallIsRoomBoundary = roomWallIds.Contains(wall.Id);
             var hasRoomBoundarySupport = SecondaryStructuralComponentHasRoomBoundarySupport(component, roomWallIds);
+            if (!wallIsRoomBoundary
+                && FragmentMergedInteriorWallNeedsRoomBoundaryReview(
+                    wall,
+                    component,
+                    wallEvidenceByWallId))
+            {
+                AddReason(
+                    reasonsByWallId,
+                    wall.Id,
+                    FragmentMergedInteriorWithoutRoomBoundarySupportReason);
+            }
+
             if (!hasRoomBoundarySupport
                 && SecondaryStructuralWallOverlapsObjectLinework(
                     wall,
@@ -113,6 +129,38 @@ public static class WallPlacementContextGuards
         }
 
         return false;
+    }
+
+    private static bool FragmentMergedInteriorWallNeedsRoomBoundaryReview(
+        WallSegment wall,
+        WallGraphComponent? component,
+        IReadOnlyDictionary<string, WallEvidenceWallAssessment> wallEvidenceByWallId)
+    {
+        if (wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.PairEvidence is not null
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence
+            || wall.DrawingLength < Math.Max(48, wall.Thickness * 7.0)
+            || component?.ExcludedFromStructuralTopology == true
+            || component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment)
+        {
+            return false;
+        }
+
+        if (!wallEvidenceByWallId.TryGetValue(wall.Id, out var assessment)
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Category != WallEvidenceCategory.MediumWallBody)
+        {
+            return false;
+        }
+
+        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, wall.SourcePrimitiveIds.Count);
+        return fragmentCount >= 10
+            || fragmentEvidence.DuplicatePrimitiveCount >= 4
+            || fragmentEvidence.GapRatio >= 0.02
+            || fragmentEvidence.TotalHealedGap >= Math.Max(2.0, wall.Thickness * 0.35);
     }
 
     private static bool IsWallContaminatingObjectLinework(ObjectCandidate candidate) =>

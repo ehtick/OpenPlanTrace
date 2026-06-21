@@ -40,6 +40,7 @@ internal static class WallPlacementOmissionSummary
     private static readonly string[] PriorityOmissionCodes =
     [
         "fragmented_pair_review_required",
+        "fragmented_interior_without_room_boundary_support",
         "topology_import_blocked",
         "fragment_geometry_review"
     ];
@@ -208,6 +209,7 @@ internal static class WallPlacementOmissionSummary
         {
             "no_clean_topology_spans" => 10,
             "wall_evidence_review_required" => 20,
+            "fragmented_interior_without_room_boundary_support" => 24,
             "secondary_object_linework_without_room_boundary_support" => 25,
             "secondary_without_room_boundary_support" => 30,
             "isolated_fragment" => 40,
@@ -319,6 +321,7 @@ internal static class WallPlacementOmissionSummary
         code switch
         {
             "duplicate_wall_face" => "duplicate faces",
+            "fragmented_interior_without_room_boundary_support" => "fragmented interior no room",
             "fragmented_pair_review_required" => "fragmented pairs",
             "isolated_fragment" => "isolated fragments",
             "no_clean_topology_spans" => "no clean spans",
