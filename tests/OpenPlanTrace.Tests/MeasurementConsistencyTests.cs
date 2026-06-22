@@ -18,7 +18,29 @@ public sealed class MeasurementConsistencyTests
         Assert.True(report.HasOutliers);
         Assert.True(report.HasTolerableOutliers);
         Assert.False(report.HasBlockingOutliers);
+        Assert.True(report.HasDominantConsistentCluster);
+        Assert.Equal(0.75, report.ConsistentRatio);
         Assert.Equal(0.25, report.OutlierRatio);
+    }
+
+    [Fact]
+    public void MeasurementReport_TreatsStrongDominantClusterOutliersAsReviewOnly()
+    {
+        var report = new MeasurementConsistencyReport(
+            HasReliableCalibration: true,
+            SelectedMillimetersPerDrawingUnit: 17.638861940627578,
+            MedianDimensionMillimetersPerDrawingUnit: 17.6384,
+            DimensionScaleSpreadRatio: 8.288,
+            Confidence: Confidence.High,
+            Checks: CreateChecks(consistentCount: 11, outlierCount: 4));
+
+        Assert.True(report.HasOutliers);
+        Assert.True(report.HasDominantConsistentCluster);
+        Assert.True(report.HasTolerableOutliers);
+        Assert.False(report.HasBlockingOutliers);
+        Assert.Equal(0.733333, report.ConsistentRatio);
+        Assert.Equal(0.266667, report.OutlierRatio);
+        Assert.Equal(1, report.ConsistentScaleSpreadRatio);
     }
 
     [Fact]
@@ -34,6 +56,7 @@ public sealed class MeasurementConsistencyTests
 
         Assert.True(report.HasOutliers);
         Assert.False(report.HasTolerableOutliers);
+        Assert.False(report.HasDominantConsistentCluster);
         Assert.True(report.HasBlockingOutliers);
         Assert.Equal(0.5, report.OutlierRatio);
     }
@@ -47,9 +70,10 @@ public sealed class MeasurementConsistencyTests
             MedianDimensionMillimetersPerDrawingUnit: 71,
             DimensionScaleSpreadRatio: MeasurementConsistencyReport.BlockingScaleSpreadRatioThreshold,
             Confidence: Confidence.High,
-            Checks: CreateChecks(consistentCount: 6, outlierCount: 1));
+            Checks: CreateChecks(consistentCount: 3, outlierCount: 1));
 
         Assert.True(report.HasOutliers);
+        Assert.False(report.HasDominantConsistentCluster);
         Assert.True(report.HasBlockingOutliers);
     }
 
@@ -188,7 +212,10 @@ public sealed class MeasurementConsistencyTests
         Assert.Equal(1, report.GetProperty("checkedCount").GetInt32());
         Assert.Equal(1, report.GetProperty("consistentCount").GetInt32());
         Assert.Equal(0, report.GetProperty("outlierCount").GetInt32());
+        Assert.Equal(1, report.GetProperty("consistentRatio").GetDouble());
         Assert.Equal(0, report.GetProperty("outlierRatio").GetDouble());
+        Assert.Equal(JsonValueKind.Null, report.GetProperty("consistentScaleSpreadRatio").ValueKind);
+        Assert.False(report.GetProperty("hasDominantConsistentCluster").GetBoolean());
         Assert.False(report.GetProperty("hasBlockingOutliers").GetBoolean());
         Assert.False(report.GetProperty("hasTolerableOutliers").GetBoolean());
         Assert.Equal(MeasurementConsistencyReport.NonBlockingOutlierCountMaximum, report.GetProperty("nonBlockingOutlierCountMaximum").GetInt32());

@@ -1317,8 +1317,17 @@
         "outlierCount": {
           "$ref": "#/$defs/nonNegativeInteger"
         },
+        "consistentRatio": {
+          "$ref": "#/$defs/ratio"
+        },
         "outlierRatio": {
           "$ref": "#/$defs/ratio"
+        },
+        "consistentScaleSpreadRatio": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "hasDominantConsistentCluster": {
+          "type": "boolean"
         },
         "hasBlockingOutliers": {
           "type": "boolean"

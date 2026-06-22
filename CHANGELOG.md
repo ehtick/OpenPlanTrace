@@ -6,6 +6,33 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.216] - 2026-06-22
+
+### Improved
+- Strong dominant dimension clusters now keep metric placement usable even
+  when a bounded set of matched dimension checks are outliers.
+- Scan JSON now reports `consistentRatio`, `consistentScaleSpreadRatio`, and
+  `hasDominantConsistentCluster` so downstream consumers can see why metric
+  outliers are review-only instead of blocking.
+- Measurement outliers remain visible in diagnostics, quality issues, and
+  placement review issues; the change only removes the false hard block when
+  the trusted dimension cluster is tight and dominant.
+
+### Verified
+- Added regression coverage for the real medium-PDF pattern of `11`
+  consistent checks and `4` outliers, confirming metric import impact becomes
+  review-only.
+- Rescanned the medium architectural PDF: measurement QA stayed at `11/15`
+  consistent with `4` outliers, `hasDominantConsistentCluster` became `true`,
+  and `metricImportImpact` became `ReviewOnly`.
+- Placement export now reports `metricTrust` as
+  `CalibratedWithOutlierReview` and `readyForMetricPlacement` as `true`.
+- Rendered and inspected the wall-QA screenshot at
+  `real-pdf-output/medium-a20-102-20260622-dominant-scale-review-v1/wall-qa-review.png`.
+- Validated the generated scan and placement artifacts with the CLI validator.
+- Ran targeted measurement/export tests: `119` tests passed.
+- Ran the full test suite: `718` tests passed.
+
 ## [0.02.215] - 2026-06-22
 
 ### Fixed
