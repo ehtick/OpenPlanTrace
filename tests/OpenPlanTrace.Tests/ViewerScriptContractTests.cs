@@ -114,6 +114,38 @@ public sealed class ViewerScriptContractTests
     }
 
     [Fact]
+    public void ViewerWalls_FilterReviewOnlySolidSpansBeforeCleanBodyDrawing()
+    {
+        var script = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "app.js"));
+
+        Assert.Contains("function wallSolidSpanIsPlacementReady", script);
+        Assert.Contains(".filter((span) => wallSolidSpanIsPlacementReady(span, wall))", script);
+        Assert.Contains("span.readyForCoordinatePlacement === false || span.requiresReview === true", script);
+        Assert.Contains("span.placementOmissionCode", script);
+        Assert.Contains("return wallIsPlacementReady(wall);", script);
+    }
+
+    [Fact]
+    public void ViewerApi_ReturnsFullWallExportContractForPdfScans()
+    {
+        var program = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "Program.cs"));
+
+        Assert.Contains("IReadOnlyList<WallExport> Walls", program);
+        Assert.Contains("var traceExport = PlanTraceExport.From(result);", program);
+        Assert.Contains("traceExport.Walls", program);
+        Assert.DoesNotContain("IReadOnlyList<WallDto> Walls", program);
+    }
+
+    [Fact]
     public void ViewerWalls_DoNotFallbackToRawCenterlinesForPlacementQa()
     {
         var script = File.ReadAllText(Path.Combine(

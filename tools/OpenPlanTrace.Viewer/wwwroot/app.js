@@ -4883,6 +4883,7 @@ function wallBodyFootprints(wall) {
 function wallSolidBodySpans(wall) {
   return Array.isArray(wall?.solidSpans)
     ? wall.solidSpans
+      .filter((span) => wallSolidSpanIsPlacementReady(span, wall))
       .filter((span) => Array.isArray(span?.bodyPolygon) && span.bodyPolygon.length >= 3)
       .map((span, index) => ({
         id: span.id || `${wall.id}:solid-span:${index + 1}:body-footprint`,
@@ -4896,6 +4897,18 @@ function wallSolidBodySpans(wall) {
         evidence: span.evidence ?? []
       }))
     : [];
+}
+
+function wallSolidSpanIsPlacementReady(span, wall) {
+  if (!span || span.placementOmissionCode) {
+    return false;
+  }
+
+  if (span.readyForCoordinatePlacement === false || span.requiresReview === true) {
+    return false;
+  }
+
+  return wallIsPlacementReady(wall);
 }
 
 function solidSpanGeometrySource(span) {

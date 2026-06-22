@@ -6,6 +6,33 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.194] - 2026-06-22
+
+### Improved
+- Placement `solidSpans` now carry their own coordinate-readiness,
+  metric-readiness, review, review-reason, and parent omission-code fields.
+- The placement schema now states that `solidSpans` can be retained for
+  QA/body-footprint review and must be filtered by readiness before import.
+- The viewer now filters review-only solid spans before drawing clean wall body
+  footprints, preventing unsafe spans from appearing as placement-ready walls.
+- Viewer wall API contracts now preserve full wall export fields for any
+  fallback scan response path instead of a stripped wall DTO.
+
+### Verified
+- Added export/schema regression coverage for ready and review-only solid wall
+  spans, plus viewer contract coverage for the clean-wall filter.
+- Rescanned the supplied medium PDF `A20-102 PLAN 1. ETASJE.pdf` with
+  `wall-qa-focus`: `18` placement-ready walls, `97` omitted/review walls, and
+  `99` unsafe/review-only solid spans explicitly marked unsafe in
+  `placement.json`.
+- Rendered and inspected the wall-QA screenshot at
+  `%TEMP%/openplantrace-medium-a20-102-solid-span-readiness-v1.png`.
+- Verified the viewer upload API on `127.0.0.1:5083` returns `115` walls with
+  full topology/readiness data: `18` clean topology walls and `97`
+  review/blocked walls.
+- Ran targeted schema/export/viewer tests: `147` tests passed.
+- Ran the full test suite: `687` tests passed.
+
 ## [0.02.193] - 2026-06-22
 
 ### Improved

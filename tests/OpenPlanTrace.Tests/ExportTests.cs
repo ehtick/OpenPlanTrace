@@ -2062,8 +2062,20 @@ public sealed class ExportTests
         Assert.Equal(JsonValueKind.Object, solidSpan.GetProperty("alongVector").ValueKind);
         Assert.Equal(JsonValueKind.Object, solidSpan.GetProperty("normalVector").ValueKind);
         Assert.True(solidSpan.GetProperty("thicknessDrawingUnits").GetDouble() > 0);
-        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
-        Assert.True(wall.GetProperty("reliability").GetProperty("reasons").ValueKind == JsonValueKind.Array);
+        var wallReliability = wall.GetProperty("reliability");
+        Assert.True(solidSpan.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Equal(
+            wallReliability.GetProperty("requiresReview").GetBoolean(),
+            solidSpan.GetProperty("requiresReview").GetBoolean());
+        Assert.Equal(
+            JsonStrings(wallReliability.GetProperty("reasons")),
+            JsonStrings(solidSpan.GetProperty("reviewReasons")));
+        Assert.Equal(JsonValueKind.Null, solidSpan.GetProperty("placementOmissionCode").ValueKind);
+        Assert.True(wallReliability.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Equal(
+            wallReliability.GetProperty("readyForMetricPlacement").GetBoolean(),
+            solidSpan.GetProperty("readyForMetricPlacement").GetBoolean());
+        Assert.True(wallReliability.GetProperty("reasons").ValueKind == JsonValueKind.Array);
         Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
 
         var wallGraph = root.GetProperty("wallGraph");
@@ -2284,6 +2296,14 @@ public sealed class ExportTests
             placementOmission.GetProperty("evidence").EnumerateArray(),
             evidence => evidence.GetString()?.Contains("weak wall candidate", StringComparison.OrdinalIgnoreCase) == true);
         Assert.False(string.IsNullOrWhiteSpace(placementOmission.GetProperty("recommendedAction").GetString()));
+        var solidSpan = Assert.Single(wall.GetProperty("solidSpans").EnumerateArray());
+        Assert.False(solidSpan.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.False(solidSpan.GetProperty("readyForMetricPlacement").GetBoolean());
+        Assert.True(solidSpan.GetProperty("requiresReview").GetBoolean());
+        Assert.Equal("wall_evidence_review_required", solidSpan.GetProperty("placementOmissionCode").GetString());
+        Assert.Contains(
+            solidSpan.GetProperty("reviewReasons").EnumerateArray(),
+            reason => reason.GetString()?.Contains("wall evidence not placement-ready", StringComparison.OrdinalIgnoreCase) == true);
 
         var summary = document.RootElement.GetProperty("summary");
         var exportedWalls = document.RootElement.GetProperty("walls").EnumerateArray().ToArray();

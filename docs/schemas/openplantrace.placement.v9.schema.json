@@ -1044,7 +1044,7 @@
         },
         "solidSpans": {
           "type": "array",
-          "description": "Placement-ready solid wall centerline spans after anchored opening cutouts are subtracted. If the detector already split a wall at an opening, the span remains intact and carries adjacentOpeningIds.",
+          "description": "Solid wall centerline spans after anchored opening cutouts are subtracted. Consumers must inspect each span's readyForCoordinatePlacement/requiresReview fields before importing it; omitted or review-only walls may retain spans for QA/body-footprint review.",
           "items": {
             "$ref": "#/$defs/wallSolidSpan"
           }
@@ -1139,6 +1139,7 @@
             "structural_topology_excluded",
             "fragment_geometry_review",
             "fragmented_pair_review_required",
+            "weak_promoted_fragment_room_boundary_review_required",
             "one_endpoint_fragment_review_required",
             "fragmented_short_parallel_pair_review_required",
             "very_short_parallel_pair_review_required",
@@ -1344,6 +1345,11 @@
         "pageNumber",
         "wallId",
         "sequence",
+        "readyForCoordinatePlacement",
+        "readyForMetricPlacement",
+        "requiresReview",
+        "reviewReasons",
+        "placementOmissionCode",
         "centerLine",
         "centerLineMillimeters",
         "bodyPolygon",
@@ -1381,6 +1387,29 @@
         "sequence": {
           "type": "integer",
           "minimum": 1
+        },
+        "readyForCoordinatePlacement": {
+          "type": "boolean",
+          "description": "True only when this solid span belongs to wall geometry that passed coordinate-placement readiness checks."
+        },
+        "readyForMetricPlacement": {
+          "type": "boolean",
+          "description": "True only when this solid span is coordinate-ready and has reliable metric calibration."
+        },
+        "requiresReview": {
+          "type": "boolean",
+          "description": "True when this solid span is retained for QA/review but should not be imported as clean placement geometry without correction."
+        },
+        "reviewReasons": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Wall-level reliability reasons copied onto the span so consumers can make per-span import decisions without resolving parent wall state."
+        },
+        "placementOmissionCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Parent wall placementOmission.code when the span is retained for review/QA rather than clean coordinate placement."
         },
         "centerLine": {
           "$ref": "#/$defs/line"

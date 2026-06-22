@@ -1973,7 +1973,6 @@ public sealed record PlacementWallExport(
             .ThenBy(cutout => cutout.EndParameter)
             .ThenBy(cutout => cutout.OpeningId, StringComparer.Ordinal)
             .ToArray();
-        var solidSpans = PlacementWallSolidSpanExport.From(wall, scale, cutouts, openings);
         var excludedFromStructuralTopology =
             WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment);
         var reliability = PlacementReliability.ForWall(wall, calibration, component, evidenceAssessment, combinedReviewReasons);
@@ -1989,6 +1988,13 @@ public sealed record PlacementWallExport(
             repairCandidates,
             combinedReviewReasons);
         var exportReliability = ApplyPlacementOmissionToReliability(reliability, placementOmission);
+        var solidSpans = PlacementWallSolidSpanExport.From(
+            wall,
+            scale,
+            cutouts,
+            openings,
+            exportReliability,
+            placementOmission);
 
         return new PlacementWallExport(
             wall.Id,
@@ -2223,6 +2229,11 @@ public sealed record PlacementWallSolidSpanExport(
     int PageNumber,
     string WallId,
     int Sequence,
+    bool ReadyForCoordinatePlacement,
+    bool ReadyForMetricPlacement,
+    bool RequiresReview,
+    IReadOnlyList<string> ReviewReasons,
+    string? PlacementOmissionCode,
     LineExport CenterLine,
     LineExport? CenterLineMillimeters,
     IReadOnlyList<PointExport> BodyPolygon,
@@ -2248,7 +2259,9 @@ public sealed record PlacementWallSolidSpanExport(
         WallSegment wall,
         double? millimetersPerDrawingUnit,
         IReadOnlyList<PlacementWallOpeningCutoutExport> cutouts,
-        IReadOnlyList<OpeningCandidate> openings)
+        IReadOnlyList<OpeningCandidate> openings,
+        PlacementReliabilityExport? reliability = null,
+        PlacementWallOmissionExport? placementOmission = null)
     {
         var wallLength = wall.CenterLine.Length;
         if (wallLength <= 0.001)
@@ -2268,14 +2281,16 @@ public sealed record PlacementWallSolidSpanExport(
             if (cutoutStart > cursor)
             {
                 spans.Add(CreateSpan(
-                    wall,
-                    millimetersPerDrawingUnit,
-                    sequence++,
-                    cursor,
-                    cutoutStart,
-                    previousOpeningId,
-                    cutout.OpeningId,
-                    openings));
+                wall,
+                millimetersPerDrawingUnit,
+                sequence++,
+                cursor,
+                cutoutStart,
+                previousOpeningId,
+                cutout.OpeningId,
+                openings,
+                reliability,
+                placementOmission));
             }
 
             cursor = Math.Max(cursor, cutoutEnd);
@@ -2292,7 +2307,9 @@ public sealed record PlacementWallSolidSpanExport(
                 1.0,
                 previousOpeningId,
                 nextOpeningId: null,
-                openings));
+                openings,
+                reliability,
+                placementOmission));
         }
 
         return spans.ToArray();
@@ -2306,7 +2323,9 @@ public sealed record PlacementWallSolidSpanExport(
         double endParameter,
         string? previousOpeningId,
         string? nextOpeningId,
-        IReadOnlyList<OpeningCandidate> openings)
+        IReadOnlyList<OpeningCandidate> openings,
+        PlacementReliabilityExport? reliability,
+        PlacementWallOmissionExport? placementOmission)
     {
         var wallLength = wall.CenterLine.Length;
         var startPoint = wall.CenterLine.PointAt(startParameter);
@@ -2337,6 +2356,11 @@ public sealed record PlacementWallSolidSpanExport(
             wall.PageNumber,
             wall.Id,
             sequence,
+            reliability?.ReadyForCoordinatePlacement ?? true,
+            reliability?.ReadyForMetricPlacement ?? (millimetersPerDrawingUnit is > 0),
+            reliability?.RequiresReview ?? false,
+            reliability?.Reasons ?? Array.Empty<string>(),
+            placementOmission?.Code,
             LineExport.From(line),
             ScaleLine(line, millimetersPerDrawingUnit),
             bodyFootprint.Polygon.Select(PointExport.From).ToArray(),

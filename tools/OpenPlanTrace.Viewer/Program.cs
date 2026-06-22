@@ -376,7 +376,7 @@ internal sealed record ScanResponse(
     IReadOnlyList<GridBaySpacingDto> GridBaySpacings,
     IReadOnlyList<RegionDto> Regions,
     IReadOnlyList<SurfacePatternDto> SurfacePatterns,
-    IReadOnlyList<WallDto> Walls,
+    IReadOnlyList<WallExport> Walls,
     IReadOnlyList<NodeDto> Nodes,
     IReadOnlyList<EdgeDto> Edges,
     IReadOnlyList<WallComponentDto> WallComponents,
@@ -398,7 +398,7 @@ internal sealed record ScanResponse(
     private static ScanResponse Create(PlanScanResult result)
     {
         var sourceLayerLookup = BuildSourceLayerLookup(result.Document);
-        var wallComponentLookup = BuildWallComponentLookup(result.WallGraph.Components);
+        var traceExport = PlanTraceExport.From(result);
 
         return new ScanResponse(
             result.Document.Id,
@@ -413,7 +413,7 @@ internal sealed record ScanResponse(
             result.GridBaySpacings.Select(bay => GridBaySpacingDto.From(bay, sourceLayerLookup)).ToArray(),
             result.SheetRegions.Select(region => RegionDto.From(region, sourceLayerLookup)).ToArray(),
             result.SurfacePatterns.Select(pattern => SurfacePatternDto.From(pattern, sourceLayerLookup)).ToArray(),
-            result.Walls.Select(wall => WallDto.From(wall, sourceLayerLookup, wallComponentLookup)).ToArray(),
+            traceExport.Walls,
             result.WallGraph.Nodes.Select(NodeDto.From).ToArray(),
             result.WallGraph.Edges.Select(EdgeDto.From).ToArray(),
             result.WallGraph.Components.Select(component => WallComponentDto.From(component, sourceLayerLookup)).ToArray(),
