@@ -182,7 +182,13 @@ internal static class WallTopologySpanVisibility
         var reviewReasons = context.ReviewReasonsByWallId.TryGetValue(span.WallId, out var reasons)
             ? reasons
             : Array.Empty<string>();
-        if (!IsPlacementReadyStructuralSpan(component, assessment))
+        var trustedExteriorShellContinuityFragment =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
+                span.SourceWall,
+                component,
+                assessment);
+        if (!trustedExteriorShellContinuityFragment
+            && !IsPlacementReadyStructuralSpan(component, assessment))
         {
             return false;
         }
@@ -399,7 +405,13 @@ internal static class WallTopologySpanVisibility
             wall,
             component,
             assessment);
-        if (!IsPlacementReadyStructuralSpan(component, assessment)
+        var hasTrustedExteriorShellContinuityFragment =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
+                wall,
+                component,
+                assessment);
+        if ((!IsPlacementReadyStructuralSpan(component, assessment)
+                && !hasTrustedExteriorShellContinuityFragment)
             || assessment is null
             || !assessment.PlacementReady
             || assessment.RequiresReview
@@ -407,7 +419,8 @@ internal static class WallTopologySpanVisibility
             || assessment.Decision == WallEvidenceDecision.Reject
             || (assessment.Category is not (WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.RecoveredWallBody)
                 && !hasTopologySupportedFragmentedPairPromotion
-                && !hasTrustedFragmentMergedPromotion))
+                && !hasTrustedFragmentMergedPromotion
+                && !hasTrustedExteriorShellContinuityFragment))
         {
             return false;
         }
@@ -423,7 +436,8 @@ internal static class WallTopologySpanVisibility
         }
 
         return HasTrustedSourceBackedFallbackPairEvidence(wall, component, assessment)
-            || hasTrustedFragmentMergedPromotion;
+            || hasTrustedFragmentMergedPromotion
+            || hasTrustedExteriorShellContinuityFragment;
     }
 
     private static bool IsTrustedSourceBackedFallbackFragmentEvidence(
@@ -487,7 +501,6 @@ internal static class WallTopologySpanVisibility
     {
         var pair = wall.PairEvidence;
         if (pair is null
-            || pair.Score < MinSourceBackedFallbackPairScore
             || pair.OverlapRatio < MinSourceBackedFallbackOverlapRatio
             || pair.FaceSeparation < MinSourceBackedFallbackFaceSeparationDrawingUnits
             || pair.FaceSeparation > MaxSourceBackedFallbackFaceSeparationDrawingUnits)
@@ -499,7 +512,19 @@ internal static class WallTopologySpanVisibility
             wall,
             component,
             assessment);
+        var hasTrustedExteriorShellContinuityFragment =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
+                wall,
+                component,
+                assessment);
+        if (!hasTrustedExteriorShellContinuityFragment
+            && pair.Score < MinSourceBackedFallbackPairScore)
+        {
+            return false;
+        }
+
         if (!hasTopologySupportedFragmentedPairPromotion
+            && !hasTrustedExteriorShellContinuityFragment
             && pair.Score < MinSourceBackedFallbackStrictPairScore
             && pair.OverlapRatio < MinSourceBackedFallbackRelaxedScoreOverlapRatio)
         {
@@ -509,6 +534,8 @@ internal static class WallTopologySpanVisibility
         var maxFaceFragmentCount = Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount);
         var fragmentLimit = hasTopologySupportedFragmentedPairPromotion
             ? MaxTopologySupportedSourceBackedFallbackFaceFragmentCount
+            : hasTrustedExteriorShellContinuityFragment
+                ? int.MaxValue
             : wall.DrawingLength >= MinLongSourceBackedFallbackWallLengthDrawingUnits
             && component?.Kind == WallGraphComponentKind.MainStructural
                 ? MaxLongSourceBackedFallbackFaceFragmentCount

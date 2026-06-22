@@ -14,6 +14,9 @@ public static class WallPlacementReadinessEvaluator
     public const string NoisyTopologySupportedFragmentedPairReason =
         "topology-supported fragmented paired wall has excessive face fragmentation for exact placement";
 
+    public const string TrustedExteriorShellContinuityEvidence =
+        "exterior shell continuity kept fragmented paired wall placement-ready between trusted collinear exterior wall segments";
+
     private const double MaxShortDenseDetailCandidateLengthDrawingUnits = 55.0;
     private const double MinShortDenseDetailCandidateSourceDensity = 0.65;
     private const double MaxNoisyTopologySupportedFragmentedPairLengthDrawingUnits = 72.0;
@@ -22,6 +25,12 @@ public static class WallPlacementReadinessEvaluator
     private const double MaxThinExteriorFacePairThicknessMillimeters = 65.0;
     private const double MinRoomBackedThinExteriorLengthDrawingUnits = 80.0;
     private const double MinRoomBackedThinExteriorPairScore = 0.78;
+    private const double MinTrustedExteriorShellContinuityLengthDrawingUnits = 80.0;
+    private const double MinTrustedExteriorShellContinuityPairScore = 0.60;
+    private const double MinTrustedExteriorShellContinuityOverlapRatio = 0.95;
+    private const double MinTrustedExteriorShellContinuityFaceSeparationDrawingUnits = 2.0;
+    private const double MaxTrustedExteriorShellContinuityFaceSeparationDrawingUnits = 18.0;
+    private const int MaxTrustedExteriorShellContinuityFaceFragments = 144;
 
     public static WallPlacementReadiness Evaluate(
         WallSegment wall,
@@ -44,9 +53,14 @@ public static class WallPlacementReadinessEvaluator
             reasons.Add("metric scale unavailable");
         }
 
+        var trustedExteriorShellContinuityFragment = IsTrustedExteriorShellContinuityFragment(
+            wall,
+            component,
+            evidenceAssessment);
+
         if (component is not null)
         {
-            AddComponentReasons(component, reasons);
+            AddComponentReasons(component, reasons, trustedExteriorShellContinuityFragment);
         }
 
         if (wall.FragmentEvidence?.RequiresGeometryReview == true)
@@ -68,7 +82,9 @@ public static class WallPlacementReadinessEvaluator
             reasons.AddRange(reviewReasonList);
         }
 
-        var coordinatePlacementBlocked = CoordinatePlacementBlockedByComponent(component);
+        var coordinatePlacementBlocked = CoordinatePlacementBlockedByComponent(
+            component,
+            trustedExteriorShellContinuityFragment);
         var coordinatePlacementBlockedByReviewReason = reviewReasonList.Any(IsCoordinateBlockingReviewReason);
         var coordinatePlacementBlockedByRecoveredExteriorEvidence =
             CoordinatePlacementBlockedByRecoveredOneSidedExteriorEvidence(wall, evidenceAssessment);
@@ -156,7 +172,8 @@ public static class WallPlacementReadinessEvaluator
 
     private static void AddComponentReasons(
         WallGraphComponent component,
-        List<string> reasons)
+        List<string> reasons,
+        bool trustedExteriorShellContinuityFragment)
     {
         if (component.ExcludedFromStructuralTopology)
         {
@@ -167,7 +184,8 @@ public static class WallPlacementReadinessEvaluator
         {
             reasons.Add("wall belongs to compact object-like linework component");
         }
-        else if (component.Kind == WallGraphComponentKind.IsolatedFragment)
+        else if (component.Kind == WallGraphComponentKind.IsolatedFragment
+            && !trustedExteriorShellContinuityFragment)
         {
             reasons.Add("wall belongs to isolated wall graph fragment");
         }
@@ -193,9 +211,77 @@ public static class WallPlacementReadinessEvaluator
         }
     }
 
-    private static bool CoordinatePlacementBlockedByComponent(WallGraphComponent? component) =>
+    private static bool CoordinatePlacementBlockedByComponent(
+        WallGraphComponent? component,
+        bool trustedExteriorShellContinuityFragment) =>
         component?.ExcludedFromStructuralTopology == true
-        || component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment;
+        || component?.Kind == WallGraphComponentKind.ObjectLikeIsland
+        || (component?.Kind == WallGraphComponentKind.IsolatedFragment
+            && !trustedExteriorShellContinuityFragment);
+
+    public static bool IsTrustedExteriorShellContinuityFragment(
+        WallSegment? wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? evidenceAssessment)
+    {
+        if (wall is null
+            || component is null
+            || evidenceAssessment is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind != WallGraphComponentKind.IsolatedFragment
+            || !evidenceAssessment.PlacementReady
+            || evidenceAssessment.RequiresReview
+            || evidenceAssessment.RejectedAsNoise
+            || evidenceAssessment.Decision == WallEvidenceDecision.Reject
+            || evidenceAssessment.Category is not (WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.RecoveredWallBody)
+            || wall.WallType != WallType.Exterior
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedExteriorShellContinuityLengthDrawingUnits
+            || wall.PairEvidence is not { } pair)
+        {
+            return false;
+        }
+
+        if (pair.Score < MinTrustedExteriorShellContinuityPairScore
+            || pair.OverlapRatio < MinTrustedExteriorShellContinuityOverlapRatio
+            || pair.FaceSeparation < MinTrustedExteriorShellContinuityFaceSeparationDrawingUnits
+            || pair.FaceSeparation > MaxTrustedExteriorShellContinuityFaceSeparationDrawingUnits
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > MaxTrustedExteriorShellContinuityFaceFragments)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(evidenceAssessment.Evidence)
+            .Concat(evidenceAssessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(evidenceAssessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(component.Evidence)
+            .ToArray();
+
+        if (!EvidenceContains(evidence, TrustedExteriorShellContinuityEvidence))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "covered-entry",
+            "covered entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim",
+            "glazing",
+            "detail linework",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
 
     private static bool CoordinatePlacementBlockedByRecoveredOneSidedExteriorEvidence(
         WallSegment wall,

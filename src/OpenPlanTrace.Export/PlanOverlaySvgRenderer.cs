@@ -935,11 +935,18 @@ public static class PlanOverlaySvgRenderer
             classes.Add("wall-topology-span-review");
         }
 
+        var trustedExteriorShellContinuityFragment =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
+                span.SourceWall,
+                component,
+                evidenceAssessment);
+
         if (WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment))
         {
             classes.Add("wall-topology-span-excluded");
         }
-        else if (!WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment))
+        else if (!trustedExteriorShellContinuityFragment
+            && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment))
         {
             classes.Add("wall-topology-span-review-only");
         }
@@ -986,8 +993,15 @@ public static class PlanOverlaySvgRenderer
             classes.Add("wall-body-footprint-review");
         }
 
+        var trustedExteriorShellContinuityFragment =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
+                footprint.SourceWall,
+                component,
+                evidenceAssessment);
+
         if (WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment)
-            || !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment))
+            || (!trustedExteriorShellContinuityFragment
+                && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment)))
         {
             classes.Add("wall-body-footprint-excluded");
         }

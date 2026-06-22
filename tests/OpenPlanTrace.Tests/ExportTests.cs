@@ -3202,6 +3202,95 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversSourceBackedSpanWhenTrustedExteriorShellContinuityFragmentIsIsolated()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.616,
+            pairOverlapRatio: 1,
+            firstFaceFragmentCount: 8,
+            secondFaceFragmentCount: 124,
+            wallLength: 91,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.IsolatedFragment,
+            category: WallEvidenceCategory.MediumWallBody,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "face separation 7.958 drawing units",
+                "pair score 0.616",
+                "overlap ratio 1",
+                "first face merged 8 fragments",
+                "second face merged 124 fragments",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                $"wall evidence: {WallPlacementReadinessEvaluator.TrustedExteriorShellContinuityEvidence}"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.DoesNotContain(
+            wall.GetProperty("reliability").GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetString() == "wall belongs to isolated wall graph fragment");
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("exterior shell continuity", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_DoesNotRecoverTrustedExteriorShellFragmentWhenCoveredEntryEvidenceIsPresent()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.616,
+            pairOverlapRatio: 1,
+            firstFaceFragmentCount: 8,
+            secondFaceFragmentCount: 124,
+            wallLength: 91,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.IsolatedFragment,
+            category: WallEvidenceCategory.MediumWallBody,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "outdoor covered-area boundary near overbygd entry",
+                $"wall evidence: {WallPlacementReadinessEvaluator.TrustedExteriorShellContinuityEvidence}"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "covered_area_boundary_review_required",
+            wall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversSourceBackedSpanWhenCleanPromotedFragmentRoomBoundaryHasNoGraphSpan()
     {
         var result = CreateSourceBackedFragmentFallbackWallResult();
@@ -5726,7 +5815,10 @@ public sealed class ExportTests
         int firstFaceFragmentCount = 2,
         int secondFaceFragmentCount = 2,
         double wallLength = 100,
+        WallType wallType = WallType.Interior,
+        WallGraphComponentKind componentKind = WallGraphComponentKind.MainStructural,
         WallEvidenceCategory category = WallEvidenceCategory.StrongWallBody,
+        IReadOnlyList<string>? componentEvidence = null,
         IReadOnlyList<string>? evidence = null)
     {
         var wallEndX = 80 + wallLength;
@@ -5739,7 +5831,7 @@ public sealed class ExportTests
         var wall = SyntheticWall("source-backed-fallback-wall", 80, 120, wallEndX, 120) with
         {
             DetectionKind = WallDetectionKind.ParallelLinePair,
-            WallType = WallType.Interior,
+            WallType = wallType,
             PairEvidence = new WallPairEvidence(
                 new PlanLineSegment(new PlanPoint(80, 116), new PlanPoint(wallEndX, 116)),
                 new PlanLineSegment(new PlanPoint(80, 124), new PlanPoint(wallEndX, 124)),
@@ -5779,7 +5871,7 @@ public sealed class ExportTests
         var component = new WallGraphComponent(
             "source-backed-fallback-component",
             1,
-            WallGraphComponentKind.MainStructural,
+            componentKind,
             UnionBounds(walls.Select(item => item.Bounds)),
             walls.Select(item => item.Id).ToArray(),
             nodes.Select(item => item.Id).ToArray(),
@@ -5787,7 +5879,7 @@ public sealed class ExportTests
             walls.SelectMany(item => item.SourcePrimitiveIds).ToArray(),
             walls.Sum(item => item.DrawingLength),
             Confidence.High,
-            ["synthetic main structural wall body without graph topology"]);
+            componentEvidence ?? ["synthetic main structural wall body without graph topology"]);
         var assessments = walls
             .Select(item => new WallEvidenceWallAssessment(
                 item.Id,

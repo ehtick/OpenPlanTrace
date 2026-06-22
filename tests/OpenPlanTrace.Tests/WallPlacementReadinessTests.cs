@@ -50,6 +50,100 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsTrustedExteriorShellContinuityIsolatedFragment()
+    {
+        var wall = Wall("wall:trusted-exterior-shell-gap", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(191, 100)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 96), new PlanPoint(191, 96)),
+                new PlanLineSegment(new PlanPoint(100, 104), new PlanPoint(191, 104)),
+                FaceSeparation: 8,
+                OverlapRatio: 1,
+                Score: 0.616,
+                FirstFaceFragmentCount: 8,
+                SecondFaceFragmentCount: 124,
+                FirstFaceSourcePrimitiveIds: ["trusted-shell-face-a"],
+                SecondFaceSourcePrimitiveIds: ["trusted-shell-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                $"wall evidence: {WallPlacementReadinessEvaluator.TrustedExteriorShellContinuityEvidence}"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview);
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksTrustedExteriorShellContinuityFragmentNearCoveredEntryEvidence()
+    {
+        var wall = Wall("wall:covered-entry-shell-gap", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(191, 100)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 96), new PlanPoint(191, 96)),
+                new PlanLineSegment(new PlanPoint(100, 104), new PlanPoint(191, 104)),
+                FaceSeparation: 8,
+                OverlapRatio: 1,
+                Score: 0.616,
+                FirstFaceFragmentCount: 8,
+                SecondFaceFragmentCount: 124,
+                FirstFaceSourcePrimitiveIds: ["covered-shell-face-a"],
+                SecondFaceSourcePrimitiveIds: ["covered-shell-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "outdoor covered-area boundary near overbygd entry",
+                $"wall evidence: {WallPlacementReadinessEvaluator.TrustedExteriorShellContinuityEvidence}"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_AllowsStrongStructuralWallWithReliableScale()
     {
         var wall = Wall("wall:structural", Confidence.High);
