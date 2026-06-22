@@ -47,6 +47,7 @@ internal static class WallPlacementOmissionSummary
         "fragmented_short_parallel_pair_review_required",
         "very_short_parallel_pair_review_required",
         "short_parallel_pair_review_required",
+        "covered_area_boundary_review_required",
         "repeated_short_detail_review_required",
         "tiny_door_adjacent_topology_suppressed",
         "short_dense_detail_review_required",
@@ -245,6 +246,7 @@ internal static class WallPlacementOmissionSummary
             "fragmented_short_parallel_pair_review_required" => 27,
             "very_short_parallel_pair_review_required" => 28,
             "short_parallel_pair_review_required" => 29,
+            "covered_area_boundary_review_required" => 29,
             "repeated_short_detail_review_required" => 30,
             "secondary_without_room_boundary_support" => 30,
             "isolated_fragment" => 40,
@@ -415,6 +417,7 @@ internal static class WallPlacementOmissionSummary
         {
             "duplicate_clean_topology_span" => "duplicate clean spans",
             "duplicate_wall_face" => "duplicate faces",
+            "covered_area_boundary_review_required" => "covered/outdoor boundaries",
             "fragmented_interior_without_room_boundary_support" => "fragmented interior no room",
             "fragmented_pair_review_required" => "fragmented pairs",
             "isolated_fragment" => "isolated fragments",

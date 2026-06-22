@@ -204,6 +204,36 @@ public sealed class RoomSemanticsTests
     }
 
     [Fact]
+    public async Task ScanAsync_ClassifiesCoveredEntranceAsOutdoorBeforeLobby()
+    {
+        var document = new PlanDocument(
+            "covered-entrance-room-use",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(500, 360),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-top", new PlanPoint(80, 80), new PlanPoint(420, 80)),
+                        Wall("wall-right", new PlanPoint(420, 80), new PlanPoint(420, 280)),
+                        Wall("wall-bottom", new PlanPoint(420, 280), new PlanPoint(80, 280)),
+                        Wall("wall-left", new PlanPoint(80, 280), new PlanPoint(80, 80)),
+                        RoomText("covered-entry-label", "OVERBYGD INNGANG", new PlanRect(175, 170, 150, 16))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        var room = Assert.Single(result.Rooms);
+
+        Assert.Equal("OVERBYGD INNGANG", room.Label);
+        Assert.Equal(RoomUseKind.Outdoor, room.UseKind);
+        Assert.Contains(room.Evidence, item => item.Contains("room use kind Outdoor", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(room.Evidence, item => item.Contains("room-use term 'overbygd'", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(room.Evidence, item => item.Contains("room use kind Lobby", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ScanAsync_UsesWallGraphFacesForAdjacentRooms()
     {
         var result = await ScanAdjacentRoomsAsync();

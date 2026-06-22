@@ -702,6 +702,56 @@ public sealed class ScanQualityTests
     }
 
     [Fact]
+    public void ImportReadiness_ExposesCoveredAreaBoundaryReviewCode()
+    {
+        var wall = SyntheticWall("covered-entry-boundary", 100, 148, 220, 148) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            Evidence =
+            [
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            ]
+        };
+        var assessment = new WallEvidenceWallAssessment(
+            wall.Id,
+            wall.PageNumber,
+            wall.Bounds,
+            WallEvidenceCategory.SurfacePatternDetail,
+            new Confidence(0.82),
+            PlacementReady: false,
+            RequiresReview: true,
+            RejectedAsNoise: false,
+            wall.SourcePrimitiveIds,
+            [
+                "wall evidence: outdoor covered-area boundary near 'overbygd' is review-only; thin unlayered local-boundary pair has no distinct structural support for placement"
+            ])
+        {
+            Decision = WallEvidenceDecision.Review
+        };
+        var result = CreateSyntheticResult(
+            walls: [wall],
+            rooms: [SyntheticRoom("r1", new PlanRect(130, 170, 80, 60), [wall.Id])],
+            wallEvidenceMap: new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                [assessment])) with
+        {
+            Quality = UsableQuality()
+        };
+
+        var readiness = PlanImportReadiness.FromScanResult(result);
+
+        Assert.True(readiness.RequiresReview);
+        Assert.Contains("placement.wall_evidence.requires_review", readiness.ReviewIssueCodes);
+        Assert.Contains("placement.wall_exterior.covered_area_boundaries_require_review", readiness.ReviewIssueCodes);
+        Assert.Contains(
+            readiness.RecommendedActions,
+            action => action.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+                && action.Contains("exterior walls", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void ImportReadiness_BlocksSecondaryStructuralComponentWithoutRoomBoundarySupport()
     {
         var regions = new[]

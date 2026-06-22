@@ -6,6 +6,32 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.208] - 2026-06-22
+
+### Improved
+- Room-use semantics now classify covered/outdoor entrance labels such as
+  `Overbygd inngang` as `Outdoor` before generic lobby/entry terms can match.
+- Placement export now has a specific
+  `covered_area_boundary_review_required` omission bucket for covered-entry,
+  terrace, canopy, or outdoor boundary wall-like candidates.
+- Scan import readiness now exposes
+  `placement.wall_exterior.covered_area_boundaries_require_review` when covered
+  or outdoor boundary candidates must be reviewed before exterior wall import.
+- Wall-placement omission summaries now count covered/outdoor boundary review
+  candidates separately from generic rejected wall evidence.
+
+### Verified
+- Added regression coverage for covered-entry room-use precedence, placement
+  covered-boundary omissions, and scan import-readiness review codes.
+- Rescanned the private easy wall-accuracy PDF: `Overbygd inngang` is now
+  classified as `Outdoor` with `overbygd` label evidence.
+- Rendered and inspected the wall-only QA screenshot at
+  `%TEMP%/openplantrace-private-easy-covered-boundary-20260622-v2-wall-qa.png`;
+  the covered entry is no longer treated as a blue exterior shell, though
+  nearby bathroom/entry wall alignment still needs follow-up accuracy work.
+- Ran targeted scan/export/wall tests: `226` tests passed.
+- Ran the full test suite: `707` tests passed.
+
 ## [0.02.207] - 2026-06-22
 
 ### Improved

@@ -698,6 +698,8 @@ public sealed record PlacementImportReadinessExport(
                 ? "placement.wall_exterior.thin_face_pairs_require_review"
             : string.Equals(code, "placement.review.fragmented_short_parallel_pair", StringComparison.Ordinal)
                 ? "placement.wall_pairs.fragmented_short_pairs_require_review"
+            : string.Equals(code, "placement.review.covered_area_boundary", StringComparison.Ordinal)
+                ? "placement.wall_exterior.covered_area_boundaries_require_review"
             : code;
 
     private static bool ShouldKeepPlacementIssueInformationalForReadiness(string code) =>
@@ -1282,6 +1284,16 @@ public sealed record PlacementWallOmissionExport(
                 "DuplicateCleanTopology",
                 "Wall is omitted from clean placement topology because another clean wall span already represents the same run.",
                 "Use the linked clean wall span for placement and keep this wall only as source/evidence context.");
+        }
+
+        if (ContainsEvidence(evidence, "outdoor covered-area boundary")
+            || ContainsEvidence(evidence, "unpaired outdoor covered-area boundary"))
+        {
+            return new PlacementWallOmissionClassification(
+                "covered_area_boundary_review_required",
+                "CoveredAreaBoundaryReview",
+                "Wall-like linework is omitted from clean placement topology because it is near a covered-entry, terrace, canopy, or outdoor label and lacks trusted exterior shell support.",
+                "Review the source PDF before importing this as an exterior wall; it may be covered-entry boundary, canopy, railing, glazing, or detail linework.");
         }
 
         if (evidenceAssessment?.RejectedAsNoise == true
@@ -3858,6 +3870,48 @@ public sealed record PlacementIssueExport(
                     (wall.PlacementOmission?.Evidence ?? Array.Empty<string>())
                         .Concat(wall.Reliability.Reasons)
                         .DefaultIfEmpty("Thin exterior face-pair wall candidate is not coordinate-ready.")),
+                properties);
+        }
+
+        foreach (var wall in (placementWallsById?.Values ?? Array.Empty<PlacementWallExport>())
+                     .Where(wall => string.Equals(
+                         wall.PlacementOmission?.Code,
+                         "covered_area_boundary_review_required",
+                         StringComparison.Ordinal))
+                     .OrderBy(wall => wall.PageNumber)
+                     .ThenBy(wall => wall.Id, StringComparer.Ordinal))
+        {
+            var properties = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["detector"] = "placementWallReliability",
+                ["wallId"] = wall.Id,
+                ["wallType"] = wall.WallType,
+                ["placementOmissionCode"] = wall.PlacementOmission?.Code ?? string.Empty,
+                ["placementOmissionCategory"] = wall.PlacementOmission?.Category ?? string.Empty,
+                ["drawingLength"] = wall.DrawingLength.ToString("0.###", CultureInfo.InvariantCulture),
+                ["lengthMeters"] = wall.LengthMeters?.ToString("0.###", CultureInfo.InvariantCulture) ?? string.Empty,
+                ["readyForCoordinatePlacement"] = wall.Reliability.ReadyForCoordinatePlacement.ToString(CultureInfo.InvariantCulture),
+                ["requiresReview"] = wall.Reliability.RequiresReview.ToString(CultureInfo.InvariantCulture)
+            };
+
+            yield return new PlacementIssueExport(
+                "placement.review.covered_area_boundary",
+                DiagnosticSeverity.Warning.ToString(),
+                "Covered/outdoor boundary wall-like candidate requires review before exterior wall placement.",
+                wall.PageNumber,
+                new[] { wall.PageNumber },
+                wall.Id,
+                wall.Bounds,
+                wall.BoundsMillimeters,
+                ClampRatio(wall.Confidence),
+                wall.PlacementOmission?.RecommendedAction
+                    ?? "Review the source PDF before importing this candidate as exterior wall geometry.",
+                wall.SourcePrimitiveIds,
+                wall.SourceLayers,
+                BuildIssueEvidence(
+                    (wall.PlacementOmission?.Evidence ?? Array.Empty<string>())
+                        .Concat(wall.Reliability.Reasons)
+                        .DefaultIfEmpty("Covered/outdoor boundary candidate is not coordinate-ready.")),
                 properties);
         }
 

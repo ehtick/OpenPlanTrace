@@ -2100,6 +2100,7 @@ internal sealed class RoomDetectionStage : IPipelineStage
     private static readonly RoomUseRule[] RoomUseRules =
     {
         new(RoomUseKind.Corridor, new[] { "corridor", "corr", "hallway", "passage", "passasje", "korridor", "gang" }),
+        new(RoomUseKind.Outdoor, new[] { "outdoor", "outside", "terrace", "terrasse", "balcony", "balkong", "veranda", "patio", "porch", "covered", "covered entry", "covered entrance", "overbygd", "overbygget", "overbygd inngang", "overbygget inngang", "canopy", "carport", "uteplass" }),
         new(RoomUseKind.Lobby, new[] { "lobby", "reception", "vestibule", "entrance", "foyer", "inngang" }),
         new(RoomUseKind.Restroom, new[] { "wc", "toilet", "restroom", "washroom", "lavatory", "urinal" }),
         new(RoomUseKind.Bathroom, new[] { "bath", "bathroom", "bad", "shower", "dusj" }),
@@ -2120,7 +2121,6 @@ internal sealed class RoomDetectionStage : IPipelineStage
         new(RoomUseKind.Laboratory, new[] { "lab", "laboratory", "laboratorium" }),
         new(RoomUseKind.Industrial, new[] { "production", "process", "workshop", "verksted", "industrial" }),
         new(RoomUseKind.Parking, new[] { "parking", "garage", "garasje" }),
-        new(RoomUseKind.Outdoor, new[] { "outdoor", "outside", "terrace", "terrasse", "balcony", "balkong", "veranda", "patio", "porch", "covered entry", "covered entrance", "overbygd inngang", "overbygget inngang", "carport", "uteplass" }),
         new(RoomUseKind.CommonArea, new[] { "common", "amenity", "break", "cafeteria", "kantine" })
     };
 }

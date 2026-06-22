@@ -2337,6 +2337,82 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForCoveredAreaBoundaryReviewWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.SurfacePatternDetail,
+                        new Confidence(0.82),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence:
+                        [
+                            "wall evidence: outdoor covered-area boundary near 'overbygd' is review-only; thin unlayered local-boundary pair has no distinct structural support for placement"
+                        ])
+                    {
+                        Decision = WallEvidenceDecision.Review
+                    }
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("covered_area_boundary_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("CoveredAreaBoundaryReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("covered-entry", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            placementOmission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("outdoor covered-area boundary", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("covered_area_boundary_review_required")
+                .GetInt32());
+
+        var issue = Assert.Single(
+            document.RootElement.GetProperty("issues").EnumerateArray(),
+            item => item.GetProperty("code").GetString() == "placement.review.covered_area_boundary"
+                && item.GetProperty("itemId").GetString() == firstWall.Id);
+        Assert.Equal("covered_area_boundary_review_required", issue.GetProperty("properties").GetProperty("placementOmissionCode").GetString());
+        Assert.Contains("Covered/outdoor boundary", issue.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            issue.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("overbygd", StringComparison.OrdinalIgnoreCase) == true);
+
+        var importReadiness = summary.GetProperty("importReadiness");
+        Assert.Contains(
+            "placement.wall_exterior.covered_area_boundaries_require_review",
+            JsonStrings(importReadiness.GetProperty("reviewIssueCodes")));
+        Assert.DoesNotContain(
+            "placement.review.covered_area_boundary",
+            JsonStrings(importReadiness.GetProperty("reviewIssueCodes")));
+    }
+
+    [Fact]
     public async Task PlacementExporter_UsesSpecificOmissionForDemotedFragmentedPairedWalls()
     {
         var result = await CreateScanResultAsync();

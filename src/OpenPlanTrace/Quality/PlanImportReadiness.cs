@@ -31,6 +31,7 @@ public sealed record PlanImportReadiness(
     private const string OpeningPlacementInconsistentIssueCode = "placement.opening.placement_inconsistent";
     private const string WallEvidenceRequiresReviewIssueCode = "placement.wall_evidence.requires_review";
     private const string FragmentedShortWallPairsRequireReviewIssueCode = "placement.wall_pairs.fragmented_short_pairs_require_review";
+    private const string CoveredAreaBoundariesRequireReviewIssueCode = "placement.wall_exterior.covered_area_boundaries_require_review";
 
     public static PlanImportReadiness Empty { get; } =
         new(
@@ -327,6 +328,14 @@ public sealed record PlanImportReadiness(
                 DiagnosticSeverity.Warning);
         }
 
+        if (ScanReviewQueueSummary.QueuedWallEvidenceReviews(result.WallEvidenceMap)
+            .Any(IsCoveredAreaBoundaryReview))
+        {
+            yield return new PlanImportReadinessIssue(
+                CoveredAreaBoundariesRequireReviewIssueCode,
+                DiagnosticSeverity.Warning);
+        }
+
         if (!result.Calibration.HasReliableMeasurementScale)
         {
             yield return new PlanImportReadinessIssue(
@@ -459,6 +468,11 @@ public sealed record PlanImportReadiness(
             yield return "Review fragmented short parallel wall-pair candidates before importing exact wall coordinates.";
         }
 
+        if (reviewIssueCodes.Contains(CoveredAreaBoundariesRequireReviewIssueCode, StringComparer.Ordinal))
+        {
+            yield return "Review covered-entry, terrace, canopy, or outdoor boundary candidates before importing them as exterior walls.";
+        }
+
         if (reviewIssueCodes.Contains(OpeningRoomSideLinksIncompleteIssueCode, StringComparer.Ordinal)
             || reviewIssueCodes.Contains(RoutingPassageRoomSideLinksIncompleteIssueCode, StringComparer.Ordinal))
         {
@@ -550,6 +564,15 @@ public sealed record PlanImportReadiness(
         return $"measurement consistency has {measurement.OutlierCount}/{measurement.CheckedCount} outlier checks ({measurement.OutlierRatio:0.###}); {impact}";
     }
 
+    private static bool IsCoveredAreaBoundaryReview(WallEvidenceWallAssessment assessment) =>
+        assessment.Evidence.Any(IsCoveredAreaBoundaryEvidence)
+        || assessment.ScoreBreakdown.PositiveEvidence.Any(IsCoveredAreaBoundaryEvidence)
+        || assessment.ScoreBreakdown.NegativeEvidence.Any(IsCoveredAreaBoundaryEvidence);
+
+    private static bool IsCoveredAreaBoundaryEvidence(string evidence) =>
+        evidence.Contains("outdoor covered-area boundary", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("unpaired outdoor covered-area boundary", StringComparison.OrdinalIgnoreCase);
+
     private static bool RequiresImportReview(PlanImportReadinessIssue issue) =>
         issue.Severity != DiagnosticSeverity.Info
         && ShouldIncludeImportIssueCode(issue.Code);
@@ -573,6 +596,7 @@ public sealed record PlanImportReadiness(
         && !string.Equals(code, "placement.wall_graph.surface_pattern_wall_overlaps.require_review", StringComparison.Ordinal)
         && !string.Equals(code, WallEvidenceRequiresReviewIssueCode, StringComparison.Ordinal)
         && !string.Equals(code, FragmentedShortWallPairsRequireReviewIssueCode, StringComparison.Ordinal)
+        && !string.Equals(code, CoveredAreaBoundariesRequireReviewIssueCode, StringComparison.Ordinal)
         && !string.Equals(code, PdfRasterOcrRequiredIssueCode, StringComparison.Ordinal)
         && !string.Equals(code, RasterNoExtractedPrimitivesIssueCode, StringComparison.Ordinal)
         && !string.Equals(code, RasterLowExtractionConfidenceIssueCode, StringComparison.Ordinal)
