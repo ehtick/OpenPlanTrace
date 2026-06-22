@@ -15,7 +15,11 @@ public static class WallPlacementContextGuards
     {
         ArgumentNullException.ThrowIfNull(result);
 
-        var roomWallIds = BuildRoomWallIds(result.Rooms);
+        var roomWallReferences = RoomBoundaryWallReferenceBuilder.Build(
+            result.Rooms,
+            result.Walls,
+            wallSnapTolerance: 2.0);
+        var roomWallIds = roomWallReferences.RoomIdsByWallId.Keys.ToHashSet(StringComparer.Ordinal);
         if (roomWallIds.Count == 0)
         {
             return new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
@@ -396,23 +400,6 @@ public static class WallPlacementContextGuards
             out var value)
             ? value
             : null;
-    }
-
-    private static IReadOnlySet<string> BuildRoomWallIds(IReadOnlyList<RoomRegion> rooms)
-    {
-        var ids = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var room in rooms)
-        {
-            foreach (var wallId in room.WallIds)
-            {
-                if (!string.IsNullOrWhiteSpace(wallId))
-                {
-                    ids.Add(wallId);
-                }
-            }
-        }
-
-        return ids;
     }
 
     private static IReadOnlyDictionary<string, WallGraphComponent> BuildComponentByWallId(

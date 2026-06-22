@@ -439,6 +439,151 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_PromotesRoomBoundaryAlignedMediumWallWithoutExplicitRoomWallIds()
+    {
+        var wall = new WallSegment(
+            "wall-geometric-room-boundary-medium",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 300)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "parallel wall-face pair",
+                "pair score 0.86"
+            }
+        };
+        var leftRoom = Room(
+            "room-left",
+            RoomUseKind.Office,
+            new PlanRect(20, 80, 80, 240),
+            new[]
+            {
+                new PlanPoint(20, 80),
+                new PlanPoint(100, 80),
+                new PlanPoint(100, 320),
+                new PlanPoint(20, 320)
+            }) with
+            {
+                Evidence = new[] { "semantic room boundary inferred from nearby walls synthetic-left" }
+            };
+        var rightRoom = Room(
+            "room-right",
+            RoomUseKind.Office,
+            new PlanRect(100, 80, 120, 240),
+            new[]
+            {
+                new PlanPoint(100, 80),
+                new PlanPoint(220, 80),
+                new PlanPoint(220, 320),
+                new PlanPoint(100, 320)
+            }) with
+            {
+                Evidence = new[] { "semantic room boundary inferred from nearby walls synthetic-right" }
+            };
+        var context = CreateContext("geometric-room-boundary-wall-promotion");
+        context.Walls.Add(wall);
+        context.Rooms.Add(leftRoom);
+        context.Rooms.Add(rightRoom);
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            new[]
+            {
+                "wall evidence assessment: MediumWallBody / review / confidence 0.88",
+                "parallel wall-face pair",
+                "pair score 0.86"
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("room references 2", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("room-confirmed wall body promoted", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["geometricRoomBoundaryReferencedWallCount"] == "1"
+                && diagnostic.Properties["geometricRoomBoundaryReferenceCount"] == "2");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DoesNotUseOutdoorBoundaryGeometryToPromoteWallEvidence()
+    {
+        var wall = new WallSegment(
+            "wall-outdoor-boundary-medium",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 300)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            Evidence = new[]
+            {
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "parallel wall-face pair",
+                "pair score 0.86"
+            }
+        };
+        var outdoor = Room(
+            "covered-entry",
+            RoomUseKind.Outdoor,
+            new PlanRect(100, 80, 120, 240),
+            new[]
+            {
+                new PlanPoint(100, 80),
+                new PlanPoint(220, 80),
+                new PlanPoint(220, 320),
+                new PlanPoint(100, 320)
+            }) with
+            {
+                Evidence = new[] { "semantic room boundary inferred from nearby walls outdoor-covered-entry" }
+            };
+        var context = CreateContext("outdoor-geometric-boundary-review-only");
+        context.Walls.Add(wall);
+        context.Rooms.Add(outdoor);
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            new[]
+            {
+                "wall evidence assessment: MediumWallBody / review / confidence 0.88",
+                "parallel wall-face pair",
+                "pair score 0.86"
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(retained.PlacementReady);
+        Assert.True(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("room-confirmed wall body promoted", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_DoesNotPromoteRecoveredDuplicateWallBody()
     {
         var wall = new WallSegment(
@@ -598,6 +743,77 @@ public sealed class WallTypeRefinementTests
             {
                 "merged collinear wall fragments",
                 "wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (4 fragments, gap ratio 0); keep for topology but block exact placement until reviewed"
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("clean fragment-merged interior room boundary promoted", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_PromotesDuplicatedCleanFragmentMergedRoomBoundary()
+    {
+        var wall = new WallSegment(
+            "wall-duplicated-fragment-room-boundary",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 205)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "fragment-a", "fragment-b", "fragment-c" },
+            FragmentEvidence = new WallFragmentEvidence(
+                FragmentCount: 3,
+                TotalHealedGap: 0,
+                MaxHealedGap: 0,
+                DuplicatePrimitiveCount: 6,
+                GapRatio: 0,
+                RequiresGeometryReview: false,
+                Evidence: Array.Empty<string>()),
+            Evidence = new[]
+            {
+                "merged collinear wall fragments",
+                "fragment geometry: 3 fragment(s)",
+                "fragment geometry collapsed 6 duplicate primitive(s)",
+                "fragment geometry healed gap ratio 0",
+                "wall type interior: supported wall evidence inside exterior envelope"
+            }
+        };
+        var room = Room(
+            "room-geometric-boundary",
+            RoomUseKind.Storage,
+            new PlanRect(100, 80, 120, 160),
+            new[]
+            {
+                new PlanPoint(100, 80),
+                new PlanPoint(220, 80),
+                new PlanPoint(220, 240),
+                new PlanPoint(100, 240)
+            }) with
+            {
+                Evidence = new[] { "semantic room boundary inferred from nearby walls synthetic-storage" }
+            };
+        var context = CreateContext("duplicated-clean-fragment-room-boundary-promotion");
+        context.Walls.Add(wall);
+        context.Rooms.Add(room);
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            new[]
+            {
+                "merged collinear wall fragments",
+                "wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (3 fragments, gap ratio 0); keep for topology but block exact placement until reviewed"
             });
 
         await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);

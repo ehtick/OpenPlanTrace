@@ -13,7 +13,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return ValueTask.CompletedTask;
         }
 
-        var roomIdsByWallId = BuildRoomIdsByWallId(context.Rooms);
+        var roomWallReferences = RoomBoundaryWallReferenceBuilder.Build(
+            context.Rooms,
+            context.Walls,
+            context.Options.WallSnapTolerance);
+        var roomIdsByWallId = roomWallReferences.RoomIdsByWallId;
         var sharedWallIds = BuildSharedWallIds(context.RoomAdjacencyGraph);
         var componentsByWallId = BuildComponentsByWallId(context.WallGraph);
         var supportedTopologyEndpointCountsByWallId = BuildSupportedTopologyEndpointCounts(context.WallGraph);
@@ -217,31 +221,10 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             rejectedEvidenceProtected,
             roomConfirmedPlacementPromoted,
             fragmentedPairPlacementDemoted,
-            fragmentedExteriorShellContinuityRetained);
+            fragmentedExteriorShellContinuityRetained,
+            roomWallReferences.GeometricRoomBoundaryReferencedWallCount,
+            roomWallReferences.GeometricRoomBoundaryReferenceCount);
         return ValueTask.CompletedTask;
-    }
-
-    private static Dictionary<string, string[]> BuildRoomIdsByWallId(IReadOnlyList<RoomRegion> rooms)
-    {
-        var builder = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var room in rooms)
-        {
-            foreach (var wallId in room.WallIds)
-            {
-                if (!builder.TryGetValue(wallId, out var roomIds))
-                {
-                    roomIds = new HashSet<string>(StringComparer.Ordinal);
-                    builder[wallId] = roomIds;
-                }
-
-                roomIds.Add(room.Id);
-            }
-        }
-
-        return builder.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value.Order(StringComparer.Ordinal).ToArray(),
-            StringComparer.Ordinal);
     }
 
     private static HashSet<string> BuildSharedWallIds(RoomAdjacencyGraph graph) =>
@@ -694,9 +677,16 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return false;
         }
 
-        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, wall.SourcePrimitiveIds.Count);
+        var uniqueSourcePrimitiveCount = Math.Max(0, wall.SourcePrimitiveIds.Count - fragmentEvidence.DuplicatePrimitiveCount);
+        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, uniqueSourcePrimitiveCount);
+        var cleanDuplicatedRoomBoundary =
+            roomReferenceCount > 0
+            && fragmentCount <= 4
+            && fragmentEvidence.DuplicatePrimitiveCount <= 8
+            && fragmentEvidence.GapRatio <= 0.001
+            && fragmentEvidence.TotalHealedGap <= 0.001;
         if (fragmentCount is < 2 or > 8
-            || fragmentEvidence.DuplicatePrimitiveCount > 3
+            || (fragmentEvidence.DuplicatePrimitiveCount > 3 && !cleanDuplicatedRoomBoundary)
             || fragmentEvidence.GapRatio > 0.01
             || fragmentEvidence.TotalHealedGap > Math.Max(2.0, wall.Thickness * 0.35))
         {
@@ -1255,7 +1245,9 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int rejectedEvidenceProtected,
         int roomConfirmedPlacementPromoted,
         int fragmentedPairPlacementDemoted,
-        int fragmentedExteriorShellContinuityRetained)
+        int fragmentedExteriorShellContinuityRetained,
+        int geometricRoomBoundaryReferencedWallCount,
+        int geometricRoomBoundaryReferenceCount)
     {
         var exterior = context.Walls.Count(wall => wall.WallType == WallType.Exterior);
         var interior = context.Walls.Count(wall => wall.WallType == WallType.Interior);
@@ -1273,6 +1265,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["changedWallTypeCount"] = changed.ToString(),
                 ["evidenceUpdatedWallCount"] = evidenceUpdated.ToString(),
                 ["roomReferencedWallCount"] = roomReferenced.ToString(),
+                ["geometricRoomBoundaryReferencedWallCount"] = geometricRoomBoundaryReferencedWallCount.ToString(),
+                ["geometricRoomBoundaryReferenceCount"] = geometricRoomBoundaryReferenceCount.ToString(),
                 ["twoSidedRoomEvidenceWallCount"] = twoSidedRoomEvidence.ToString(),
                 ["oneSidedRoomEvidenceWallCount"] = oneSidedRoomEvidence.ToString(),
                 ["rejectedEvidenceProtectedWallCount"] = rejectedEvidenceProtected.ToString(),

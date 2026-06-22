@@ -6,6 +6,34 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.185] - 2026-06-22
+
+### Improved
+- Wall-type refinement now augments explicit `Room.WallIds` with conservative
+  geometric room-boundary references when a wall aligns with a reliable
+  non-outdoor room boundary.
+- Placement/export review guards use the same room-boundary reference helper, so
+  walls promoted by room geometry are not blocked later as unsupported fragments.
+- Clean fragment-merged room-boundary walls now count effective unique fragments
+  instead of treating duplicated PDF primitives as extra real fragments.
+- Added diagnostics for geometric room-boundary wall references so real-PDF
+  scans explain when room geometry helped support wall placement.
+
+### Verified
+- Added regression coverage for geometric room-boundary wall support, outdoor
+  boundary rejection, duplicated clean fragment promotion, and placement export
+  unblock behavior.
+- Rescanned the supplied medium PDF (`A20-102 PLAN 1. ETASJE.pdf`) with
+  `--svg-profile wall-qa`; placement-ready walls improved from `18` to `19`,
+  visible clean topology spans improved from `21` to `22`, and blocked walls
+  dropped from `97` to `96`.
+- Confirmed `page:1:wall:152` is now placement-ready with one clean topology
+  span after room-boundary refinement.
+- Rendered and inspected the wall-QA screenshot at
+  `%TEMP%/openplantrace-a20-102-room-boundary-placement-v1-wallqa.png`.
+- Ran targeted wall/export tests: `149` tests passed.
+- Ran the full test suite: `672` tests passed.
+
 ## [0.02.184] - 2026-06-22
 
 ### Improved
