@@ -4155,6 +4155,7 @@ internal static class PlacementReliability
             .ToArray();
         var reviewBoundaryWallIds = boundaryAssessments
             .Where(assessment => !assessment.RejectedAsNoise)
+            .Where(assessment => !IsNonBlockingDuplicateBoundaryWallEvidence(assessment))
             .Where(assessment => assessment.Decision == WallEvidenceDecision.Review
                 || assessment.RequiresReview
                 || !assessment.PlacementReady)
@@ -4190,6 +4191,32 @@ internal static class PlacementReliability
             calibration.HasReliableMeasurementScale,
             reasons.Count > 0 || !boundaryWallsAreCoordinateReady,
             reasons);
+    }
+
+    private static bool IsNonBlockingDuplicateBoundaryWallEvidence(WallEvidenceWallAssessment assessment)
+    {
+        if (assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category is WallEvidenceCategory.ObjectOrFixtureDetail or WallEvidenceCategory.SurfacePatternDetail)
+        {
+            return false;
+        }
+
+        var evidence = assessment.Evidence
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        var isExplicitDuplicate = evidence.Any(item =>
+            item.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("recovered duplicate wall body", StringComparison.OrdinalIgnoreCase));
+        if (!isExplicitDuplicate)
+        {
+            return false;
+        }
+
+        return evidence.Any(item =>
+            item.Contains("already represented by stronger", StringComparison.OrdinalIgnoreCase)
+            && item.Contains("paired wall body", StringComparison.OrdinalIgnoreCase));
     }
 
     public static PlacementReliabilityExport ForOpening(

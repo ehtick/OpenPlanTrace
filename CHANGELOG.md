@@ -6,6 +6,30 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.196] - 2026-06-22
+
+### Improved
+- Room placement reliability now treats explicit duplicate/recovered duplicate
+  boundary wall evidence as non-blocking when the wall evidence says it is
+  already represented by a stronger paired wall body.
+- Duplicate wall faces remain review-only as wall entities, but they no longer
+  make an otherwise closed room polygon look blocked for the wrong reason.
+- This makes room reliability reasons cleaner by leaving the real remaining
+  blockers visible instead of mixing them with duplicate wall-face noise.
+
+### Verified
+- Added export regression coverage for normal review wall blockers, duplicate
+  wall-face blockers, and recovered duplicate wall-body blockers.
+- Rescanned the supplied medium PDF `A20-102 PLAN 1. ETASJE.pdf`: duplicate
+  boundary wall `page:1:wall:56` and recovered duplicate
+  `page:1:wall-evidence-recovered:002` are no longer listed as room blockers,
+  while real review blockers such as `page:1:wall:126` remain.
+- Rendered and inspected the wall-QA screenshot at
+  `%TEMP%/openplantrace-medium-a20-102-room-duplicate-boundary-v2.png`.
+- Ran targeted room export tests: `4` tests passed.
+- Ran export tests: `96` tests passed.
+- Ran the full test suite: `695` tests passed.
+
 ## [0.02.195] - 2026-06-22
 
 ### Improved

@@ -3103,6 +3103,56 @@ public sealed class ExportTests
                 && reason.GetString()?.Contains(boundaryWallId, StringComparison.Ordinal) == true);
     }
 
+    [Theory]
+    [InlineData("wall evidence: duplicate wall-face line already represented by stronger paired wall body wall-stronger; keep for review but block exact placement")]
+    [InlineData("wall evidence: recovered duplicate wall body already represented by stronger nearby paired wall body wall-stronger; keep for review but block exact placement")]
+    public async Task PlacementExporter_DoesNotBlockRoomForDuplicateBoundaryWallRepresentedByStrongerWall(
+        string boundaryEvidence)
+    {
+        var result = await CreateScanResultAsync();
+        var roomRegion = result.Rooms.First(room => room.WallIds.Count > 0);
+        var boundaryWallId = roomRegion.WallIds[0];
+        var boundaryWall = result.Walls.Single(wall => wall.Id == boundaryWallId);
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        boundaryWall.Id,
+                        boundaryWall.PageNumber,
+                        boundaryWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.74),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: boundaryWall.SourcePrimitiveIds,
+                        Evidence: [boundaryEvidence])
+                    {
+                        Decision = WallEvidenceDecision.Review
+                    }
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var room = document.RootElement
+            .GetProperty("rooms")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == roomRegion.Id);
+
+        var reliability = room.GetProperty("reliability");
+        Assert.True(reliability.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.DoesNotContain(
+            reliability.GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetString()?.Contains("room boundary uses review-required wall evidence", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
     [Fact]
     public async Task PlacementExporter_MarksRoomsWithoutLinkedWallEvidenceForReview()
     {
