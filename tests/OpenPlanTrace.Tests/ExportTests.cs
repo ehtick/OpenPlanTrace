@@ -1170,8 +1170,8 @@ public sealed class ExportTests
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaReview));
 
         Assert.Contains("data-profile=\"wall-qa-review\"", svg);
-        Assert.Contains("Walls-only placement/review QA", svg);
-        Assert.Contains("Includes non-placement wall spans", svg);
+        Assert.Contains("Wall QA review (amber is not placement)", svg);
+        Assert.Contains("Dashed amber = omitted/review only", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
         Assert.Contains("id=\"wall-body-footprints\"", svg);

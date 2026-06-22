@@ -6,6 +6,25 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.182] - 2026-06-22
+
+### Improved
+- Wall-QA review overlays now label faint dashed amber spans as omitted/review
+  diagnostics instead of making them look like importable placement walls.
+- The SVG renderer and interactive viewer both draw review-only topology spans
+  thinner and more transparent, while clean blue/green wall spans remain the
+  correctness view for placement accuracy checks.
+- README wall-QA guidance now says to use `wall-qa`/`wall-qa-focus` for
+  correctness screenshots and `wall-qa-review` only for missing-wall diagnosis.
+
+### Verified
+- Ran targeted export/viewer tests: `99` tests passed.
+- Rescanned the supplied medium PDF (`A20-102 PLAN 1. ETASJE.pdf`) with
+  `--svg-profile wall-qa`; scan output stayed at `16` placement-ready walls and
+  `99` omitted/review walls.
+- Rendered and inspected a clean wall-QA screenshot at
+  `real-pdf-output/medium-a20-102-20260622-clean-wallqa-v1/wall-qa-page-1.png`.
+
 ## [0.02.181] - 2026-06-22
 
 ### Improved

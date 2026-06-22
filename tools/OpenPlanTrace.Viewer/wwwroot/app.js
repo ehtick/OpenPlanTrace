@@ -95,7 +95,7 @@ const overlayLegendItems = [
   { key: "walls", label: "Placement walls", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.06)" },
   { key: "wallBodyFootprints", label: "Wall body footprints", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.10)" },
   { key: "wallTopologySpans", label: "Clean wall spans", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.06)" },
-  { key: "wallTopologyReviewSpans", label: "Non-placement wall spans", stroke: "#a65f00", fill: "rgba(166, 95, 0, 0.055)", dash: "3 3" },
+  { key: "wallTopologyReviewSpans", label: "Review-only wall spans", stroke: "#a65f00", fill: "rgba(166, 95, 0, 0.035)", dash: "1 4" },
   { key: "nodes", label: "Wall nodes", stroke: "#191a1f", fill: "#ffffff" },
   { key: "rooms", label: "Rooms", stroke: "#3f8f57", fill: "rgba(63, 143, 87, 0.08)" },
   { key: "roomClusters", label: "Room clusters", stroke: "#3f8f57", fill: "rgba(63, 143, 87, 0.05)", dash: "8 5" },
@@ -14501,7 +14501,7 @@ function serializeCurrentOverlaySvg() {
         .wall-object-like{stroke:#c97c18;stroke-width:1.05;stroke-dasharray:5 4}
         .wall-fragment{stroke:#7854a8;stroke-width:.9;stroke-dasharray:3 5}
         .wall-review{stroke-width:2.05;stroke-dasharray:3 2}
-        .wall-topology-span-review-only{stroke:#a65f00;stroke-width:1.2;stroke-dasharray:3 3}
+        .wall-topology-span-review-only{stroke:#a65f00;stroke-width:.75;stroke-opacity:.48;stroke-dasharray:1 4}
         .wall-blocked{stroke:#a52035;stroke-width:2.1;stroke-dasharray:1 3}
         .wall-excluded{stroke-width:.85;stroke-dasharray:2 6}
         .node{fill:rgba(255,255,255,.65);stroke:#b82f42;stroke-width:.42;vector-effect:non-scaling-stroke}

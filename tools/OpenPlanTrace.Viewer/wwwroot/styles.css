@@ -2122,8 +2122,9 @@ h1 {
 
 .wall-topology-span-review-only {
   stroke: #a65f00;
-  stroke-width: 1.2;
-  stroke-dasharray: 3 3;
+  stroke-width: 0.75;
+  stroke-opacity: 0.48;
+  stroke-dasharray: 1 4;
 }
 
 .wall-review {

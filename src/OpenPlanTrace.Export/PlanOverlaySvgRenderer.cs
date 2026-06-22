@@ -71,7 +71,7 @@ public static class PlanOverlaySvgRenderer
             .wall-topology-span-interior { stroke: #0f7a48; stroke-width: 1.45; }
             .wall-topology-span-review { stroke-dasharray: 3 2; }
             .wall-topology-span-excluded { stroke: #7854a8; stroke-width: 0.85; stroke-dasharray: 2 5; }
-            .wall-topology-span-review-only { stroke: #a65f00; stroke-width: 1.05; stroke-dasharray: 3 3; }
+            .wall-topology-span-review-only { stroke: #a65f00; stroke-width: 0.72; stroke-dasharray: 1.2 3.4; stroke-opacity: 0.46; }
             .wall-body-footprint { fill: rgba(15, 79, 184, 0.10); stroke: #0f4fb8; stroke-width: 0.78; vector-effect: non-scaling-stroke; }
             .wall-body-footprint-interior { fill: rgba(15, 122, 72, 0.10); stroke: #0f7a48; }
             .wall-body-footprint-review { fill: rgba(166, 95, 0, 0.075); stroke: #a65f00; stroke-dasharray: 3 3; }
@@ -710,7 +710,7 @@ public static class PlanOverlaySvgRenderer
         else if (options.Profile is SvgOverlayRenderProfile.WallQa or SvgOverlayRenderProfile.WallQaReview or SvgOverlayRenderProfile.WallQaFocus)
         {
             rows.Add(options.Profile == SvgOverlayRenderProfile.WallQaReview
-                ? "Walls-only placement/review QA"
+                ? "Wall QA review (amber is not placement)"
                 : "Walls-only placement QA");
             if (options.CropToFloorplanContent)
             {
@@ -719,7 +719,7 @@ public static class PlanOverlaySvgRenderer
 
             if (options.IncludeReviewOnlyWallTopologySpans)
             {
-                rows.Add("Includes non-placement wall spans");
+                rows.Add("Dashed amber = omitted/review only");
             }
 
             if (options.IncludeSourceContext && string.IsNullOrWhiteSpace(options.BackgroundImageHref))
