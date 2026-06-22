@@ -88,6 +88,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 .Any(room => room.UseKind == RoomUseKind.Outdoor);
             var refined = RefineWallType(
                 wall,
+                evidenceByWallId.TryGetValue(wall.Id, out var wallAssessment) ? wallAssessment : null,
                 wallRoomIds.Length,
                 sharedWallIds.Contains(wall.Id),
                 hasOutdoorRoomReference,
@@ -446,6 +447,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
 
     private static WallTypeRefinement RefineWallType(
         WallSegment wall,
+        WallEvidenceWallAssessment? assessment,
         int roomReferenceCount,
         bool isSharedByRoomAdjacency,
         bool hasOutdoorRoomReference,
@@ -529,6 +531,18 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         {
             if (sideEvidence.HasOutdoorRoomSide)
             {
+                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment))
+                {
+                    var refinedType = IsRecoveredMissingWallCandidate(wall)
+                        ? WallType.Interior
+                        : WallType.Unknown;
+                    return new WallTypeRefinement(
+                        refinedType,
+                        refinedType == WallType.Interior
+                            ? "wall type refined interior: recovered uncertain wall candidate with one-sided outdoor/terrace room evidence is not trusted as exterior without shell support"
+                            : "wall type refined unknown: one-sided outdoor/terrace room evidence alone is not trusted as exterior shell support for uncertain local-boundary wall candidate");
+                }
+
                 return new WallTypeRefinement(
                     WallType.Exterior,
                     "wall type refined exterior: detected room evidence on one side is outdoor/terrace space");
@@ -587,6 +601,46 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         wall.Evidence.Any(item =>
             item.Contains("recovered by wall evidence map", StringComparison.OrdinalIgnoreCase)
             || item.Contains("missing-wall recovery", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsUntrustedOutdoorExteriorPromotionCandidate(
+        WallSegment wall,
+        WallEvidenceWallAssessment? assessment)
+    {
+        var evidence = wall.Evidence
+            .Concat(assessment?.Evidence ?? Array.Empty<string>())
+            .Concat(assessment?.ScoreBreakdown.PositiveEvidence ?? Array.Empty<string>())
+            .Concat(assessment?.ScoreBreakdown.NegativeEvidence ?? Array.Empty<string>())
+            .ToArray();
+        if (HasTrustedExteriorShellSupport(evidence))
+        {
+            return false;
+        }
+
+        var localBoundaryOnly = evidence.Any(item =>
+            item.Contains("local outer boundary", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("floorplan/wall envelope", StringComparison.OrdinalIgnoreCase));
+        var weakOrUnknownLayer = evidence.Any(item =>
+            item.Contains("layer evidence: no strong layer", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("classified Unknown", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("source layer category Unknown", StringComparison.OrdinalIgnoreCase));
+        var uncertainEvidenceCategory = assessment?.Category is WallEvidenceCategory.MediumWallBody
+            or WallEvidenceCategory.RecoveredWallBody
+            or WallEvidenceCategory.WeakSingleLine;
+        var uncertainGeometry = IsRecoveredMissingWallCandidate(wall)
+            || wall.DetectionKind is WallDetectionKind.SingleLine or WallDetectionKind.FragmentMerged;
+
+        return (localBoundaryOnly && weakOrUnknownLayer && uncertainEvidenceCategory)
+            || uncertainGeometry;
+    }
+
+    private static bool HasTrustedExteriorShellSupport(IEnumerable<string> evidence) =>
+        evidence.Any(item =>
+            !item.Contains("not trusted", StringComparison.OrdinalIgnoreCase)
+            && !item.Contains("without shell support", StringComparison.OrdinalIgnoreCase)
+            && !item.Contains("alone is not", StringComparison.OrdinalIgnoreCase)
+            && (item.Contains("exterior shell", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("wall-like layer", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("trusted benchmark", StringComparison.OrdinalIgnoreCase)));
 
     private static bool TryPromoteRoomConfirmedWallEvidence(
         WallSegment wall,

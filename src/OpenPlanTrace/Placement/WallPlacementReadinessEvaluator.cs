@@ -66,12 +66,20 @@ public static class WallPlacementReadinessEvaluator
             reasons.Add("short high-density unknown-layer wall/detail candidate requires review before exact placement");
         }
 
+        var coordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence =
+            CoordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence(wall, evidenceAssessment);
+        if (coordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence)
+        {
+            reasons.Add("outdoor/terrace room evidence alone is not trusted as exterior wall placement support");
+        }
+
         var readyForCoordinatePlacement =
             wall.Confidence.Value >= 0.5
             && !coordinatePlacementBlocked
             && !coordinatePlacementBlockedByReviewReason
             && !coordinatePlacementBlockedByRecoveredExteriorEvidence
             && !coordinatePlacementBlockedByShortDenseDetailEvidence
+            && !coordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence
             && wall.FragmentEvidence?.RequiresGeometryReview != true
             && (evidenceAssessment is null || evidenceAssessment.PlacementReady);
         var readyForMetricPlacement =
@@ -85,6 +93,7 @@ public static class WallPlacementReadinessEvaluator
             || coordinatePlacementBlocked
             || coordinatePlacementBlockedByReviewReason
             || coordinatePlacementBlockedByShortDenseDetailEvidence
+            || coordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence
             || evidenceAssessment?.RequiresReview == true
             || evidenceAssessment?.RejectedAsNoise == true
             || evidenceAssessment?.PlacementReady == false,
@@ -92,7 +101,8 @@ public static class WallPlacementReadinessEvaluator
             coordinatePlacementBlocked
             || coordinatePlacementBlockedByReviewReason
             || coordinatePlacementBlockedByRecoveredExteriorEvidence
-            || coordinatePlacementBlockedByShortDenseDetailEvidence,
+            || coordinatePlacementBlockedByShortDenseDetailEvidence
+            || coordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence,
             reasons.Distinct(StringComparer.Ordinal).ToArray());
     }
 
@@ -160,11 +170,19 @@ public static class WallPlacementReadinessEvaluator
         return !evidence.Any(IsTrustedRecoveredExteriorSupportEvidence);
     }
 
-    private static bool IsTrustedRecoveredExteriorSupportEvidence(string evidence) =>
-        evidence.Contains("exterior shell", StringComparison.OrdinalIgnoreCase)
-        || evidence.Contains("outdoor/terrace", StringComparison.OrdinalIgnoreCase)
-        || evidence.Contains("outdoor room", StringComparison.OrdinalIgnoreCase)
-        || evidence.Contains("terrace room", StringComparison.OrdinalIgnoreCase);
+    private static bool IsTrustedRecoveredExteriorSupportEvidence(string evidence)
+    {
+        if (evidence.Contains("not trusted", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("without shell support", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("alone is not", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return evidence.Contains("exterior shell", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("wall-like layer", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("trusted benchmark", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool CoordinatePlacementBlockedByShortDenseDetailEvidence(
         WallSegment wall,
@@ -208,6 +226,34 @@ public static class WallPlacementReadinessEvaluator
                 "exterior shell",
                 "outdoor/terrace",
                 "trusted benchmark");
+    }
+
+    private static bool CoordinatePlacementBlockedByUntrustedOutdoorBoundaryEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment? evidenceAssessment)
+    {
+        if (evidenceAssessment is null
+            || !evidenceAssessment.PlacementReady
+            || evidenceAssessment.RejectedAsNoise
+            || evidenceAssessment.Decision == WallEvidenceDecision.Reject)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(evidenceAssessment.Evidence)
+            .Concat(evidenceAssessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(evidenceAssessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        if (!EvidenceContainsAny(
+                evidence,
+                "outdoor/terrace room evidence alone is not trusted as exterior",
+                "outdoor/terrace room evidence is not trusted as exterior without shell support"))
+        {
+            return false;
+        }
+
+        return !evidence.Any(IsTrustedRecoveredExteriorSupportEvidence);
     }
 
     private static bool EvidenceContainsAny(

@@ -6,6 +6,29 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.187] - 2026-06-22
+
+### Improved
+- Wall-type refinement is now more conservative when a recovered or otherwise
+  uncertain wall candidate has only one-sided outdoor/terrace room evidence.
+- Outdoor/terrace context alone no longer counts as exterior shell proof for
+  recovered wall placement; explicit shell, wall-like layer, or trusted evidence
+  is required before exact placement can rely on it.
+- This targets covered-entry/terrace false exterior-wall cases where local
+  boundary linework should not become clean structural geometry by context alone.
+
+### Verified
+- Added regression coverage for recovered one-sided outdoor candidates, explicit
+  shell-supported outdoor candidates, and coordinate-placement blocking for
+  untrusted outdoor-boundary evidence.
+- Rescanned the supplied medium PDF with `--svg-profile wall-qa`; placement-ready
+  walls stayed stable at `20`, clean topology spans stayed stable at `23`, and
+  no ready-wall IDs changed versus `0.02.186`.
+- Rendered and inspected the wall-QA screenshot at
+  `%TEMP%/openplantrace-a20-102-outdoor-guard-v1-wallqa.png`.
+- Ran targeted wall/export tests: `141` tests passed.
+- Ran the full test suite: `676` tests passed.
+
 ## [0.02.186] - 2026-06-22
 
 ### Improved

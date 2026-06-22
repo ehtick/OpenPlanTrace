@@ -199,6 +199,75 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_BlocksUntrustedOutdoorBoundaryEvidenceFromCoordinatePlacement()
+    {
+        var wall = Wall("wall:untrusted-outdoor-boundary", Confidence.High) with
+        {
+            WallType = WallType.Unknown,
+            Evidence = new[]
+            {
+                "wall type refined unknown: one-sided outdoor/terrace room evidence alone is not trusted as exterior shell support for uncertain local-boundary wall candidate",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            }
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains(
+            "outdoor/terrace room evidence alone is not trusted as exterior wall placement support",
+            readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_AllowsOutdoorBoundaryEvidenceWhenShellSupportIsExplicit()
+    {
+        var wall = Wall("wall:trusted-outdoor-shell-boundary", Confidence.High) with
+        {
+            WallType = WallType.Exterior,
+            Evidence = new[]
+            {
+                "wall type refined exterior: room evidence on both sides includes outdoor/terrace space",
+                "wall evidence: exterior shell continuity support"
+            }
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview);
+        Assert.False(readiness.CoordinatePlacementBlocked);
+    }
+
+    [Fact]
     public void Evaluate_BlocksShortDenseUnknownLayerDetailCandidateFromCoordinatePlacement()
     {
         var sourceIds = Enumerable.Range(1, 34)

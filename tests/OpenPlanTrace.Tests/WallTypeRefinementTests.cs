@@ -118,7 +118,7 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
-    public async Task WallTypeRefinement_KeepsRecoveredUnknownWallExteriorWhenOneSidedRoomIsOutdoor()
+    public async Task WallTypeRefinement_DoesNotPromoteRecoveredUnknownWallToExteriorFromOneSidedOutdoorRoom()
     {
         var wall = new WallSegment(
             "wall-recovered-outdoor-side",
@@ -153,6 +153,57 @@ public sealed class WallTypeRefinementTests
             UseKind = RoomUseKind.Outdoor
         };
         var context = CreateContext("one-sided-recovered-outdoor-wall");
+        context.Walls.Add(wall);
+        context.Rooms.Add(room);
+        context.WallGraph = GraphFor(wall);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var refined = Assert.Single(context.Walls);
+        Assert.Equal(WallType.Interior, refined.WallType);
+        Assert.Contains(
+            refined.Evidence,
+            item => item.Contains("one-sided outdoor/terrace room evidence", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("not trusted as exterior", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsRecoveredUnknownWallExteriorWhenOutdoorSideHasShellSupport()
+    {
+        var wall = new WallSegment(
+            "wall-recovered-outdoor-shell-side",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 300)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Unknown,
+            Evidence = new[]
+            {
+                "recovered by wall evidence map from unclaimed parallel wall-face evidence",
+                "pair score 0.815",
+                "wall evidence: recovered wall body from unclaimed parallel-face evidence",
+                "wall evidence: exterior shell continuity support"
+            }
+        };
+        var room = new RoomRegion(
+            "terrace-on-one-side",
+            1,
+            new PlanRect(106, 80, 120, 240),
+            new[]
+            {
+                new PlanPoint(106, 80),
+                new PlanPoint(226, 80),
+                new PlanPoint(226, 320),
+                new PlanPoint(106, 320)
+            },
+            Array.Empty<string>(),
+            Confidence.High)
+        {
+            UseKind = RoomUseKind.Outdoor
+        };
+        var context = CreateContext("one-sided-recovered-outdoor-shell-wall");
         context.Walls.Add(wall);
         context.Rooms.Add(room);
         context.WallGraph = GraphFor(wall);
