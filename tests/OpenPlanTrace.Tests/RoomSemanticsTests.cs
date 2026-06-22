@@ -494,6 +494,29 @@ public sealed class RoomSemanticsTests
     }
 
     [Fact]
+    public async Task ScanAsync_DoesNotAttachDividerOpeningToDistantRoomsOnSameHostWall()
+    {
+        var result = await ScanStackedDividerRoomsWithUpperOpeningAsync();
+        var opening = Assert.Single(result.Openings);
+
+        Assert.Equal(2, opening.ConnectedRoomIds.Count);
+        Assert.Contains("ALPHA", opening.ConnectedRoomLabels);
+        Assert.Contains("BETA", opening.ConnectedRoomLabels);
+        Assert.DoesNotContain("GAMMA", opening.ConnectedRoomLabels);
+        Assert.DoesNotContain("DELTA", opening.ConnectedRoomLabels);
+        Assert.Equal(2, opening.ConnectedRoomLinks.Count);
+        Assert.Contains(opening.ConnectedRoomLinks, link =>
+            link.RoomLabel == "ALPHA"
+            && link.Side == OpeningRoomSide.PositiveNormalSide);
+        Assert.Contains(opening.ConnectedRoomLinks, link =>
+            link.RoomLabel == "BETA"
+            && link.Side == OpeningRoomSide.NegativeNormalSide);
+        Assert.All(
+            opening.ConnectedRoomLinks,
+            link => Assert.True(link.DistanceToOpening <= 1, $"Expected tight opening-room link, got {link.DistanceToOpening}."));
+    }
+
+    [Fact]
     public async Task ScanAsync_ClassifiesCorridorLikeRoomClusterFromLabelAndShape()
     {
         var result = await ScanCorridorRoomAsync();
@@ -930,6 +953,32 @@ public sealed class RoomSemanticsTests
                             OpeningTick("divider-window-b", new PlanPoint(294, 230), new PlanPoint(306, 230)),
                             RoomText("office-label", "OFFICE", new PlanRect(168, 190, 70, 16)),
                             RoomText("storage-label", "STORAGE", new PlanRect(365, 190, 90, 16))
+                        })
+                }));
+
+    private static async Task<PlanScanResult> ScanStackedDividerRoomsWithUpperOpeningAsync() =>
+        await new OpenPlanTraceScanner().ScanAsync(
+            new PlanDocument(
+                "stacked-divider-rooms-with-upper-opening",
+                new[]
+                {
+                    new PlanPage(
+                        1,
+                        new PlanSize(700, 650),
+                        new PlanPrimitive[]
+                        {
+                            Wall("outer-top", new PlanPoint(100, 100), new PlanPoint(500, 100)),
+                            Wall("outer-right", new PlanPoint(500, 100), new PlanPoint(500, 500)),
+                            Wall("outer-bottom", new PlanPoint(500, 500), new PlanPoint(100, 500)),
+                            Wall("outer-left", new PlanPoint(100, 500), new PlanPoint(100, 100)),
+                            Wall("divider-vertical", new PlanPoint(300, 100), new PlanPoint(300, 500)),
+                            Wall("divider-horizontal", new PlanPoint(100, 300), new PlanPoint(500, 300)),
+                            OpeningTick("upper-divider-opening-a", new PlanPoint(294, 180), new PlanPoint(306, 180)),
+                            OpeningTick("upper-divider-opening-b", new PlanPoint(294, 220), new PlanPoint(306, 220)),
+                            RoomText("alpha-label", "ALPHA", new PlanRect(165, 190, 70, 16)),
+                            RoomText("beta-label", "BETA", new PlanRect(370, 190, 58, 16)),
+                            RoomText("gamma-label", "GAMMA", new PlanRect(160, 390, 82, 16)),
+                            RoomText("delta-label", "DELTA", new PlanRect(365, 390, 70, 16))
                         })
                 }));
 

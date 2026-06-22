@@ -6,6 +6,34 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.215] - 2026-06-22
+
+### Fixed
+- Opening-to-room connectivity no longer treats large door swing bounds as
+  proof that an opening belongs to every nearby room boundary.
+- Long shared wall IDs are now checked against the actual room-pair shared
+  span before an opening can create a room adjacency.
+- Ambiguous same-side multi-room opening links are pruned to the strongest
+  nearest import-safe room link, with pruning evidence kept on the opening.
+
+### Verified
+- Added a regression test for stacked rooms sharing one divider, ensuring an
+  upper divider opening does not connect to distant lower rooms on the same
+  host wall.
+- Rescanned the medium wall-noise PDF: connected openings dropped from `13`
+  to `7`, multi-room opening links dropped from `6` to `0`, and connected
+  room links dropped from `22` to `7`.
+- The medium scan quality grade improved from `ReviewRequired` to `Usable`;
+  overall confidence increased from `0.644605` to `0.681359`.
+- Opening and routing side-link quality warnings were cleared on the medium
+  scan.
+- Rendered and inspected the wall-QA screenshot at
+  `real-pdf-output/medium-a20-102-20260622-room-pair-opening-links-v4/wall-qa-review.png`.
+- Validated the generated placement artifact with deep placement checks
+  enabled.
+- Ran targeted room-semantics tests: `29` tests passed.
+- Ran the full test suite: `717` tests passed.
+
 ## [0.02.214] - 2026-06-22
 
 ### Improved

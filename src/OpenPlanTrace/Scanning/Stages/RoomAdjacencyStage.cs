@@ -435,6 +435,8 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
                         : $"touches {connectedRooms.Length} room boundaries");
             }
 
+            connectivity.PruneSameSideAmbiguousRoomLinks();
+
             if (!connectivity.HasChanges)
             {
                 continue;
@@ -461,22 +463,40 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
         RoomRegion room,
         double tolerance)
     {
-        if (!room.Bounds.Inflate(Math.Max(2, tolerance * 3)).Intersects(opening.Bounds))
+        var distanceTolerance = RoomOpeningTouchTolerance(tolerance);
+        if (!room.Bounds.Inflate(distanceTolerance).Intersects(opening.Bounds))
         {
             return false;
         }
 
-        if (opening.HostWallIds.Count > 0
-            && room.WallIds.Intersect(opening.HostWallIds, StringComparer.Ordinal).Any())
+        if (SharesHostWall(opening, room))
         {
-            return true;
+            return OpeningTouchesRoomBoundary(opening, room, Math.Max(distanceTolerance, tolerance * 2.5));
         }
 
-        var distanceTolerance = Math.Max(2, tolerance * 3);
-        return BoundaryEdges(room).Any(edge =>
-            edge.DistanceToPoint(opening.CenterLine.Midpoint) <= distanceTolerance
-            || edge.Bounds.Inflate(distanceTolerance).Intersects(opening.Bounds));
+        return OpeningTouchesRoomBoundary(opening, room, distanceTolerance);
     }
+
+    private static double RoomOpeningTouchTolerance(double tolerance) =>
+        Math.Max(2, tolerance * 1.75);
+
+    private static bool OpeningTouchesRoomBoundary(
+        OpeningCandidate opening,
+        RoomRegion room,
+        double tolerance) =>
+        BoundaryEdges(room).Any(edge =>
+            edge.Bounds.Inflate(tolerance).Intersects(opening.Bounds)
+            && OpeningLineTouchesBoundary(opening, edge, tolerance));
+
+    private static bool OpeningLineTouchesBoundary(
+        OpeningCandidate opening,
+        PlanLineSegment boundary,
+        double tolerance) =>
+        boundary.DistanceToPoint(opening.CenterLine.Midpoint) <= tolerance
+        || boundary.DistanceToPoint(opening.CenterLine.Start) <= tolerance
+        || boundary.DistanceToPoint(opening.CenterLine.End) <= tolerance
+        || opening.CenterLine.DistanceToPoint(boundary.Start) <= tolerance
+        || opening.CenterLine.DistanceToPoint(boundary.End) <= tolerance;
 
     private static void AddOpeningConnectivityDiagnostics(ScanContext context)
     {
@@ -669,7 +689,7 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
             return null;
         }
 
-        var openingIds = MatchingOpeningIds(first.PageNumber, sharedWallIds, sharedBoundary, context).ToArray();
+        var openingIds = MatchingOpeningIds(first, second, sharedWallIds, sharedBoundary, context).ToArray();
         var kind = openingIds.Length > 0
             ? RoomAdjacencyKind.ConnectedByOpening
             : RoomAdjacencyKind.BoundaryAdjacent;
@@ -698,18 +718,25 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
     }
 
     private static IEnumerable<string> MatchingOpeningIds(
-        int pageNumber,
+        RoomRegion first,
+        RoomRegion second,
         IReadOnlyList<string> sharedWallIds,
         PlanLineSegment? sharedBoundary,
         ScanContext context)
     {
-        foreach (var opening in context.Openings.Where(opening => opening.PageNumber == pageNumber))
+        foreach (var opening in context.Openings.Where(opening => opening.PageNumber == first.PageNumber))
         {
             if (sharedWallIds.Count > 0
                 && opening.HostWallIds.Intersect(sharedWallIds, StringComparer.Ordinal).Any())
             {
-                yield return opening.Id;
-                continue;
+                var matchesSharedGeometry = sharedBoundary is { } matchedBoundary
+                    ? IsOpeningOnBoundary(opening, matchedBoundary, context.Options.WallSnapTolerance)
+                    : OpeningMatchesRoomPairHostFallback(opening, first, second, context.Options.WallSnapTolerance);
+                if (matchesSharedGeometry)
+                {
+                    yield return opening.Id;
+                    continue;
+                }
             }
 
             if (sharedBoundary is { } boundary
@@ -718,6 +745,74 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
                 yield return opening.Id;
             }
         }
+    }
+
+    private static bool OpeningMatchesRoomPairHostFallback(
+        OpeningCandidate opening,
+        RoomRegion first,
+        RoomRegion second,
+        double tolerance)
+    {
+        var boundary = SharedBoundsBoundary(first.Bounds, second.Bounds, tolerance);
+        return boundary is { } inferredBoundary
+            && IsOpeningOnBoundary(opening, inferredBoundary, tolerance);
+    }
+
+    private static PlanLineSegment? SharedBoundsBoundary(
+        PlanRect first,
+        PlanRect second,
+        double tolerance)
+    {
+        var minimumLength = Math.Max(1, tolerance);
+        if (Math.Abs(first.Right - second.Left) <= tolerance
+            || Math.Abs(second.Right - first.Left) <= tolerance)
+        {
+            var x = Math.Abs(first.Right - second.Left) <= tolerance
+                ? (first.Right + second.Left) / 2.0
+                : (second.Right + first.Left) / 2.0;
+            var top = Math.Max(first.Top, second.Top);
+            var bottom = Math.Min(first.Bottom, second.Bottom);
+            if (bottom > top + minimumLength)
+            {
+                return new PlanLineSegment(new PlanPoint(x, top), new PlanPoint(x, bottom));
+            }
+        }
+
+        if (Math.Abs(first.Bottom - second.Top) <= tolerance
+            || Math.Abs(second.Bottom - first.Top) <= tolerance)
+        {
+            var y = Math.Abs(first.Bottom - second.Top) <= tolerance
+                ? (first.Bottom + second.Top) / 2.0
+                : (second.Bottom + first.Top) / 2.0;
+            var left = Math.Max(first.Left, second.Left);
+            var right = Math.Min(first.Right, second.Right);
+            if (right > left + minimumLength)
+            {
+                return new PlanLineSegment(new PlanPoint(left, y), new PlanPoint(right, y));
+            }
+        }
+
+        var intersection = first.Intersection(second);
+        if (!intersection.IsEmpty)
+        {
+            if (intersection.Width <= tolerance && intersection.Height > minimumLength)
+            {
+                var x = intersection.Left + (intersection.Width / 2.0);
+                return new PlanLineSegment(
+                    new PlanPoint(x, intersection.Top),
+                    new PlanPoint(x, intersection.Bottom));
+            }
+
+            if (intersection.Height <= tolerance && intersection.Width > minimumLength)
+            {
+                var y = intersection.Top + (intersection.Height / 2.0);
+                return new PlanLineSegment(
+                    new PlanPoint(intersection.Left, y),
+                    new PlanPoint(intersection.Right, y));
+            }
+        }
+
+        return null;
     }
 
     private static IEnumerable<string> FilterSharedWallIds(
@@ -743,9 +838,15 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
         PlanLineSegment boundary,
         double tolerance)
     {
-        var expanded = boundary.Bounds.Inflate(Math.Max(2, tolerance * 2));
-        return opening.Bounds.Intersects(expanded)
-            || boundary.DistanceToPoint(opening.CenterLine.Midpoint) <= Math.Max(2, tolerance * 2);
+        var boundaryTolerance = Math.Max(2, tolerance * 2);
+        if (OpeningLineTouchesBoundary(opening, boundary, boundaryTolerance))
+        {
+            return true;
+        }
+
+        return opening.HingePoint is { } hingePoint
+            && boundary.Bounds.Inflate(boundaryTolerance).Contains(hingePoint)
+            && boundary.DistanceToPoint(hingePoint) <= boundaryTolerance;
     }
 
     private static Confidence AdjacencyConfidence(
@@ -1042,8 +1143,11 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
 
         public bool HasChanges =>
             roomIds.Any(id => !initialRoomIds.Contains(id))
+            || initialRoomIds.Any(id => !roomIds.Contains(id, StringComparer.Ordinal))
             || roomAdjacencyIds.Any(id => !initialRoomAdjacencyIds.Contains(id))
-            || roomLinks.Keys.Any(id => !initialRoomLinkIds.Contains(id));
+            || initialRoomAdjacencyIds.Any(id => !roomAdjacencyIds.Contains(id, StringComparer.Ordinal))
+            || roomLinks.Keys.Any(id => !initialRoomLinkIds.Contains(id))
+            || initialRoomLinkIds.Any(id => !roomLinks.ContainsKey(id));
 
         public void AddRoom(string roomId, string? roomLabel)
         {
@@ -1115,6 +1219,61 @@ internal sealed class RoomAdjacencyStage : IPipelineStage
             {
                 builder.AddEvidence("room shares opening host wall");
             }
+        }
+
+        public void PruneSameSideAmbiguousRoomLinks()
+        {
+            if (roomLinks.Count <= 1)
+            {
+                return;
+            }
+
+            var links = roomLinks.Values.ToArray();
+            if (links.Any(link => link.Side is OpeningRoomSide.Unknown or OpeningRoomSide.OnOpeningLine))
+            {
+                return;
+            }
+
+            var hasPositive = links.Any(link => link.Side == OpeningRoomSide.PositiveNormalSide);
+            var hasNegative = links.Any(link => link.Side == OpeningRoomSide.NegativeNormalSide);
+            if (hasPositive && hasNegative)
+            {
+                return;
+            }
+
+            var keep = links
+                .OrderByDescending(link => link.SharesHostWall)
+                .ThenBy(link => link.DistanceToOpening)
+                .ThenByDescending(link => link.Confidence.Value)
+                .ThenBy(link => link.RoomId, StringComparer.Ordinal)
+                .First();
+            var removed = links
+                .Where(link => !string.Equals(link.RoomId, keep.RoomId, StringComparison.Ordinal))
+                .ToArray();
+            if (removed.Length == 0)
+            {
+                return;
+            }
+
+            foreach (var link in removed)
+            {
+                roomLinks.Remove(link.RoomId);
+                roomIds.RemoveAll(id => string.Equals(id, link.RoomId, StringComparison.Ordinal));
+            }
+
+            var keptLabels = roomLinks.Values
+                .Select(link => link.RoomLabel)
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .ToHashSet(StringComparer.Ordinal);
+            roomLabels.RemoveAll(label => !keptLabels.Contains(label));
+
+            var keptAdjacencyIds = roomLinks.Values
+                .SelectMany(link => link.RoomAdjacencyIds)
+                .ToHashSet(StringComparer.Ordinal);
+            roomAdjacencyIds.RemoveAll(id => !keptAdjacencyIds.Contains(id));
+
+            AddEvidence(
+                $"pruned {removed.Length} same-side room connection(s); kept nearest import-safe link {keep.RoomId}");
         }
 
         public void AddEvidence(string value)
