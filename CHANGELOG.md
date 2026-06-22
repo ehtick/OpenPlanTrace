@@ -6,6 +6,29 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.197] - 2026-06-22
+
+### Improved
+- Placement room exports now include structured `boundaryReliability` data so
+  downstream consumers can separate ready boundary walls, review/rejected
+  blockers, non-blocking duplicate wall faces, and unassessed boundary wall IDs.
+- Room placement reliability now reuses that structured boundary analysis,
+  reducing string-scraping and making coordinate-blocking wall evidence explicit
+  for import/review tools.
+- This helps distinguish clean placement walls from noisy raw wall candidates
+  when checking medium plans with many debug/review-only wall detections.
+
+### Verified
+- Added export and schema regression coverage for room boundary reliability,
+  coordinate-blocking wall IDs, and non-blocking duplicate boundary wall IDs.
+- Rescanned the supplied medium PDF `A20-102 PLAN 1. ETASJE.pdf` with
+  `wall-qa-focus`: `19` placement-ready walls, `96` omitted/review walls,
+  `7` rooms, and structured room blocker/duplicate IDs in `placement.json`.
+- Rendered and inspected the wall-QA screenshot at
+  `%TEMP%/openplantrace-medium-a20-102-boundary-reliability-v1.png`.
+- Ran targeted placement/schema tests: `5` tests passed.
+- Ran the full test suite: `695` tests passed.
+
 ## [0.02.196] - 2026-06-22
 
 ### Improved

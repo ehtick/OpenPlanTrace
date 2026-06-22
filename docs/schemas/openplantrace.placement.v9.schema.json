@@ -1716,6 +1716,7 @@
         "wallIds",
         "drawingArea",
         "confidence",
+        "boundaryReliability",
         "reliability",
         "evidence"
       ],
@@ -1750,8 +1751,55 @@
         "confidence": {
           "$ref": "#/$defs/ratio"
         },
+        "boundaryReliability": {
+          "$ref": "#/$defs/roomBoundaryReliability"
+        },
         "reliability": {
           "$ref": "#/$defs/reliability"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "roomBoundaryReliability": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "boundaryWallCount",
+        "assessedWallCount",
+        "readyWallIds",
+        "reviewWallIds",
+        "rejectedWallIds",
+        "nonBlockingDuplicateWallIds",
+        "unassessedWallIds",
+        "coordinateBlockingWallIds",
+        "evidence"
+      ],
+      "properties": {
+        "boundaryWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "assessedWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "readyWallIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "reviewWallIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "rejectedWallIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "nonBlockingDuplicateWallIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "unassessedWallIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "coordinateBlockingWallIds": {
+          "$ref": "#/$defs/stringArray"
         },
         "evidence": {
           "$ref": "#/$defs/stringArray"

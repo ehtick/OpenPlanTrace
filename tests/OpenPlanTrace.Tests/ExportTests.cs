@@ -3097,6 +3097,13 @@ public sealed class ExportTests
         var reliability = room.GetProperty("reliability");
         Assert.False(reliability.GetProperty("readyForCoordinatePlacement").GetBoolean());
         Assert.True(reliability.GetProperty("requiresReview").GetBoolean());
+        var boundaryReliability = room.GetProperty("boundaryReliability");
+        Assert.Contains(
+            boundaryReliability.GetProperty("reviewWallIds").EnumerateArray(),
+            wallId => wallId.GetString() == boundaryWallId);
+        Assert.Contains(
+            boundaryReliability.GetProperty("coordinateBlockingWallIds").EnumerateArray(),
+            wallId => wallId.GetString() == boundaryWallId);
         Assert.Contains(
             reliability.GetProperty("reasons").EnumerateArray(),
             reason => reason.GetString()?.Contains("room boundary uses review-required wall evidence", StringComparison.OrdinalIgnoreCase) == true
@@ -3148,6 +3155,16 @@ public sealed class ExportTests
 
         var reliability = room.GetProperty("reliability");
         Assert.True(reliability.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        var boundaryReliability = room.GetProperty("boundaryReliability");
+        Assert.Contains(
+            boundaryReliability.GetProperty("nonBlockingDuplicateWallIds").EnumerateArray(),
+            wallId => wallId.GetString() == boundaryWallId);
+        Assert.DoesNotContain(
+            boundaryReliability.GetProperty("coordinateBlockingWallIds").EnumerateArray(),
+            wallId => wallId.GetString() == boundaryWallId);
+        Assert.Contains(
+            boundaryReliability.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("non-blocking duplicate", StringComparison.OrdinalIgnoreCase) == true);
         Assert.DoesNotContain(
             reliability.GetProperty("reasons").EnumerateArray(),
             reason => reason.GetString()?.Contains("room boundary uses review-required wall evidence", StringComparison.OrdinalIgnoreCase) == true);
