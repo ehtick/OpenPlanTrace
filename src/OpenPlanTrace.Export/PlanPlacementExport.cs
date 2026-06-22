@@ -1343,6 +1343,55 @@ public sealed record PlacementWallOmissionExport(
                 "Review the source PDF linework before importing this wall; it may be stitched door, opening, fixture, or detail geometry rather than a wall.");
         }
 
+        if (ContainsEvidence(evidence, "unlayered fragment-merged wall candidate")
+            && ContainsEvidence(evidence, "only one trusted structural endpoint"))
+        {
+            return new PlacementWallOmissionClassification(
+                "one_endpoint_fragment_review_required",
+                "FragmentEndpointReview",
+                "Wall is omitted from clean placement topology because an unlayered fragment-merged candidate has only one trusted structural endpoint.",
+                "Review the opposite endpoint against the source PDF before importing this wall; it may be a true wall return, furniture/detail linework, or a stitched partial wall.");
+        }
+
+        if (ContainsEvidence(evidence, "very short unlayered parallel-face candidate"))
+        {
+            return new PlacementWallOmissionClassification(
+                "very_short_parallel_pair_review_required",
+                "VeryShortParallelPairReview",
+                "Wall is omitted from clean placement topology because a very short unlayered parallel-face candidate needs review before exact placement.",
+                "Review this candidate as a possible short wall return, door/window frame, fixture edge, or stitched detail before importing it as wall geometry.");
+        }
+
+        if (ContainsEvidence(evidence, "unlayered parallel-face candidate")
+            && (ContainsEvidence(evidence, "noisy fragmented face evidence")
+                || ContainsEvidence(evidence, "weak/fragmented pair evidence")))
+        {
+            return new PlacementWallOmissionClassification(
+                "fragmented_short_parallel_pair_review_required",
+                "FragmentedShortParallelPairReview",
+                "Wall is omitted from clean placement topology because a short unlayered parallel-face candidate has fragmented or weak paired-face evidence.",
+                "Review the face fragments against the source PDF before importing this wall; it may be a real short return or stitched non-wall detail.");
+        }
+
+        if (ContainsEvidence(evidence, "unlayered parallel-face candidate"))
+        {
+            return new PlacementWallOmissionClassification(
+                "short_parallel_pair_review_required",
+                "ShortParallelPairReview",
+                "Wall is omitted from clean placement topology because a short unlayered parallel-face candidate needs review before exact placement.",
+                "Review the paired faces against the source PDF before importing this wall; it may be a real short return, door/window frame, fixture edge, or stitched detail linework.");
+        }
+
+        if (ContainsEvidence(evidence, "repeated short unlayered")
+            && ContainsEvidence(evidence, "review as detail/object linework"))
+        {
+            return new PlacementWallOmissionClassification(
+                "repeated_short_detail_review_required",
+                "RepeatedDetailReview",
+                "Wall is omitted from clean placement topology because repeated short unlayered linework looks more like detail/object geometry than a reliable wall.",
+                "Keep the candidate for review evidence, but do not import it as a structural wall unless a reviewer promotes it.");
+        }
+
         if (evidenceAssessment is not null
             && (!evidenceAssessment.PlacementReady
                 || evidenceAssessment.RequiresReview
@@ -1429,6 +1478,11 @@ public sealed record PlacementWallOmissionExport(
         evidence.Contains("demoted from placement-ready", StringComparison.OrdinalIgnoreCase)
         || evidence.Contains("severe fragmented-face evidence", StringComparison.OrdinalIgnoreCase)
         || evidence.Contains("already represented by clean topology span", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("unlayered fragment-merged wall candidate", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("only one trusted structural endpoint", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("unlayered parallel-face candidate", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("repeated short unlayered", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("short high-density unknown-layer wall/detail candidate", StringComparison.OrdinalIgnoreCase)
         || evidence.Contains("tiny door-adjacent placement topology piece", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<string> BuildSuppressedOpeningTopologyEvidence(

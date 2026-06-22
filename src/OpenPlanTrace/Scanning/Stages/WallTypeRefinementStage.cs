@@ -510,11 +510,25 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && IsStructuralWallComponent(component)
             && wall.Confidence.Value >= 0.45)
         {
+            if (sideEvidence.HasOutdoorRoomSide)
+            {
+                return new WallTypeRefinement(
+                    WallType.Exterior,
+                    "wall type refined exterior: detected room evidence on one side is outdoor/terrace space");
+            }
+
             if (wall.WallType == WallType.Interior)
             {
                 return new WallTypeRefinement(
                     WallType.Interior,
                     "wall type preserved interior: one-sided room evidence did not override interior wall-envelope evidence");
+            }
+
+            if (wall.WallType == WallType.Unknown && IsRecoveredMissingWallCandidate(wall))
+            {
+                return new WallTypeRefinement(
+                    WallType.Interior,
+                    "wall type refined interior: recovered missing-wall candidate with one-sided room evidence is not trusted as exterior without shell or outdoor evidence");
             }
 
             return new WallTypeRefinement(
@@ -527,6 +541,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && IsStructuralWallComponent(component)
             && wall.Confidence.Value >= 0.6)
         {
+            if (IsRecoveredMissingWallCandidate(wall))
+            {
+                return new WallTypeRefinement(
+                    WallType.Interior,
+                    "wall type refined interior: recovered structural room boundary is not trusted as exterior without shell, outdoor, or side evidence");
+            }
+
             return new WallTypeRefinement(
                 WallType.Exterior,
                 "wall type refined exterior: structural room boundary with no shared room side");
@@ -544,6 +565,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         component is not null
         && (component.ExcludedFromStructuralTopology
             || component.Kind is WallGraphComponentKind.ObjectLikeIsland);
+
+    private static bool IsRecoveredMissingWallCandidate(WallSegment wall) =>
+        wall.Evidence.Any(item =>
+            item.Contains("recovered by wall evidence map", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("missing-wall recovery", StringComparison.OrdinalIgnoreCase));
 
     private static bool TryPromoteRoomConfirmedWallEvidence(
         WallSegment wall,

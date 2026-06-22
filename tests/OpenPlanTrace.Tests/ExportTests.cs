@@ -1739,6 +1739,57 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public async Task VisualSnapshotExporter_DoesNotFlagDenseSourceContextAsDetectorClutter()
+    {
+        var result = await CreateScanResultAsync();
+        var page = Assert.Single(result.Document.Pages);
+        var denseSourceLines = Enumerable.Range(0, 64)
+            .Select(index => new LinePrimitive(
+                new PlanLineSegment(
+                    new PlanPoint(40 + (index % 8) * 0.35, 40 + (index / 8) * 0.35),
+                    new PlanPoint(40 + (index % 8) * 0.35 + 0.2, 40 + (index / 8) * 0.35)))
+            {
+                SourceId = $"dense-source-context-{index}",
+                Layer = "A-DETAIL",
+                Source = new PrimitiveSourceMetadata
+                {
+                    SourceFormat = "test",
+                    SourceId = $"dense-source-context-{index}",
+                    EntityType = "LINE",
+                    Layer = "A-DETAIL",
+                    DrawingSpace = SourceDrawingSpace.Model
+                }
+            })
+            .Cast<PlanPrimitive>()
+            .ToArray();
+
+        var document = result.Document with
+        {
+            Pages =
+            [
+                page with
+                {
+                    Primitives = denseSourceLines
+                }
+            ]
+        };
+
+        result = result with { Document = document };
+
+        var snapshot = PlanOverlaySnapshot.From(
+            result,
+            svgOptions: SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaReview));
+        var snapshotPage = Assert.Single(snapshot.Pages);
+        var sourceContextLayer = snapshotPage.Layers.Single(layer => layer.Name == "sourceContext");
+
+        Assert.True(sourceContextLayer.Count >= 64);
+        Assert.True(sourceContextLayer.NormalizedDensity >= 1000);
+        Assert.DoesNotContain(snapshotPage.Issues, issue =>
+            issue.Code == "visual.layer_density_high"
+            && issue.Message.Contains("sourceContext", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void VisualSnapshotExporter_FlagsHighWallPlacementOmissionRatio()
     {
         var result = WithOmissionLegendPriorityFixture(CreateDenseMinorRoutingDetailResult());
@@ -2265,6 +2316,275 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForOneEndpointFragmentWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.72),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence: Enumerable.Range(1, 16)
+                            .Select(index => $"test lower-priority fragment evidence {index}")
+                            .Append("wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (4 fragments, gap ratio 0); keep for topology but block exact placement until reviewed")
+                            .ToArray())
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("one_endpoint_fragment_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("FragmentEndpointReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("one trusted structural endpoint", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            placementOmission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("one trusted structural endpoint", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("one_endpoint_fragment_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForShortParallelPairReviewWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.7),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence: Enumerable.Range(1, 16)
+                            .Select(index => $"test lower-priority paired evidence {index}")
+                            .Append("wall evidence: short unlayered parallel-face candidate has only one structurally supported endpoint and short paired wall evidence; keep for topology but block exact placement until reviewed")
+                            .ToArray())
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("short_parallel_pair_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("ShortParallelPairReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("short unlayered parallel-face", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            placementOmission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("parallel-face candidate", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("short_parallel_pair_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForFragmentedShortParallelPairReviewWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.7),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence:
+                        [
+                            "wall evidence: short unlayered parallel-face candidate has noisy fragmented face evidence (score 0.718, max face fragments 78, total face fragments 85); keep for topology but block exact placement until reviewed"
+                        ])
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("fragmented_short_parallel_pair_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("FragmentedShortParallelPairReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("fragmented", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("fragmented_short_parallel_pair_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForVeryShortParallelPairReviewWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.7),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence:
+                        [
+                            "wall evidence: very short unlayered parallel-face candidate has low pair score 0.775; keep for topology but block exact placement until reviewed"
+                        ])
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("very_short_parallel_pair_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("VeryShortParallelPairReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("very short", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("very_short_parallel_pair_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
+    public async Task PlacementExporter_UsesSpecificOmissionForRepeatedShortDetailReviewWalls()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.ObjectOrFixtureDetail,
+                        new Confidence(0.42),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence: Enumerable.Range(1, 16)
+                            .Select(index => $"test lower-priority detail evidence {index}")
+                            .Append("wall evidence: repeated short unlayered vertical linework group has 3 similar candidates; review as detail/object linework before exact wall placement")
+                            .ToArray())
+                })
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+
+        var placementOmission = wall.GetProperty("placementOmission");
+        Assert.Equal("repeated_short_detail_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("RepeatedDetailReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("repeated short", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            placementOmission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("repeated short unlayered", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("repeated_short_detail_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
     public async Task PlacementExporter_DoesNotMarkOmittedWallsCoordinateReady()
     {
         var result = await CreateScanResultAsync();
@@ -2324,6 +2644,42 @@ public sealed class ExportTests
         var summary = document.RootElement.GetProperty("summary");
         Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
         Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_RecoversSourceBackedSpanWhenRecoveredInteriorWallBodyHasNoGraphSpan()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            category: WallEvidenceCategory.RecoveredWallBody,
+            evidence:
+            [
+                "recovered by wall evidence map from unclaimed parallel wall-face evidence",
+                "pair score 0.815",
+                "overlap ratio 1",
+                "wall evidence: recovered wall body from unclaimed parallel-face evidence"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("recovered wall body", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
         Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
         Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
     }
@@ -4283,8 +4639,16 @@ public sealed class ExportTests
 
     private static PlanScanResult CreateSourceBackedFallbackWallResult(
         bool includeNearbyGraphSpan = false,
-        double pairScore = 0.93)
+        double pairScore = 0.93,
+        WallEvidenceCategory category = WallEvidenceCategory.StrongWallBody,
+        IReadOnlyList<string>? evidence = null)
     {
+        var wallEvidence = evidence ??
+        [
+            "parallel wall-face pair",
+            "wall evidence: strong double-edge wall body",
+            $"pair score {pairScore.ToString(CultureInfo.InvariantCulture)}"
+        ];
         var wall = SyntheticWall("source-backed-fallback-wall", 80, 120, 180, 120) with
         {
             DetectionKind = WallDetectionKind.ParallelLinePair,
@@ -4299,12 +4663,7 @@ public sealed class ExportTests
                 SecondFaceFragmentCount: 2,
                 FirstFaceSourcePrimitiveIds: ["fallback-face-a"],
                 SecondFaceSourcePrimitiveIds: ["fallback-face-b"]),
-            Evidence =
-            [
-                "parallel wall-face pair",
-                "wall evidence: strong double-edge wall body",
-                $"pair score {pairScore.ToString(CultureInfo.InvariantCulture)}"
-            ]
+            Evidence = wallEvidence
         };
         var walls = new List<WallSegment> { wall };
         var nodes = new List<WallNode>();
@@ -4347,19 +4706,13 @@ public sealed class ExportTests
                 item.Id,
                 item.PageNumber,
                 item.Bounds,
-                WallEvidenceCategory.StrongWallBody,
+                item.Id == wall.Id ? category : WallEvidenceCategory.StrongWallBody,
                 Confidence.High,
                 PlacementReady: true,
                 RequiresReview: false,
                 RejectedAsNoise: false,
                 item.SourcePrimitiveIds,
-                item.Id == wall.Id
-                    ? [
-                        "parallel wall-face pair",
-                        "wall evidence: strong double-edge wall body",
-                        $"pair score {pairScore.ToString(CultureInfo.InvariantCulture)}"
-                    ]
-                    : ["synthetic accepted nearby graph wall body"]))
+                item.Id == wall.Id ? wallEvidence : ["synthetic accepted nearby graph wall body"]))
             .Select(item => item with { Decision = WallEvidenceDecision.Accept })
             .ToArray();
         var now = DateTimeOffset.UtcNow;

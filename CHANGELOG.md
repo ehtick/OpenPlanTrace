@@ -6,6 +6,119 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.181] - 2026-06-22
+
+### Improved
+- Short unlayered parallel-face placement omissions now split into more specific
+  review buckets when evidence allows it:
+  `fragmented_short_parallel_pair_review_required` and
+  `very_short_parallel_pair_review_required`.
+- Wall-QA review legends now show those cases as `omit: fragmented short pairs`
+  and `omit: very short pairs`, making screenshots more useful for deciding
+  whether the next fix should target weak paired faces, short returns, or door
+  and detail noise.
+- Placement schema `v9` now lists the new omission codes.
+
+### Verified
+- Added export and schema tests for both new omission codes.
+- Rescanned the supplied medium-difficulty PDF with `wall-qa-review`; the old
+  `short_parallel_pair_review_required = 3` bucket split into `2` fragmented
+  short pairs and `1` very short pair, while placement stayed at `16` ready /
+  `99` omitted.
+- Rendered and inspected a fresh wall-QA review screenshot at
+  `real-pdf-output/medium-a20-102-20260622-short-pair-taxonomy-v1/wall-qa-review-page-1.png`.
+- Ran the full test suite: `666` tests passed.
+
+## [0.02.180] - 2026-06-22
+
+### Improved
+- Recovered missing-wall candidates that start as unknown are no longer promoted
+  to exterior walls from one-sided room evidence alone. They now stay interior
+  unless outdoor/terrace or trusted exterior-shell evidence exists.
+- This lets accepted recovered interior wall bodies survive into clean
+  coordinate placement instead of being blocked as one-sided recovered exterior
+  walls.
+- Source-backed placement tests now cover recovered wall bodies, not only strong
+  paired wall bodies.
+
+### Verified
+- Added wall-type refinement coverage for recovered one-sided room candidates
+  and outdoor/terrace exceptions.
+- Added placement export coverage for recovered interior wall-body source-backed
+  topology recovery.
+- Rescanned the supplied medium-difficulty PDF with `wall-qa-review`; placement
+  improved from `15` ready / `100` omitted to `16` ready / `99` omitted, and
+  `page:1:wall-evidence-recovered:001` now exports a clean topology span.
+- Rendered and inspected a fresh wall-QA review screenshot at
+  `real-pdf-output/medium-a20-102-20260622-recovered-interior-v1/wall-qa-review-page-1.png`.
+- Ran the full test suite: `664` tests passed.
+
+## [0.02.179] - 2026-06-22
+
+### Improved
+- Visual snapshot diagnostics no longer flag the `sourceContext` layer as dense
+  detector clutter. Source context is intentionally faint background linework in
+  wall-QA screenshots, not exported wall/object output.
+- Dense detector layers such as objects still produce
+  `visual.layer_density_high` warnings, so real clutter checks remain active.
+
+### Verified
+- Added visual snapshot regression coverage for dense source-context linework.
+- Rescanned the supplied medium-difficulty PDF with `wall-qa-review`; the dense
+  `sourceContext` layer stayed visible with 6,652 items but no longer produced a
+  misleading density warning.
+- Rendered and inspected a fresh wall-QA review screenshot at
+  `real-pdf-output/medium-a20-102-20260622-source-context-density-v1/wall-qa-review-page-1.png`.
+- Ran the full test suite: `661` tests passed.
+
+## [0.02.178] - 2026-06-22
+
+### Improved
+- Placement omissions now split short unlayered parallel-face review candidates
+  into `short_parallel_pair_review_required` instead of leaving them in generic
+  wall-evidence review.
+- Repeated short unlayered detail/object-like linework now reports as
+  `repeated_short_detail_review_required`.
+- Wall-QA review legends now expose those buckets as `omit: short paired
+  reviews` and `omit: repeated short details`, making review screenshots more
+  useful for deciding the next wall-accuracy fix.
+- Placement omission evidence prioritization now preserves short parallel-pair
+  and repeated-detail reasons even when lower-priority evidence is noisy.
+
+### Verified
+- Added export/schema coverage for both new omission codes, including evidence
+  priority tests.
+- Rescanned a supplied medium-difficulty PDF with `wall-qa-review`; generic
+  `wall_evidence_review_required` dropped from `5` to `0`, with `4` short paired
+  review candidates and `1` repeated short detail candidate now separated.
+- Rendered and inspected a fresh wall-QA review screenshot at
+  `real-pdf-output/medium-a20-102-20260622-specific-review-v1/wall-qa-review-page-1.png`.
+- Ran the full test suite: `660` tests passed.
+
+## [0.02.177] - 2026-06-22
+
+### Improved
+- Placement omissions now classify unlayered fragment-merged wall candidates
+  with only one trusted structural endpoint as
+  `one_endpoint_fragment_review_required` instead of folding them into generic
+  wall-evidence review.
+- Wall-QA review summaries now show those cases as `omit: one-ended fragments`,
+  making missing/ambiguous wall segments easier to triage from screenshots.
+- Placement omission evidence prioritization now preserves one-ended fragment
+  and short dense detail reasons even when a wall has many lower-priority source
+  evidence strings.
+
+### Verified
+- Added export/schema coverage for the new omission code, including evidence
+  priority coverage when the key reason appears after many lower-priority
+  evidence items.
+- Rescanned a supplied medium-difficulty PDF with `wall-qa-review`; generic
+  `wall_evidence_review_required` dropped from `9` to `5`, and `4` ambiguous
+  fragment candidates now report as `one_endpoint_fragment_review_required`.
+- Rendered and inspected a fresh wall-QA review screenshot at
+  `real-pdf-output/medium-a20-102-20260622-one-endpoint-v2/wall-qa-review-page-1.png`.
+- Ran the full test suite: `658` tests passed.
+
 ## [0.02.176] - 2026-06-22
 
 ### Improved

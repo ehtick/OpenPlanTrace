@@ -607,7 +607,8 @@ public sealed record PlanOverlayPageSnapshot(
         layers.FirstOrDefault(layer => string.Equals(layer.Name, name, StringComparison.Ordinal))?.Count ?? 0;
 
     private static bool IsHighDensityLayer(PlanOverlayLayerSnapshot layer) =>
-        layer.Count >= 20
+        !string.Equals(layer.Name, "sourceContext", StringComparison.Ordinal)
+        && layer.Count >= 20
         && !layer.NormalizedBounds.IsEmpty
         && layer.NormalizedDensity >= 1000;
 
