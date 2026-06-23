@@ -356,6 +356,7 @@
         "placementReadyWallCount",
         "placementOmittedWallCount",
         "representedWallCount",
+        "placementSuppressedWallCount",
         "placementReviewWallCount",
         "omissionCounts",
         "topOmissions"
@@ -368,6 +369,9 @@
           "$ref": "#/$defs/nonNegativeInteger"
         },
         "representedWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "placementSuppressedWallCount": {
           "$ref": "#/$defs/nonNegativeInteger"
         },
         "placementReviewWallCount": {

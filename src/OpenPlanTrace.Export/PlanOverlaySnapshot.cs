@@ -532,7 +532,7 @@ public sealed record PlanOverlayPageSnapshot(
                 "visual.wall_placement_omission_ratio_high",
                 pageNumber,
                 "warning",
-                $"{wallPlacement.PlacementReviewWallCount} wall candidate(s) still require review versus {wallPlacement.PlacementReadyWallCount} placement-ready wall(s), {wallPlacement.RepresentedWallCount} represented duplicate/context wall(s), and {cleanSpanCount} clean topology span(s); inspect raw detected walls and non-placement spans before trusting wall placement.");
+                $"{wallPlacement.PlacementReviewWallCount} wall candidate(s) still require review versus {wallPlacement.PlacementReadyWallCount} placement-ready wall(s), {wallPlacement.PlacementSuppressedWallCount} suppressed/noise wall candidate(s), {wallPlacement.RepresentedWallCount} represented duplicate/context wall(s), and {cleanSpanCount} clean topology span(s); inspect raw detected walls and non-placement spans before trusting wall placement.");
         }
 
         var objectCount = LayerCount(layers, "objects");

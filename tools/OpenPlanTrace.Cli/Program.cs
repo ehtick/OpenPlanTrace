@@ -2046,6 +2046,9 @@ internal static class OpenPlanTraceCli
         var structuralWalls = walls.Where(IsPlacementReliabilityTrackedWall).ToArray();
         var placementReadyWallCount = PlacementReadyWallCount(walls);
         var placementOmittedWallCount = PlacementOmittedWallCount(walls);
+        var representedWallCount = RepresentedWallCount(walls);
+        var placementSuppressedWallCount = PlacementSuppressedWallCount(walls);
+        var placementReviewWallCount = PlacementReviewWallCount(walls);
         var wallTopologySpanCount = WallSpanCount(walls, "topologySpans");
         var sourceBackedFallbackWallCount = SourceBackedFallbackWallCount(walls);
         var sourceBackedFallbackTopologySpanCount = SourceBackedFallbackTopologySpanCount(walls);
@@ -2072,6 +2075,9 @@ internal static class OpenPlanTraceCli
         AddExpectedIntegerMessage(Prefix, "excludedWallCount", walls.Length - structuralWalls.Length, summary, messages);
         AddExpectedIntegerMessage(Prefix, "placementReadyWallCount", placementReadyWallCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "placementOmittedWallCount", placementOmittedWallCount, summary, messages);
+        AddExpectedIntegerMessage(Prefix, "representedWallCount", representedWallCount, summary, messages);
+        AddExpectedIntegerMessage(Prefix, "placementSuppressedWallCount", placementSuppressedWallCount, summary, messages);
+        AddExpectedIntegerMessage(Prefix, "placementReviewWallCount", placementReviewWallCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "wallTopologySpanCount", wallTopologySpanCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "sourceBackedFallbackWallCount", sourceBackedFallbackWallCount, summary, messages);
         AddExpectedIntegerMessage(Prefix, "sourceBackedFallbackTopologySpanCount", sourceBackedFallbackTopologySpanCount, summary, messages);
@@ -2208,6 +2214,9 @@ internal static class OpenPlanTraceCli
         var pageStructuralWalls = pageWalls.Where(IsPlacementReliabilityTrackedWall).ToArray();
         var placementReadyWallCount = PlacementReadyWallCount(pageWalls);
         var placementOmittedWallCount = PlacementOmittedWallCount(pageWalls);
+        var representedWallCount = RepresentedWallCount(pageWalls);
+        var placementSuppressedWallCount = PlacementSuppressedWallCount(pageWalls);
+        var placementReviewWallCount = PlacementReviewWallCount(pageWalls);
         var wallTopologySpanCount = WallSpanCount(pageWalls, "topologySpans");
         var sourceBackedFallbackWallCount = SourceBackedFallbackWallCount(pageWalls);
         var sourceBackedFallbackTopologySpanCount = SourceBackedFallbackTopologySpanCount(pageWalls);
@@ -2227,6 +2236,9 @@ internal static class OpenPlanTraceCli
         AddExpectedIntegerMessage(prefix, "excludedWallCount", pageWalls.Length - pageStructuralWalls.Length, summary, messages);
         AddExpectedIntegerMessage(prefix, "placementReadyWallCount", placementReadyWallCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "placementOmittedWallCount", placementOmittedWallCount, summary, messages);
+        AddExpectedIntegerMessage(prefix, "representedWallCount", representedWallCount, summary, messages);
+        AddExpectedIntegerMessage(prefix, "placementSuppressedWallCount", placementSuppressedWallCount, summary, messages);
+        AddExpectedIntegerMessage(prefix, "placementReviewWallCount", placementReviewWallCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "wallTopologySpanCount", wallTopologySpanCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "sourceBackedFallbackWallCount", sourceBackedFallbackWallCount, summary, messages);
         AddExpectedIntegerMessage(prefix, "sourceBackedFallbackTopologySpanCount", sourceBackedFallbackTopologySpanCount, summary, messages);
@@ -2276,6 +2288,31 @@ internal static class OpenPlanTraceCli
 
     private static int PlacementOmittedWallCount(JsonElement[] walls) =>
         walls.Count(HasPlacementOmission);
+
+    private static int RepresentedWallCount(JsonElement[] walls) =>
+        walls.Count(wall => IsRepresentedWallCode(PlacementOmissionCode(wall)));
+
+    private static int PlacementSuppressedWallCount(JsonElement[] walls) =>
+        walls.Count(wall => IsPlacementSuppressedWallCode(PlacementOmissionCode(wall)));
+
+    private static int PlacementReviewWallCount(JsonElement[] walls) =>
+        walls.Count(wall =>
+        {
+            var code = PlacementOmissionCode(wall);
+            return code is not null
+                && !IsRepresentedWallCode(code)
+                && !IsPlacementSuppressedWallCode(code);
+        });
+
+    private static bool IsRepresentedWallCode(string? code) =>
+        code is "duplicate_clean_topology_span" or "duplicate_wall_face";
+
+    private static bool IsPlacementSuppressedWallCode(string? code) =>
+        code is
+            "rejected_wall_evidence"
+            or "object_like_linework"
+            or "structural_topology_excluded"
+            or "tiny_door_adjacent_topology_suppressed";
 
     private static int WallSpanCount(JsonElement[] walls, string propertyName) =>
         walls.Sum(wall =>

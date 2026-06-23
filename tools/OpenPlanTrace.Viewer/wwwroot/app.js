@@ -9646,6 +9646,7 @@ function visualSnapshotCountRows(snapshot = state.visualSnapshot) {
     ["Primitive count", page?.primitiveCount ?? 0],
     ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
     ["Review walls", wallPlacement?.placementReviewWallCount ?? 0],
+    ["Suppressed walls", wallPlacement?.placementSuppressedWallCount ?? 0],
     ["Represented walls", wallPlacement?.representedWallCount ?? 0],
     ["Review queue", snapshot?.reviewQueueCount ?? 0],
     ["Issues", visualSnapshotIssues(snapshot).length],
@@ -9664,6 +9665,7 @@ function visualSnapshotAnalysisRows(snapshot = state.visualSnapshot, page = visu
     ["All detections", page?.drawableItemCount ?? 0],
     ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
     ["Review walls", wallPlacement?.placementReviewWallCount ?? 0],
+    ["Suppressed walls", wallPlacement?.placementSuppressedWallCount ?? 0],
     ["Represented walls", wallPlacement?.representedWallCount ?? 0],
     ["Top wall omission", visualSnapshotTopWallOmissionLabel(wallPlacement)],
     ["Source layers", page?.layers?.length ?? 0],
@@ -9679,6 +9681,7 @@ function visualSnapshotWallPlacementRows(page = visualSnapshotCurrentPage()) {
   return [
     ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
     ["Review walls", wallPlacement?.placementReviewWallCount ?? 0],
+    ["Suppressed/noise walls", wallPlacement?.placementSuppressedWallCount ?? 0],
     ["Represented duplicate/context walls", wallPlacement?.representedWallCount ?? 0],
     ["Omitted wall candidates total", wallPlacement?.placementOmittedWallCount ?? 0],
     ["Omission codes", omissionCodes],
@@ -14861,6 +14864,7 @@ function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
       placementReadyWallCount: 0,
       placementOmittedWallCount: 0,
       representedWallCount: 0,
+      placementSuppressedWallCount: 0,
       placementReviewWallCount: 0,
       omissionCounts: {},
       topOmissions: [],
@@ -14870,18 +14874,23 @@ function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
 
   const placementOmittedWallCount = nonNegativeInteger(summary.placementOmittedWallCount);
   const representedWallCount = nonNegativeInteger(summary.representedWallCount);
+  const omissionCounts = summary.omissionCounts && typeof summary.omissionCounts === "object"
+    ? Object.fromEntries(Object.entries(summary.omissionCounts)
+      .map(([key, value]) => [key, nonNegativeInteger(value)]))
+    : {};
+  const placementSuppressedWallCount = summary.placementSuppressedWallCount === undefined
+    ? visualSnapshotSuppressedWallCount(omissionCounts)
+    : nonNegativeInteger(summary.placementSuppressedWallCount);
   const placementReviewWallCount = summary.placementReviewWallCount === undefined
-    ? Math.max(0, placementOmittedWallCount - representedWallCount)
+    ? Math.max(0, placementOmittedWallCount - representedWallCount - placementSuppressedWallCount)
     : nonNegativeInteger(summary.placementReviewWallCount);
   return {
     placementReadyWallCount: nonNegativeInteger(summary.placementReadyWallCount),
     placementOmittedWallCount,
     representedWallCount,
+    placementSuppressedWallCount,
     placementReviewWallCount,
-    omissionCounts: summary.omissionCounts && typeof summary.omissionCounts === "object"
-      ? Object.fromEntries(Object.entries(summary.omissionCounts)
-        .map(([key, value]) => [key, nonNegativeInteger(value)]))
-      : {},
+    omissionCounts,
     topOmissions: (Array.isArray(summary.topOmissions) ? summary.topOmissions : [])
       .map((item) => ({
         code: String(item?.code || ""),
@@ -14894,6 +14903,15 @@ function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
       .map(normalizeVisualSnapshotOmittedWallExample)
       .filter(Boolean)
   };
+}
+
+function visualSnapshotSuppressedWallCount(omissionCounts = {}) {
+  return [
+    "rejected_wall_evidence",
+    "object_like_linework",
+    "structural_topology_excluded",
+    "tiny_door_adjacent_topology_suppressed"
+  ].reduce((sum, code) => sum + nonNegativeInteger(omissionCounts[code]), 0);
 }
 
 function normalizeVisualSnapshotOmittedWallExample(item) {

@@ -7,6 +7,7 @@ public sealed record PlanOverlayWallPlacementSummary(
     int PlacementReadyWallCount,
     int PlacementOmittedWallCount,
     int RepresentedWallCount,
+    int PlacementSuppressedWallCount,
     int PlacementReviewWallCount,
     IReadOnlyDictionary<string, int> OmissionCounts,
     IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions,
@@ -84,6 +85,7 @@ internal static class WallPlacementOmissionSummary
         var omittedWalls = new List<PlanOverlayWallPlacementOmittedWallExample>();
         var readyCount = 0;
         var representedCount = 0;
+        var suppressedCount = 0;
 
         foreach (var wall in result.Walls.Where(wall => wall.PageNumber == pageNumber))
         {
@@ -150,6 +152,10 @@ internal static class WallPlacementOmissionSummary
                 {
                     representedCount++;
                 }
+                else if (IsPlacementSuppressedWall(omission.Code))
+                {
+                    suppressedCount++;
+                }
 
                 omittedWalls.Add(ToOmittedWallExample(wall, omission, topologySpans));
             }
@@ -164,7 +170,8 @@ internal static class WallPlacementOmissionSummary
             readyCount,
             omissionCodes.Count,
             representedCount,
-            Math.Max(0, omissionCodes.Count - representedCount),
+            suppressedCount,
+            Math.Max(0, omissionCodes.Count - representedCount - suppressedCount),
             omissionCounts,
             topOmissions,
             TopOmittedWallExamples(omittedWalls, maxOmittedWallExamples));
@@ -173,6 +180,12 @@ internal static class WallPlacementOmissionSummary
     private static bool IsRepresentedWall(string code) =>
         string.Equals(code, "duplicate_clean_topology_span", StringComparison.Ordinal)
         || string.Equals(code, "duplicate_wall_face", StringComparison.Ordinal);
+
+    private static bool IsPlacementSuppressedWall(string code) =>
+        string.Equals(code, "rejected_wall_evidence", StringComparison.Ordinal)
+        || string.Equals(code, "object_like_linework", StringComparison.Ordinal)
+        || string.Equals(code, "structural_topology_excluded", StringComparison.Ordinal)
+        || string.Equals(code, "tiny_door_adjacent_topology_suppressed", StringComparison.Ordinal);
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(
         IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> examples,
@@ -272,9 +285,12 @@ internal static class WallPlacementOmissionSummary
             "repeated_short_detail_review_required" => 30,
             "secondary_without_room_boundary_support" => 30,
             "isolated_fragment" => 40,
-            "rejected_wall_evidence" => 50,
-            "duplicate_clean_topology_span" => 55,
-            "duplicate_wall_face" => 60,
+            "rejected_wall_evidence" => 80,
+            "object_like_linework" => 82,
+            "structural_topology_excluded" => 84,
+            "tiny_door_adjacent_topology_suppressed" => 86,
+            "duplicate_clean_topology_span" => 90,
+            "duplicate_wall_face" => 92,
             _ => 100
         };
     }

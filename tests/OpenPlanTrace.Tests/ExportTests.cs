@@ -805,6 +805,7 @@ public sealed class ExportTests
         Assert.Equal(1, summary.GetProperty("wallTopologySpanCount").GetInt32());
         Assert.Equal(1, summary.GetProperty("placementOmittedWallCount").GetInt32());
         Assert.Equal(1, summary.GetProperty("representedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementSuppressedWallCount").GetInt32());
         Assert.Equal(0, summary.GetProperty("placementReviewWallCount").GetInt32());
     }
 
@@ -1607,6 +1608,7 @@ public sealed class ExportTests
         Assert.Equal(1, page.WallPlacement.PlacementReadyWallCount);
         Assert.Equal(4, page.WallPlacement.PlacementOmittedWallCount);
         Assert.Equal(0, page.WallPlacement.RepresentedWallCount);
+        Assert.Equal(0, page.WallPlacement.PlacementSuppressedWallCount);
         Assert.Equal(4, page.WallPlacement.PlacementReviewWallCount);
         Assert.Equal(1, page.WallPlacement.OmissionCounts["wall_evidence_review_required"]);
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "wallBodyFootprints").Count);
@@ -1850,6 +1852,7 @@ public sealed class ExportTests
         Assert.True(pageWallPlacement.GetProperty("placementReadyWallCount").GetInt32() >= 1);
         Assert.True(pageWallPlacement.GetProperty("placementOmittedWallCount").GetInt32() >= 0);
         Assert.True(pageWallPlacement.GetProperty("representedWallCount").GetInt32() >= 0);
+        Assert.True(pageWallPlacement.GetProperty("placementSuppressedWallCount").GetInt32() >= 0);
         Assert.True(pageWallPlacement.GetProperty("placementReviewWallCount").GetInt32() >= 0);
         Assert.Equal(JsonValueKind.Object, pageWallPlacement.GetProperty("omissionCounts").ValueKind);
         Assert.Equal(JsonValueKind.Array, pageWallPlacement.GetProperty("topOmissions").ValueKind);

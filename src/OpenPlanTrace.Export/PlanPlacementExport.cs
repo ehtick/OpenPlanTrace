@@ -335,6 +335,7 @@ public sealed record PlacementSummaryExport(
     int PlacementReadyWallCount,
     int PlacementOmittedWallCount,
     int RepresentedWallCount,
+    int PlacementSuppressedWallCount,
     int PlacementReviewWallCount,
     int WallTopologySpanCount,
     int SourceBackedFallbackWallCount,
@@ -388,7 +389,8 @@ public sealed record PlacementSummaryExport(
         var placementReadyWallCount = CountPlacementReadyWalls(walls);
         var placementOmittedWallCount = walls.Count(wall => wall.PlacementOmission is not null);
         var representedWallCount = CountRepresentedWalls(walls);
-        var placementReviewWallCount = Math.Max(0, placementOmittedWallCount - representedWallCount);
+        var placementSuppressedWallCount = CountPlacementSuppressedWalls(walls);
+        var placementReviewWallCount = CountPlacementReviewWalls(walls);
         var wallTopologySpanCount = walls.Sum(wall => wall.TopologySpans.Count);
         var sourceBackedFallbackWallCount = CountSourceBackedFallbackWalls(walls);
         var sourceBackedFallbackTopologySpanCount = CountSourceBackedFallbackTopologySpans(walls);
@@ -443,6 +445,7 @@ public sealed record PlacementSummaryExport(
             placementReadyWallCount,
             placementOmittedWallCount,
             representedWallCount,
+            placementSuppressedWallCount,
             placementReviewWallCount,
             wallTopologySpanCount,
             sourceBackedFallbackWallCount,
@@ -500,7 +503,7 @@ public sealed record PlacementSummaryExport(
                     routingLayer,
                     issues))
                 .ToArray(),
-            BuildEvidence(result, reliabilityTrackedEntityCount, coordinateReadyEntityCount, metricReadyEntityCount, reviewRequiredEntityCount, placementReadyWallCount, placementOmittedWallCount, representedWallCount, placementReviewWallCount, sourceBackedFallbackTopologySpanCount, issues));
+            BuildEvidence(result, reliabilityTrackedEntityCount, coordinateReadyEntityCount, metricReadyEntityCount, reviewRequiredEntityCount, placementReadyWallCount, placementOmittedWallCount, representedWallCount, placementSuppressedWallCount, placementReviewWallCount, sourceBackedFallbackTopologySpanCount, issues));
     }
 
     private static int CountRoutingItems(PlacementRoutingLayerExport routingLayer) =>
@@ -521,6 +524,22 @@ public sealed record PlacementSummaryExport(
 
     internal static bool IsRepresentedWall(PlacementWallExport wall) =>
         wall.PlacementOmission?.Code is "duplicate_clean_topology_span" or "duplicate_wall_face";
+
+    internal static int CountPlacementSuppressedWalls(IEnumerable<PlacementWallExport> walls) =>
+        walls.Count(IsPlacementSuppressedWall);
+
+    internal static int CountPlacementReviewWalls(IEnumerable<PlacementWallExport> walls) =>
+        walls.Count(wall =>
+            wall.PlacementOmission is not null
+            && !IsRepresentedWall(wall)
+            && !IsPlacementSuppressedWall(wall));
+
+    internal static bool IsPlacementSuppressedWall(PlacementWallExport wall) =>
+        wall.PlacementOmission?.Code is
+            "rejected_wall_evidence"
+            or "object_like_linework"
+            or "structural_topology_excluded"
+            or "tiny_door_adjacent_topology_suppressed";
 
     internal static bool IsReliabilityTrackedWall(PlacementWallExport wall)
     {
@@ -608,6 +627,7 @@ public sealed record PlacementSummaryExport(
         int placementReadyWallCount,
         int placementOmittedWallCount,
         int representedWallCount,
+        int placementSuppressedWallCount,
         int placementReviewWallCount,
         int sourceBackedFallbackTopologySpanCount,
         IReadOnlyList<PlacementIssueExport> issues)
@@ -620,6 +640,7 @@ public sealed record PlacementSummaryExport(
             $"placement-ready walls {placementReadyWallCount}/{result.Walls.Count}",
             $"placement-omitted walls {placementOmittedWallCount}/{result.Walls.Count}",
             $"placement-review walls {placementReviewWallCount}/{result.Walls.Count}",
+            $"placement-suppressed walls {placementSuppressedWallCount}/{result.Walls.Count}",
             $"represented duplicate/context walls {representedWallCount}/{result.Walls.Count}"
         };
 
@@ -758,6 +779,7 @@ public sealed record PlacementPageSummaryExport(
     int PlacementReadyWallCount,
     int PlacementOmittedWallCount,
     int RepresentedWallCount,
+    int PlacementSuppressedWallCount,
     int PlacementReviewWallCount,
     int WallTopologySpanCount,
     int SourceBackedFallbackWallCount,
@@ -795,7 +817,8 @@ public sealed record PlacementPageSummaryExport(
         var placementReadyWallCount = PlacementSummaryExport.CountPlacementReadyWalls(pageWalls);
         var placementOmittedWallCount = pageWalls.Count(wall => wall.PlacementOmission is not null);
         var representedWallCount = PlacementSummaryExport.CountRepresentedWalls(pageWalls);
-        var placementReviewWallCount = Math.Max(0, placementOmittedWallCount - representedWallCount);
+        var placementSuppressedWallCount = PlacementSummaryExport.CountPlacementSuppressedWalls(pageWalls);
+        var placementReviewWallCount = PlacementSummaryExport.CountPlacementReviewWalls(pageWalls);
         var wallTopologySpanCount = pageWalls.Sum(wall => wall.TopologySpans.Count);
         var sourceBackedFallbackWallCount = PlacementSummaryExport.CountSourceBackedFallbackWalls(pageWalls);
         var sourceBackedFallbackTopologySpanCount = PlacementSummaryExport.CountSourceBackedFallbackTopologySpans(pageWalls);
@@ -833,6 +856,7 @@ public sealed record PlacementPageSummaryExport(
             placementReadyWallCount,
             placementOmittedWallCount,
             representedWallCount,
+            placementSuppressedWallCount,
             placementReviewWallCount,
             wallTopologySpanCount,
             sourceBackedFallbackWallCount,
@@ -1181,7 +1205,7 @@ public sealed record PlacementQualityGateExport(
             $"Import readiness {summary.ImportReadiness.Grade} with score {summary.ImportReadiness.Score:0.###}.",
             $"Coordinate-ready import entities {summary.CoordinateReadyEntityCount}/{summary.ReliabilityTrackedEntityCount} ({summary.CoordinateReadyRatio:0.###}).",
             $"Metric-ready import entities {summary.MetricReadyEntityCount}/{summary.ReliabilityTrackedEntityCount} ({summary.MetricReadyRatio:0.###}).",
-            $"Placement-ready walls {summary.PlacementReadyWallCount}/{summary.WallCount}; review walls {summary.PlacementReviewWallCount}/{summary.WallCount}; represented duplicate/context walls {summary.RepresentedWallCount}/{summary.WallCount}."
+            $"Placement-ready walls {summary.PlacementReadyWallCount}/{summary.WallCount}; review walls {summary.PlacementReviewWallCount}/{summary.WallCount}; suppressed walls {summary.PlacementSuppressedWallCount}/{summary.WallCount}; represented duplicate/context walls {summary.RepresentedWallCount}/{summary.WallCount}."
         };
 
         if (!summary.ImportReadiness.ReadyForGeometryImport)

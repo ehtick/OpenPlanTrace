@@ -296,6 +296,7 @@
         "placementReadyWallCount",
         "placementOmittedWallCount",
         "representedWallCount",
+        "placementSuppressedWallCount",
         "placementReviewWallCount",
         "wallTopologySpanCount",
         "sourceBackedFallbackWallCount",
@@ -363,9 +364,13 @@
           "$ref": "#/$defs/nonNegativeInteger",
           "description": "Omitted walls that are represented by a cleaner duplicate topology span or wall face."
         },
+        "placementSuppressedWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger",
+          "description": "Omitted walls that were suppressed as rejected evidence, non-wall detail, structural-topology exclusions, or tiny door-adjacent leftovers."
+        },
         "placementReviewWallCount": {
           "$ref": "#/$defs/nonNegativeInteger",
-          "description": "Omitted walls that are not represented by cleaner topology and still need placement review."
+          "description": "Omitted walls that are neither represented by cleaner topology nor suppressed as non-wall/detail noise and still need placement review."
         },
         "wallTopologySpanCount": {
           "$ref": "#/$defs/nonNegativeInteger",
@@ -544,6 +549,7 @@
         "placementReadyWallCount",
         "placementOmittedWallCount",
         "representedWallCount",
+        "placementSuppressedWallCount",
         "placementReviewWallCount",
         "wallTopologySpanCount",
         "sourceBackedFallbackWallCount",
@@ -598,6 +604,9 @@
           "$ref": "#/$defs/nonNegativeInteger"
         },
         "representedWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "placementSuppressedWallCount": {
           "$ref": "#/$defs/nonNegativeInteger"
         },
         "placementReviewWallCount": {
