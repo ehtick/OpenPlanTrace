@@ -941,12 +941,18 @@ public static class PlanOverlaySvgRenderer
                 span.SourceWall,
                 component,
                 evidenceAssessment);
+        var trustedRoomBoundaryIsolatedFragment =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedFragment(
+                span.SourceWall,
+                component,
+                evidenceAssessment);
 
         if (WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment))
         {
             classes.Add("wall-topology-span-excluded");
         }
         else if (!trustedExteriorShellContinuityFragment
+            && !trustedRoomBoundaryIsolatedFragment
             && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment))
         {
             classes.Add("wall-topology-span-review-only");
@@ -999,9 +1005,15 @@ public static class PlanOverlaySvgRenderer
                 footprint.SourceWall,
                 component,
                 evidenceAssessment);
+        var trustedRoomBoundaryIsolatedFragment =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedFragment(
+                footprint.SourceWall,
+                component,
+                evidenceAssessment);
 
         if (WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment)
             || (!trustedExteriorShellContinuityFragment
+                && !trustedRoomBoundaryIsolatedFragment
                 && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment)))
         {
             classes.Add("wall-body-footprint-excluded");

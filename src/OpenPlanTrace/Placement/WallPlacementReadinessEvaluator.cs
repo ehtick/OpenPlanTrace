@@ -38,6 +38,12 @@ public static class WallPlacementReadinessEvaluator
     private const double MinTrustedExteriorShellContinuityFaceSeparationDrawingUnits = 2.0;
     private const double MaxTrustedExteriorShellContinuityFaceSeparationDrawingUnits = 18.0;
     private const int MaxTrustedExteriorShellContinuityFaceFragments = 144;
+    private const double MinTrustedTwoSidedRoomIsolatedLengthDrawingUnits = 72.0;
+    private const double MinTrustedTwoSidedRoomIsolatedPairScore = 0.90;
+    private const double MinTrustedTwoSidedRoomIsolatedOverlapRatio = 0.95;
+    private const double MinTrustedTwoSidedRoomIsolatedFaceSeparationDrawingUnits = 2.0;
+    private const double MaxTrustedTwoSidedRoomIsolatedFaceSeparationDrawingUnits = 18.0;
+    private const int MaxTrustedTwoSidedRoomIsolatedFaceFragments = 32;
 
     public static WallPlacementReadiness Evaluate(
         WallSegment wall,
@@ -329,12 +335,17 @@ public static class WallPlacementReadinessEvaluator
         }
 
         var evidence = wall.Evidence.Concat(evidenceAssessment.Evidence).ToArray();
-        if (!EvidenceContains(evidence, RoomConfirmedIsolatedFragmentPromotionEvidence))
+        var hasRoomConfirmedPromotion = EvidenceContains(evidence, RoomConfirmedIsolatedFragmentPromotionEvidence);
+        var hasTrustedTwoSidedRoomBoundary = HasTrustedTwoSidedRoomBoundaryIsolatedEvidence(
+            wall,
+            evidenceAssessment,
+            evidence);
+        if (!hasRoomConfirmedPromotion && !hasTrustedTwoSidedRoomBoundary)
         {
             return false;
         }
 
-        return !EvidenceContainsAny(
+        var blocked = EvidenceContainsAny(
             evidence,
             "outdoor",
             "terrace",
@@ -344,8 +355,36 @@ public static class WallPlacementReadinessEvaluator
             "overbygd",
             "object/fixture detail",
             "surface pattern",
-            "door/opening",
-            "dimension-like");
+            "door/opening")
+            || (!hasTrustedTwoSidedRoomBoundary && EvidenceContains(evidence, "dimension-like"));
+        return !blocked;
+    }
+
+    private static bool HasTrustedTwoSidedRoomBoundaryIsolatedEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment evidenceAssessment,
+        IReadOnlyList<string> evidence)
+    {
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedTwoSidedRoomIsolatedLengthDrawingUnits
+            || evidenceAssessment.Category != WallEvidenceCategory.StrongWallBody
+            || wall.PairEvidence is not { } pair)
+        {
+            return false;
+        }
+
+        if (pair.Score < MinTrustedTwoSidedRoomIsolatedPairScore
+            || pair.OverlapRatio < MinTrustedTwoSidedRoomIsolatedOverlapRatio
+            || pair.FaceSeparation < MinTrustedTwoSidedRoomIsolatedFaceSeparationDrawingUnits
+            || pair.FaceSeparation > MaxTrustedTwoSidedRoomIsolatedFaceSeparationDrawingUnits
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount)
+                > MaxTrustedTwoSidedRoomIsolatedFaceFragments)
+        {
+            return false;
+        }
+
+        return EvidenceContains(evidence, "detected room evidence on both sides")
+            && EvidenceContains(evidence, "supported wall evidence inside exterior envelope");
     }
 
     private static bool CoordinatePlacementBlockedByRecoveredOneSidedExteriorEvidence(

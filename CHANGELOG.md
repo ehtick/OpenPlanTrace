@@ -6,6 +6,42 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.03.011] - 2026-06-23
+
+### Improved
+- Added a trusted long main-structural interior wall lane so strong paired wall
+  bodies inside the floorplan envelope can stay placement-ready even when room
+  semantic boundary matching misses them.
+- Added a trusted two-sided isolated room-wall lane for long, high-confidence
+  paired wall bodies that have detected room evidence on both sides but were
+  isolated by the wall graph.
+- Kept covered-entry/outdoor/detail safeguards in front of these promotions so
+  overbygd/terrace/canopy-like boundaries, object/detail linework, and tiny
+  door-adjacent leftovers remain review-only.
+- Updated wall-QA rendering so trusted isolated room-wall promotions draw as
+  clean wall spans/footprints instead of amber review-only geometry.
+
+### Verified
+- Added regression tests for trusted long main-structural wall promotion,
+  covered-area vetoes, trusted two-sided isolated room-wall promotion, weak-pair
+  rejection, and source-backed placement span export.
+- Ran focused scanner/export/readiness tests: `260` tests passed.
+- Ran the full test suite: `761` tests passed.
+- Ran the supplied hard, medium, and light PDF corpus in that order with compact
+  JSON, GeoJSON, placement exports, wall-QA overlays, and wall-QA screenshots
+  rendered headlessly with Edge.
+- Hard corpus improved from `8` to `10` placement-ready walls, from `10` to `12`
+  visible clean topology spans, from `0.428571` to `0.453125` coordinate-ready
+  ratio, and reduced placement-omitted walls from `53` to `51`.
+- Medium corpus improved from `18` to `19` placement-ready walls, from `20` to
+  `22` visible clean topology spans, from `0.571429` to `0.594203`
+  coordinate-ready ratio, and reduced review-required entities by `2`.
+- Light corpus stayed stable at `48` walls, `16` placement-ready walls, `19`
+  visible clean topology spans, and `0.558824` coordinate-ready ratio.
+- Visual review confirms the overlay is moving in the right direction, but the
+  next major accuracy blocker is still wall-graph and room-boundary attachment
+  in dense bathroom, stair, door, and fixture zones.
+
 ## [0.03.010] - 2026-06-23
 
 ### Improved

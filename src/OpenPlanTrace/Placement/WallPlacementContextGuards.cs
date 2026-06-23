@@ -8,6 +8,12 @@ public static class WallPlacementContextGuards
     private const double MinTrustedSecondaryExteriorShellFaceSeparationDrawingUnits = 2.0;
     private const double MaxTrustedSecondaryExteriorShellFaceSeparationDrawingUnits = 18.0;
     private const int MaxTrustedSecondaryExteriorShellFaceFragments = 220;
+    private const double MinTrustedMainStructuralInteriorLengthDrawingUnits = 80.0;
+    private const double MinTrustedMainStructuralInteriorPairScore = 0.82;
+    private const double MinTrustedMainStructuralInteriorOverlapRatio = 0.95;
+    private const double MinTrustedMainStructuralInteriorFaceSeparationDrawingUnits = 2.0;
+    private const double MaxTrustedMainStructuralInteriorFaceSeparationDrawingUnits = 18.0;
+    private const int MaxTrustedMainStructuralInteriorFaceFragments = 64;
 
     public const string SecondaryStructuralWithoutRoomBoundarySupportReason =
         "secondary structural wall component lacks room-boundary support";
@@ -269,6 +275,11 @@ public static class WallPlacementContextGuards
             return false;
         }
 
+        if (HasTrustedLongMainStructuralInteriorWallBodySupport(wall, component, assessment, evidence))
+        {
+            return false;
+        }
+
         if (assessment.Category == WallEvidenceCategory.RecoveredWallBody)
         {
             return true;
@@ -300,6 +311,67 @@ public static class WallPlacementContextGuards
                 || maxFaceFragmentCount >= 24
                 || wall.FragmentEvidence?.FragmentCount >= 8
                 || wall.FragmentEvidence?.DuplicatePrimitiveCount >= 4);
+    }
+
+    private static bool HasTrustedLongMainStructuralInteriorWallBodySupport(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment assessment,
+        IReadOnlyList<string> evidence)
+    {
+        if (component?.Kind != WallGraphComponentKind.MainStructural
+            || component.ExcludedFromStructuralTopology
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedMainStructuralInteriorLengthDrawingUnits
+            || wall.Confidence.Value < 0.78
+            || assessment.Confidence.Value < 0.78
+            || assessment.Category != WallEvidenceCategory.StrongWallBody
+            || wall.PairEvidence is not { } pair
+            || !HasStrongPairedWallBodyEvidence(wall, assessment))
+        {
+            return false;
+        }
+
+        if (pair.Score < MinTrustedMainStructuralInteriorPairScore
+            || pair.OverlapRatio < MinTrustedMainStructuralInteriorOverlapRatio
+            || pair.FaceSeparation < MinTrustedMainStructuralInteriorFaceSeparationDrawingUnits
+            || pair.FaceSeparation > MaxTrustedMainStructuralInteriorFaceSeparationDrawingUnits
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount)
+                > MaxTrustedMainStructuralInteriorFaceFragments)
+        {
+            return false;
+        }
+
+        if (!EvidenceContains(evidence, "supported wall evidence inside exterior envelope"))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "object/fixture",
+            "fixture detail",
+            "stair",
+            "tiny door-adjacent placement topology piece suppressed",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
     }
 
     private static bool SecondaryStructuralWallHasTrustedExteriorShellSupport(

@@ -187,7 +187,13 @@ internal static class WallTopologySpanVisibility
                 span.SourceWall,
                 component,
                 assessment);
+        var trustedRoomBoundaryIsolatedFragment =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedFragment(
+                span.SourceWall,
+                component,
+                assessment);
         if (!trustedExteriorShellContinuityFragment
+            && !trustedRoomBoundaryIsolatedFragment
             && !IsPlacementReadyStructuralSpan(component, assessment))
         {
             return false;
@@ -451,8 +457,14 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedRoomBoundaryIsolatedFragment =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedFragment(
+                wall,
+                component,
+                assessment);
         if ((!IsPlacementReadyStructuralSpan(component, assessment)
-                && !hasTrustedExteriorShellContinuityFragment)
+                && !hasTrustedExteriorShellContinuityFragment
+                && !hasTrustedRoomBoundaryIsolatedFragment)
             || assessment is null
             || !assessment.PlacementReady
             || assessment.RequiresReview
@@ -461,7 +473,8 @@ internal static class WallTopologySpanVisibility
             || (assessment.Category is not (WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.RecoveredWallBody)
                 && !hasTopologySupportedFragmentedPairPromotion
                 && !hasTrustedFragmentMergedPromotion
-                && !hasTrustedExteriorShellContinuityFragment))
+                && !hasTrustedExteriorShellContinuityFragment
+                && !hasTrustedRoomBoundaryIsolatedFragment))
         {
             return false;
         }
@@ -478,7 +491,8 @@ internal static class WallTopologySpanVisibility
 
         return HasTrustedSourceBackedFallbackPairEvidence(wall, component, assessment)
             || hasTrustedFragmentMergedPromotion
-            || hasTrustedExteriorShellContinuityFragment;
+            || hasTrustedExteriorShellContinuityFragment
+            || hasTrustedRoomBoundaryIsolatedFragment;
     }
 
     private static bool IsTrustedSourceBackedFallbackFragmentEvidence(

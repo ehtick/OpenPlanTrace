@@ -3515,6 +3515,57 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversSourceBackedSpanWhenTwoSidedRoomBoundaryIsIsolated()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.962,
+            pairOverlapRatio: 1,
+            faceSeparation: 8,
+            firstFaceFragmentCount: 4,
+            secondFaceFragmentCount: 14,
+            wallLength: 92,
+            wallType: WallType.Interior,
+            componentKind: WallGraphComponentKind.IsolatedFragment,
+            category: WallEvidenceCategory.StrongWallBody,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "face separation 8 drawing units",
+                "pair score 0.962",
+                "overlap ratio 1",
+                "first face merged 4 fragments",
+                "second face merged 14 fragments",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type refined interior: detected room evidence on both sides",
+                "wall evidence: strong double-edge wall body"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.DoesNotContain(
+            wall.GetProperty("reliability").GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetString() == "wall belongs to isolated wall graph fragment");
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_DoesNotRecoverTrustedExteriorShellFragmentWhenCoveredEntryEvidenceIsPresent()
     {
         var result = CreateSourceBackedFallbackWallResult(

@@ -87,6 +87,101 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsTrustedTwoSidedRoomBoundaryIsolatedInteriorBody()
+    {
+        var wall = Wall("wall:two-sided-isolated-room-boundary", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 192)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(96, 100), new PlanPoint(96, 192)),
+                new PlanLineSegment(new PlanPoint(104, 100), new PlanPoint(104, 192)),
+                FaceSeparation: 8,
+                OverlapRatio: 1,
+                Score: 0.96,
+                FirstFaceFragmentCount: 4,
+                SecondFaceFragmentCount: 14,
+                FirstFaceSourcePrimitiveIds: ["two-sided-face-a"],
+                SecondFaceSourcePrimitiveIds: ["two-sided-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type refined interior: detected room evidence on both sides"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.StrongWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview);
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksTwoSidedRoomBoundaryIsolatedInteriorBodyWithWeakPair()
+    {
+        var wall = Wall("wall:weak-two-sided-isolated-room-boundary", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 192)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(96, 100), new PlanPoint(96, 192)),
+                new PlanLineSegment(new PlanPoint(104, 100), new PlanPoint(104, 192)),
+                FaceSeparation: 8,
+                OverlapRatio: 1,
+                Score: 0.74,
+                FirstFaceFragmentCount: 4,
+                SecondFaceFragmentCount: 14,
+                FirstFaceSourcePrimitiveIds: ["weak-two-sided-face-a"],
+                SecondFaceSourcePrimitiveIds: ["weak-two-sided-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type refined interior: detected room evidence on both sides"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.StrongWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_AllowsTrustedExteriorShellContinuityIsolatedFragment()
     {
         var wall = Wall("wall:trusted-exterior-shell-gap", Confidence.High) with
