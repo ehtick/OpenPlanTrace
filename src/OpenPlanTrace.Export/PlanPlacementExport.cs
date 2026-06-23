@@ -1452,6 +1452,15 @@ public sealed record PlacementWallOmissionExport(
                 "Review the component evidence before using this wall for exact placement.");
         }
 
+        if (ContainsEvidence(evidence, "tiny door-adjacent placement topology piece"))
+        {
+            return new PlacementWallOmissionClassification(
+                "tiny_door_adjacent_topology_suppressed",
+                "OpeningSplitReview",
+                "Wall is omitted from clean placement topology because only tiny door-adjacent wall leftovers remained after opening cutouts were applied.",
+                "Keep the raw wall and opening cutout for QA, but do not import the tiny door-adjacent remainder as a structural wall unless reviewed.");
+        }
+
         if (component?.Kind == WallGraphComponentKind.IsolatedFragment)
         {
             return new PlacementWallOmissionClassification(
@@ -1621,15 +1630,6 @@ public sealed record PlacementWallOmissionExport(
                 "WallEvidenceReview",
                 "Wall is omitted from clean placement topology because wall evidence requires review before exact placement.",
                 "Review the source linework and evidence before using this wall for exact placement.");
-        }
-
-        if (ContainsEvidence(evidence, "tiny door-adjacent placement topology piece"))
-        {
-            return new PlacementWallOmissionClassification(
-                "tiny_door_adjacent_topology_suppressed",
-                "OpeningSplitReview",
-                "Wall is omitted from clean placement topology because only tiny door-adjacent wall leftovers remained after opening cutouts were applied.",
-                "Keep the raw wall and opening cutout for QA, but do not import the tiny door-adjacent remainder as a structural wall unless reviewed.");
         }
 
         if (!hasTopologySupportedFragmentedPairPromotion

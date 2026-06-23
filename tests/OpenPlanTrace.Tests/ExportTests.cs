@@ -992,6 +992,41 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_ClassifiesTinyDoorAdjacentIsolatedFragmentAsSuppressedOpeningNoise()
+    {
+        var fragmentLine = new PlanLineSegment(
+            new PlanPoint(90, 108),
+            new PlanPoint(190, 108));
+        var result = WithContainedWallAsIsolatedReviewFragment(
+            CreateContainedDuplicatePlacementRunResult(fragmentLine),
+            [
+                "tiny door-adjacent placement topology piece suppressed; length 8.5 drawing units, threshold 20, wall parameters 0-0.12, previous opening -, next opening synthetic-opening"
+            ]);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var duplicateWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+        var omission = duplicateWall.GetProperty("placementOmission");
+
+        Assert.Equal("tiny_door_adjacent_topology_suppressed", omission.GetProperty("code").GetString());
+        Assert.Equal("OpeningSplitReview", omission.GetProperty("category").GetString());
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementSuppressedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementReviewWallCount").GetInt32());
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("tiny_door_adjacent_topology_suppressed")
+                .GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_ClassifiesIsolatedRepeatedShortDetailAsSuppressedDetail()
     {
         var fragmentLine = new PlanLineSegment(
