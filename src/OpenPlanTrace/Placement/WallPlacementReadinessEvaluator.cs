@@ -17,6 +17,9 @@ public static class WallPlacementReadinessEvaluator
     public const string TrustedExteriorShellContinuityEvidence =
         "exterior shell continuity kept fragmented paired wall placement-ready between trusted collinear exterior wall segments";
 
+    public const string RoomConfirmedIsolatedFragmentPromotionEvidence =
+        "room-confirmed isolated wall graph fragment kept placement-ready";
+
     private const double MaxShortDenseDetailCandidateLengthDrawingUnits = 55.0;
     private const double MinShortDenseDetailCandidateSourceDensity = 0.65;
     private const double MaxNoisyTopologySupportedFragmentedPairLengthDrawingUnits = 72.0;
@@ -61,10 +64,18 @@ public static class WallPlacementReadinessEvaluator
             wall,
             component,
             evidenceAssessment);
+        var trustedRoomBoundaryIsolatedFragment = IsTrustedRoomBoundaryIsolatedFragment(
+            wall,
+            component,
+            evidenceAssessment);
 
         if (component is not null)
         {
-            AddComponentReasons(component, reasons, trustedExteriorShellContinuityFragment);
+            AddComponentReasons(
+                component,
+                reasons,
+                trustedExteriorShellContinuityFragment,
+                trustedRoomBoundaryIsolatedFragment);
         }
 
         if (wall.FragmentEvidence?.RequiresGeometryReview == true)
@@ -88,7 +99,8 @@ public static class WallPlacementReadinessEvaluator
 
         var coordinatePlacementBlocked = CoordinatePlacementBlockedByComponent(
             component,
-            trustedExteriorShellContinuityFragment);
+            trustedExteriorShellContinuityFragment,
+            trustedRoomBoundaryIsolatedFragment);
         var coordinatePlacementBlockedByReviewReason = reviewReasonList.Any(IsCoordinateBlockingReviewReason);
         var coordinatePlacementBlockedByRecoveredExteriorEvidence =
             CoordinatePlacementBlockedByRecoveredOneSidedExteriorEvidence(wall, evidenceAssessment);
@@ -177,7 +189,8 @@ public static class WallPlacementReadinessEvaluator
     private static void AddComponentReasons(
         WallGraphComponent component,
         List<string> reasons,
-        bool trustedExteriorShellContinuityFragment)
+        bool trustedExteriorShellContinuityFragment,
+        bool trustedRoomBoundaryIsolatedFragment)
     {
         if (component.ExcludedFromStructuralTopology)
         {
@@ -189,7 +202,8 @@ public static class WallPlacementReadinessEvaluator
             reasons.Add("wall belongs to compact object-like linework component");
         }
         else if (component.Kind == WallGraphComponentKind.IsolatedFragment
-            && !trustedExteriorShellContinuityFragment)
+            && !trustedExteriorShellContinuityFragment
+            && !trustedRoomBoundaryIsolatedFragment)
         {
             reasons.Add("wall belongs to isolated wall graph fragment");
         }
@@ -217,11 +231,13 @@ public static class WallPlacementReadinessEvaluator
 
     private static bool CoordinatePlacementBlockedByComponent(
         WallGraphComponent? component,
-        bool trustedExteriorShellContinuityFragment) =>
+        bool trustedExteriorShellContinuityFragment,
+        bool trustedRoomBoundaryIsolatedFragment) =>
         component?.ExcludedFromStructuralTopology == true
         || component?.Kind == WallGraphComponentKind.ObjectLikeIsland
         || (component?.Kind == WallGraphComponentKind.IsolatedFragment
-            && !trustedExteriorShellContinuityFragment);
+            && !trustedExteriorShellContinuityFragment
+            && !trustedRoomBoundaryIsolatedFragment);
 
     public static bool IsTrustedExteriorShellContinuityFragment(
         WallSegment? wall,
@@ -285,6 +301,51 @@ public static class WallPlacementReadinessEvaluator
             "not trusted",
             "without shell support",
             "alone is not trusted");
+    }
+
+    public static bool IsTrustedRoomBoundaryIsolatedFragment(
+        WallSegment? wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? evidenceAssessment)
+    {
+        if (wall is null
+            || component is null
+            || evidenceAssessment is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind != WallGraphComponentKind.IsolatedFragment
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind is WallDetectionKind.SingleLine or WallDetectionKind.Unknown
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || wall.Confidence.Value < 0.6
+            || !evidenceAssessment.PlacementReady
+            || evidenceAssessment.RequiresReview
+            || evidenceAssessment.RejectedAsNoise
+            || evidenceAssessment.Decision == WallEvidenceDecision.Reject
+            || evidenceAssessment.Category is not (WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.RecoveredWallBody))
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence.Concat(evidenceAssessment.Evidence).ToArray();
+        if (!EvidenceContains(evidence, RoomConfirmedIsolatedFragmentPromotionEvidence))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor",
+            "terrace",
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "object/fixture detail",
+            "surface pattern",
+            "door/opening",
+            "dimension-like");
     }
 
     private static bool CoordinatePlacementBlockedByRecoveredOneSidedExteriorEvidence(

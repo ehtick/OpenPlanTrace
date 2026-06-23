@@ -811,7 +811,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return false;
         }
 
-        if (!IsStructuralWallComponent(component)
+        var isRoomConfirmableIsolatedComponent = IsRoomConfirmableIsolatedWallComponent(
+            wall,
+            assessment,
+            component,
+            options);
+        if ((!IsStructuralWallComponent(component)
+            && !isRoomConfirmableIsolatedComponent)
             || wall.WallType == WallType.Unknown
             || wall.FragmentEvidence?.RequiresGeometryReview == true)
         {
@@ -862,6 +868,9 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             "wall evidence: room-confirmed wall body promoted to placement-ready after room adjacency refinement",
             $"wall evidence: room references {roomReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, shared adjacency {isSharedByRoomAdjacency.ToString(System.Globalization.CultureInfo.InvariantCulture)}, two-sided room evidence {sideEvidence.HasRoomsOnBothSides.ToString(System.Globalization.CultureInfo.InvariantCulture)}, topology-supported endpoints {supportedTopologyEndpointCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
         }
+        .Concat(isRoomConfirmableIsolatedComponent
+            ? new[] { $"wall evidence: {WallPlacementReadinessEvaluator.RoomConfirmedIsolatedFragmentPromotionEvidence} because room boundary evidence overrode early isolated graph classification" }
+            : Array.Empty<string>())
         .Concat(hasShortStructuralReturnConfirmation
             ? new[] { "wall evidence: short structural return promoted by room boundary and two supported topology endpoints" }
             : Array.Empty<string>())
@@ -877,6 +886,41 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             Evidence = AppendEvidence(assessment.Evidence, promotionEvidence)
         };
         return true;
+    }
+
+    private static bool IsRoomConfirmableIsolatedWallComponent(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        WallGraphComponent? component,
+        ScannerOptions options)
+    {
+        if (component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind != WallGraphComponentKind.IsolatedFragment
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind is WallDetectionKind.SingleLine or WallDetectionKind.Unknown
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || wall.DrawingLength < RoomConfirmableIsolatedWallMinimumLength(wall, options)
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category is not (WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.RecoveredWallBody))
+        {
+            return false;
+        }
+
+        return HasWallBodyEvidence(wall, assessment)
+            && !HasRoomConfirmedPromotionBlocker(wall, assessment);
+    }
+
+    private static double RoomConfirmableIsolatedWallMinimumLength(
+        WallSegment wall,
+        ScannerOptions options)
+    {
+        var minimum = Math.Max(options.MinWallLength * 3.0, options.DefaultWallThickness * 18.0);
+        return wall.DetectionKind == WallDetectionKind.FragmentMerged
+            ? Math.Max(minimum, options.DefaultWallThickness * 20.0)
+            : minimum;
     }
 
     private static bool IsTrustedFragmentMergedInteriorRoomBoundary(

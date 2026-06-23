@@ -6,6 +6,35 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.03.005] - 2026-06-23
+
+### Improved
+- Placement readiness now has a narrow exception for room-confirmed isolated
+  interior wall fragments, allowing a wall that was isolated by the early wall
+  graph to become placement-ready later when room refinement proves it is a
+  real wall boundary.
+- Wall type refinement can now emit explicit evidence for these rescued
+  isolated room-boundary walls, while still blocking short isolated details,
+  single-line candidates, excluded components, noisy evidence, and outdoor or
+  object/detail linework.
+
+### Verified
+- Added wall placement readiness and wall type refinement tests for the new
+  room-confirmed isolated-fragment rescue path and for the short-detail guard.
+- Ran focused wall placement/type refinement tests: `58` tests passed.
+- Ran the full test suite: `745` tests passed.
+- Ran the supplied hard, medium, and light PDF corpus in that order with
+  `wall-qa-review`, GeoJSON, placement JSON, visual snapshots, SVG overlays,
+  and Markdown report output.
+- Rendered and inspected wall-QA screenshots for all three corpus outputs using
+  headless Edge, without opening Firefox.
+- Corpus headline metrics were unchanged, which confirms this is a safe
+  readiness/rescue path rather than the main fix for the current three PDFs.
+  The next large accuracy step should target room-wall matching and graph-aware
+  structural continuity recovery, because the remaining blocked walls are mostly
+  review-required main-structural paired spans, duplicate clean spans, and
+  isolated/detail fragments.
+
 ## [0.03.004] - 2026-06-23
 
 ### Improved

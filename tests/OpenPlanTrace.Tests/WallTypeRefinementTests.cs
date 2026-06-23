@@ -925,6 +925,103 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_PromotesRoomConfirmedIsolatedInteriorBoundary()
+    {
+        var wall = new WallSegment(
+            "wall-isolated-room-boundary",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 205)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "parallel wall-face pair",
+                "pair score 0.842"
+            }
+        };
+        var context = CreateContext("isolated-room-boundary-promotion");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room("room-a", RoomUseKind.Office, wall.Id));
+        context.Rooms.Add(Room("room-b", RoomUseKind.Office, wall.Id));
+        context.WallGraph = IsolatedGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            new[]
+            {
+                "wall evidence assessment: MediumWallBody / review / confidence 0.84",
+                "parallel wall-face pair",
+                "pair score 0.842",
+                "wall evidence: short unlayered parallel-face candidate has no structural endpoint support and short paired wall evidence; keep for topology but block exact placement until reviewed"
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains(WallPlacementReadinessEvaluator.RoomConfirmedIsolatedFragmentPromotionEvidence, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DoesNotPromoteShortIsolatedRoomBoundaryDetail()
+    {
+        var wall = new WallSegment(
+            "wall-short-isolated-room-detail",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 135)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = new[]
+            {
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "parallel wall-face pair",
+                "pair score 0.842"
+            }
+        };
+        var context = CreateContext("short-isolated-room-boundary-stays-review");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room("room-a", RoomUseKind.Office, wall.Id));
+        context.Rooms.Add(Room("room-b", RoomUseKind.Office, wall.Id));
+        context.WallGraph = IsolatedGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            new[]
+            {
+                "wall evidence assessment: MediumWallBody / review / confidence 0.84",
+                "parallel wall-face pair",
+                "pair score 0.842"
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(retained.PlacementReady);
+        Assert.True(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains(WallPlacementReadinessEvaluator.RoomConfirmedIsolatedFragmentPromotionEvidence, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_PromotesCleanFragmentMergedInteriorRoomBoundary()
     {
         var wall = new WallSegment(
@@ -1818,6 +1915,26 @@ public sealed class WallTypeRefinementTests
                     wall.DrawingLength,
                 Confidence.High,
                 Array.Empty<string>())
+            });
+
+    private static WallGraph IsolatedGraphFor(WallSegment wall) =>
+        new(
+            Array.Empty<WallNode>(),
+            Array.Empty<WallEdge>(),
+            new[]
+            {
+                new WallGraphComponent(
+                    "component-isolated",
+                    1,
+                    WallGraphComponentKind.IsolatedFragment,
+                    wall.Bounds,
+                    new[] { wall.Id },
+                    Array.Empty<string>(),
+                    Array.Empty<string>(),
+                    wall.SourcePrimitiveIds,
+                    wall.DrawingLength,
+                    Confidence.Low,
+                    new[] { "isolated wall graph fragment with weak topology" })
             });
 
     private static WallGraph GraphFor(params WallSegment[] walls) =>

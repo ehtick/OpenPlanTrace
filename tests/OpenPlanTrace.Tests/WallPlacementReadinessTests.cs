@@ -50,6 +50,43 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsRoomConfirmedIsolatedInteriorBoundary()
+    {
+        var wall = Wall("wall:isolated-room-boundary", Confidence.High) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "wall evidence: room-confirmed wall body promoted to placement-ready after room adjacency refinement",
+                "wall evidence: room references 2, shared adjacency False, two-sided room evidence False, topology-supported endpoints 0",
+                $"wall evidence: {WallPlacementReadinessEvaluator.RoomConfirmedIsolatedFragmentPromotionEvidence} because room boundary evidence overrode early isolated graph classification"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview);
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_AllowsTrustedExteriorShellContinuityIsolatedFragment()
     {
         var wall = Wall("wall:trusted-exterior-shell-gap", Confidence.High) with
