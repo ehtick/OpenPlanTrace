@@ -2641,6 +2641,76 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public async Task PlacementExporter_UsesOpeningDetailOmissionForOpeningLinkedOneEndpointFragments()
+    {
+        var result = await CreateScanResultAsync();
+        var firstWall = result.Walls[0];
+        result = result with
+        {
+            Openings = result.Openings
+                .Concat(
+                [
+                    AnchoredOpening(
+                        "opening-linked-one-endpoint-fragment",
+                        firstWall,
+                        OpeningType.Window,
+                        OpeningOperation.Fixed,
+                        0.35,
+                        0.45)
+                ])
+                .ToArray(),
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                new[]
+                {
+                    new WallEvidenceWallAssessment(
+                        firstWall.Id,
+                        firstWall.PageNumber,
+                        firstWall.Bounds,
+                        WallEvidenceCategory.MediumWallBody,
+                        new Confidence(0.72),
+                        PlacementReady: false,
+                        RequiresReview: true,
+                        RejectedAsNoise: false,
+                        SourcePrimitiveIds: firstWall.SourcePrimitiveIds,
+                        Evidence:
+                        [
+                            "wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (4 fragments, gap ratio 0); keep for topology but block exact placement until reviewed"
+                        ])
+                    {
+                        Decision = WallEvidenceDecision.Review
+                    }
+                })
+        };
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == firstWall.Id);
+        var placementOmission = wall.GetProperty("placementOmission");
+
+        Assert.Equal("opening_detail_fragment_review_required", placementOmission.GetProperty("code").GetString());
+        Assert.Equal("OpeningDetailReview", placementOmission.GetProperty("category").GetString());
+        Assert.Contains("opening", placementOmission.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            placementOmission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("opening-linked wall fragment", StringComparison.OrdinalIgnoreCase) == true
+                && evidence.GetString()?.Contains("opening-linked-one-endpoint-fragment", StringComparison.Ordinal) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("opening_detail_fragment_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
     public async Task PlacementExporter_UsesSpecificOmissionForShortParallelPairReviewWalls()
     {
         var result = await CreateScanResultAsync();

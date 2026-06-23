@@ -1197,6 +1197,7 @@ public sealed record PlacementWallOmissionExport(
         IReadOnlyList<WallGraphTopologySpan> topologySpans,
         IReadOnlyList<WallGraphTopologySpan>? allCleanTopologySpans,
         IReadOnlyList<PlacementWallOpeningCutoutExport> openingCutouts,
+        IReadOnlyList<OpeningCandidate> openings,
         bool excludedFromStructuralTopology,
         IReadOnlyList<WallGraphRepairCandidate> repairCandidates,
         IReadOnlyList<string> reviewReasons)
@@ -1240,6 +1241,7 @@ public sealed record PlacementWallOmissionExport(
             wall,
             topologySpans,
             openingCutouts);
+        var openingLinkedWallEvidence = BuildOpeningLinkedWallEvidence(wall, openings);
         var combinedEvidence = BuildEvidence(
             wall,
             component,
@@ -1247,7 +1249,10 @@ public sealed record PlacementWallOmissionExport(
             reliability,
             repairCandidates,
             reviewReasons,
-            representedEvidence.Concat(suppressedOpeningTopologyEvidence).ToArray());
+            representedEvidence
+                .Concat(suppressedOpeningTopologyEvidence)
+                .Concat(openingLinkedWallEvidence)
+                .ToArray());
         var linkedWallIds = ExtractLinkedWallIds(wall.Id, combinedEvidence, repairCandidates);
         var classification = Classify(
             evidenceAssessment,
@@ -1439,6 +1444,15 @@ public sealed record PlacementWallOmissionExport(
         if (ContainsEvidence(evidence, "unlayered fragment-merged wall candidate")
             && ContainsEvidence(evidence, "only one trusted structural endpoint"))
         {
+            if (ContainsEvidence(evidence, "opening-linked wall fragment"))
+            {
+                return new PlacementWallOmissionClassification(
+                    "opening_detail_fragment_review_required",
+                    "OpeningDetailReview",
+                    "Wall-like fragment is omitted from clean placement topology because it has only one trusted structural endpoint and is linked to a detected opening candidate.",
+                    "Treat this as opening/window/door detail evidence unless review confirms it is a true wall return.");
+            }
+
             return new PlacementWallOmissionClassification(
                 "one_endpoint_fragment_review_required",
                 "FragmentEndpointReview",
@@ -1634,6 +1648,47 @@ public sealed record PlacementWallOmissionExport(
         return evidence
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static IReadOnlyList<string> BuildOpeningLinkedWallEvidence(
+        WallSegment wall,
+        IReadOnlyList<OpeningCandidate> openings)
+    {
+        if (openings.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var linkedOpenings = openings
+            .Where(opening => OpeningCandidateReferencesWall(opening, wall.Id))
+            .OrderBy(opening => opening.Id, StringComparer.Ordinal)
+            .Take(4)
+            .Select(opening => $"{opening.Id} ({opening.Type}/{opening.Operation}/{opening.Orientation})")
+            .ToArray();
+        if (linkedOpenings.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var suffix = openings.Count > linkedOpenings.Length
+            ? $"; {openings.Count - linkedOpenings.Length} more opening candidate(s) linked"
+            : string.Empty;
+        return
+        [
+            $"opening-linked wall fragment: wall is referenced by opening candidate(s) {string.Join(", ", linkedOpenings)}{suffix}"
+        ];
+    }
+
+    private static bool OpeningCandidateReferencesWall(OpeningCandidate opening, string wallId)
+    {
+        if (string.IsNullOrWhiteSpace(wallId))
+        {
+            return false;
+        }
+
+        return string.Equals(opening.Placement?.HostWallId, wallId, StringComparison.Ordinal)
+            || opening.HostWallIds.Contains(wallId, StringComparer.Ordinal)
+            || (opening.Placement?.AnchorWallIds.Contains(wallId, StringComparer.Ordinal) ?? false);
     }
 
     private static void AddSuppressedOpeningTopologyGapEvidence(
@@ -2175,6 +2230,7 @@ public sealed record PlacementWallExport(
             topologySpans,
             allCleanTopologySpans,
             cutouts,
+            openings,
             excludedFromStructuralTopology,
             repairCandidates,
             combinedReviewReasons);

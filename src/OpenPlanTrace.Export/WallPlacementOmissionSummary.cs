@@ -43,6 +43,7 @@ internal static class WallPlacementOmissionSummary
         "fragmented_pair_review_required",
         "fragmented_interior_without_room_boundary_support",
         "weak_promoted_fragment_room_boundary_review_required",
+        "opening_detail_fragment_review_required",
         "one_endpoint_fragment_review_required",
         "fragmented_short_parallel_pair_review_required",
         "very_short_parallel_pair_review_required",
@@ -99,7 +100,10 @@ internal static class WallPlacementOmissionSummary
                 ? spans
                 : Array.Empty<WallGraphTopologySpan>();
             var scale = ResolveMillimetersPerDrawingUnit(result.Calibration, wall.MeasurementScaleGroupId);
-            var cutouts = openingsByWallId.TryGetValue(wall.Id, out var wallOpenings)
+            var wallOpenings = openingsByWallId.TryGetValue(wall.Id, out var linkedOpenings)
+                ? linkedOpenings
+                : Array.Empty<OpeningCandidate>();
+            var cutouts = wallOpenings.Count > 0
                 ? wallOpenings
                     .Select((opening, index) => PlacementWallOpeningCutoutExport.From(wall, opening, scale, index + 1))
                     .Where(cutout => cutout is not null)
@@ -126,6 +130,7 @@ internal static class WallPlacementOmissionSummary
                 topologySpans,
                 cleanTopologySpans,
                 cutouts,
+                wallOpenings,
                 excludedFromStructuralTopology,
                 repairCandidates,
                 combinedReviewReasons);
@@ -239,6 +244,7 @@ internal static class WallPlacementOmissionSummary
             "wall_evidence_review_required" => 20,
             "fragmented_interior_without_room_boundary_support" => 24,
             "weak_promoted_fragment_room_boundary_review_required" => 24,
+            "opening_detail_fragment_review_required" => 24,
             "one_endpoint_fragment_review_required" => 24,
             "secondary_object_linework_without_room_boundary_support" => 25,
             "secondary_over_sourced_detail_linework" => 26,
@@ -424,6 +430,7 @@ internal static class WallPlacementOmissionSummary
             "no_clean_topology_spans" => "no clean spans",
             "object_like_linework" => "object linework",
             "weak_promoted_fragment_room_boundary_review_required" => "weak promoted fragments",
+            "opening_detail_fragment_review_required" => "opening detail fragments",
             "one_endpoint_fragment_review_required" => "one-ended fragments",
             "rejected_wall_evidence" => "rejected evidence",
             "fragmented_short_parallel_pair_review_required" => "fragmented short pairs",

@@ -6,6 +6,36 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.02.221] - 2026-06-23
+
+### Improved
+- Placement export now separates opening-linked one-ended wall fragments into
+  `opening_detail_fragment_review_required` instead of leaving them in the
+  generic one-endpoint bucket.
+- Wall-QA omission summaries and legends now label those candidates as opening
+  detail fragments, making door/window/detail noise easier to distinguish from
+  possible true wall returns.
+- The placement schema and README now document the new omission code for
+  downstream consumers.
+
+### Verified
+- Added a placement-export regression test proving that a one-endpoint wall
+  candidate linked to a fixed opening receives the opening-detail omission code.
+- Rescanned the supplied medium PDF: raw wall detections stayed at `115`,
+  placement-ready walls stayed at `21`, omitted/review walls stayed at `94`,
+  and clean topology spans stayed at `24`.
+- Confirmed `page:1:wall:45` moved from
+  `one_endpoint_fragment_review_required` to
+  `opening_detail_fragment_review_required` with evidence naming
+  `page:1:opening:5`.
+- Rendered and inspected the wall-QA screenshot at
+  `real-pdf-output/medium-a20-102-20260623-opening-linked-fragment-v1/wall-qa-review.png`;
+  the legend now reports `omit: opening detail fragments 1`.
+- Validated the generated scan, placement, and visual-snapshot artifacts with
+  the CLI validator.
+- Ran focused export/schema tests: `163` tests passed.
+- Ran the full test suite: `730` tests passed.
+
 ## [0.02.220] - 2026-06-22
 
 ### Fixed
