@@ -897,7 +897,9 @@ internal sealed class RoomDetectionStage : IPipelineStage
         wallIds = matched.WallIds;
         var evidenceItems = new List<string>
         {
-            $"semantic room boundary inferred from nearby wall candidates {string.Join(",", wallIds)}",
+            matched.ReviewSupportedBoundary
+                ? $"review-supported semantic room boundary inferred from nearby wall candidates {string.Join(",", wallIds)}"
+                : $"semantic room boundary inferred from nearby wall candidates {string.Join(",", wallIds)}",
             $"semantic room boundary wall coverage {matched.AverageCoverage.ToString("0.###", CultureInfo.InvariantCulture)} across {matched.StrongSideCount} strong side(s)",
             $"semantic room boundary trusted wall support {matched.TrustedWallRatio.ToString("0.###", CultureInfo.InvariantCulture)} across {matched.TrustedSideCount} side(s)"
         };
@@ -1004,10 +1006,14 @@ internal sealed class RoomDetectionStage : IPipelineStage
         }.Count(value => value);
         var hasTrustedBoundaryReference = trustedWallIds.Length >= 3 && trustedSideCount >= 3;
         var canUseReviewBoundaryFallback = !hasTrustedBoundaryReference
-            && CanUseReviewSupportedSemanticBoundary(candidate.Label.Text)
-            && strongSideCount >= 3
-            && averageCoverage >= 0.68
-            && areaRatio is >= 0.35 and <= 2.75;
+            && CanUseReviewSupportedSemanticBoundary(
+                candidate.Label.Text,
+                trustedWallIds.Length,
+                trustedSideCount,
+                allWalls.Length,
+                strongSideCount,
+                averageCoverage,
+                areaRatio);
         if (!hasTrustedBoundaryReference && !canUseReviewBoundaryFallback)
         {
             return null;
@@ -1036,18 +1042,43 @@ internal sealed class RoomDetectionStage : IPipelineStage
             strongSideCount,
             areaRatio,
             trustedWallRatio,
-            trustedSideCount);
+            trustedSideCount,
+            !hasTrustedBoundaryReference && canUseReviewBoundaryFallback);
     }
 
-    private static bool CanUseReviewSupportedSemanticBoundary(string label)
+    private static bool CanUseReviewSupportedSemanticBoundary(
+        string label,
+        int trustedWallCount,
+        int trustedSideCount,
+        int wallCount,
+        int strongSideCount,
+        double averageCoverage,
+        double areaRatio)
     {
         var kind = ClassifyRoomUse(label, new PlanRect(0, 0, 20, 20)).Kind;
-        return kind is not RoomUseKind.Unknown
+        if (kind is not RoomUseKind.Unknown
             and not RoomUseKind.Corridor
             and not RoomUseKind.Outdoor
             and not RoomUseKind.Stair
             and not RoomUseKind.Elevator
-            and not RoomUseKind.Shaft;
+            and not RoomUseKind.Shaft)
+        {
+            return strongSideCount >= 3
+                && averageCoverage >= 0.68
+                && areaRatio is >= 0.35 and <= 2.75;
+        }
+
+        if (!IsPotentialAreaBackedCompactRoomCodeText(label))
+        {
+            return false;
+        }
+
+        return wallCount >= 4
+            && trustedWallCount >= 1
+            && trustedSideCount >= 1
+            && strongSideCount >= 4
+            && averageCoverage >= 0.78
+            && areaRatio is >= 0.55 and <= 1.85;
     }
 
     private static bool IsTrustedSemanticRoomReferenceWall(WallSegment wall)
@@ -2107,7 +2138,8 @@ internal sealed class RoomDetectionStage : IPipelineStage
         int StrongSideCount,
         double AreaRatio,
         double TrustedWallRatio,
-        int TrustedSideCount);
+        int TrustedSideCount,
+        bool ReviewSupportedBoundary);
 
     private sealed class OrthogonalRoomGrid
     {

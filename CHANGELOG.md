@@ -6,6 +6,43 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.03.010] - 2026-06-23
+
+### Improved
+- Area-backed compact room codes can now promote to wall-bounded semantic rooms
+  when nearby orthogonal wall candidates cover all four sides, printed-area
+  agreement is tight, and at least one side has trusted wall support.
+- Review-supported semantic room boundaries now export explicit evidence, making
+  it clearer when a room boundary came from nearby wall candidates instead of a
+  fully trusted wall graph face.
+- Compact room-code promotion remains stricter than normal room labels so loose
+  equipment-like tags do not become placement geometry without strong boundary
+  coverage.
+
+### Verified
+- Added a regression test for an area-backed compact room code bounded by one
+  trusted wall and three review-grade wall candidates.
+- Ran focused room semantics, wall refinement, and scan quality tests: `108`
+  tests passed.
+- Ran the full test suite: `756` tests passed.
+- Ran the supplied hard, medium, and light PDF corpus in that order with
+  compact JSON, GeoJSON, placement exports, wall-QA overlays, and
+  high-resolution wall-QA screenshots rendered headlessly with Edge.
+- Hard corpus improved from `0` to `1` wall-bounded semantic room, from `6` to
+  `8` placement-ready walls, and from `0.396825` to `0.428571`
+  coordinate-ready ratio. It remains `ReviewRequired` because most recovered
+  room seeds still lack clean wall links.
+- Medium corpus stayed stable at `115` walls, `6` wall-bounded rooms, `18`
+  placement-ready walls, and `0.571429` coordinate-ready ratio.
+- Light corpus stayed stable at `48` walls, `11` rooms, `16` placement-ready
+  walls, and `0.558824` coordinate-ready ratio; `6` semantic room boundaries
+  now expose review-supported evidence.
+- Visual review of the wall-only QA screenshots still shows the next major
+  accuracy blocker: real wall rails are visible in source linework but are not
+  consistently promoted into clean placement-ready wall bodies, while some
+  outdoor/detail-like boundaries still need stronger suppression in the visual
+  QA output.
+
 ## [0.03.009] - 2026-06-23
 
 ### Improved

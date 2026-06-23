@@ -155,6 +155,60 @@ public sealed class RoomSemanticsTests
     }
 
     [Fact]
+    public async Task RoomDetectionStage_InfersReviewSupportedBoundaryForAreaBackedCompactRoomCode()
+    {
+        var document = new PlanDocument(
+            "semantic-room-compact-code-review-boundary",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        RoomText("compact-code-label", "P27", new PlanRect(250, 194, 34, 16)),
+                        RoomText("compact-code-area", "9.7 m2", new PlanRect(252, 216, 60, 16))
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                MinRoomArea = 1_000,
+                WallSnapTolerance = 4,
+                GeometryTolerance = new GeometryTolerance(Distance: 1.5)
+            });
+        context.SheetRegions.AddRange(new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 700, 500), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(40, 60, 560, 380), Confidence.High)
+        });
+
+        context.Walls.AddRange(new[]
+        {
+            GraphWall("trusted-wall-top", new PlanPoint(100, 120), new PlanPoint(465, 120)),
+            ReviewWall("review-wall-right", new PlanPoint(480, 130), new PlanPoint(480, 350)),
+            ReviewWall("review-wall-bottom", new PlanPoint(475, 360), new PlanPoint(100, 360)),
+            ReviewWall("review-wall-left", new PlanPoint(100, 360), new PlanPoint(100, 120))
+        });
+
+        await new RoomDetectionStage().ExecuteAsync(context, CancellationToken.None);
+
+        var room = Assert.Single(context.Rooms);
+        Assert.Equal("P27", room.Label);
+        Assert.Equal(RoomUseKind.Unknown, room.UseKind);
+        Assert.Equal(4, room.Boundary.Count);
+        Assert.True(room.WallIds.Count >= 4, $"Expected all boundary walls, got {string.Join(", ", room.WallIds)}.");
+        Assert.True(room.Confidence.Value >= 0.55, $"Expected wall-supported confidence, got {room.Confidence.Value}.");
+        Assert.Contains(room.Evidence, item => item.Contains("review-supported semantic room boundary", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(room.Evidence, item => item.Contains("requires wall-boundary review", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "rooms.semantic_label_seeds.detected"
+                && diagnostic.Properties["wallBoundedSeedCount"] == "1");
+    }
+
+    [Fact]
     public async Task ScanAsync_DoesNotCreateSemanticRoomSeedFromCompactCodeWithoutArea()
     {
         var document = new PlanDocument(
@@ -1150,6 +1204,13 @@ public sealed class RoomSemanticsTests
         {
             SourcePrimitiveIds = new[] { id },
             Evidence = new[] { "test graph wall" }
+        };
+
+    private static WallSegment ReviewWall(string id, PlanPoint start, PlanPoint end) =>
+        new(id, 1, new PlanLineSegment(start, end), 4, Confidence.Medium)
+        {
+            SourcePrimitiveIds = new[] { id },
+            Evidence = new[] { "test graph wall requires review" }
         };
 
     private static WallNode GraphNode(string id, PlanPoint position) =>
