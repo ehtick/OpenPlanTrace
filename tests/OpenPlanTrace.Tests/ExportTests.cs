@@ -1116,6 +1116,37 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_SuppressesOpeningConsumedWallRemainders()
+    {
+        var result = CreateOpeningCutoutPlacementReviewResult(startParameter: 0.0, endParameter: 1.0);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var wall = Assert.Single(document.RootElement.GetProperty("walls").EnumerateArray());
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Empty(wall.GetProperty("solidSpans").EnumerateArray());
+        Assert.Single(wall.GetProperty("openingCutouts").EnumerateArray());
+        var omission = wall.GetProperty("placementOmission");
+        Assert.Equal("opening_consumed_wall_remainder", omission.GetProperty("code").GetString());
+        Assert.Equal("OpeningConsumedWallRemainder", omission.GetProperty("category").GetString());
+        Assert.Contains(
+            omission.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("opening cutouts fully consume wall placement run", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementSuppressedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementReviewWallCount").GetInt32());
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("opening_consumed_wall_remainder")
+                .GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_SuppressesTrustedShortDoorAdjacentPairedWallJamb()
     {
         var result = WithTrustedPairEvidence(

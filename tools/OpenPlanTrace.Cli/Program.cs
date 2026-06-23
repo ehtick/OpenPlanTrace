@@ -2277,6 +2277,7 @@ internal static class OpenPlanTraceCli
             or "rejected_wall_evidence"
             or "object_like_linework"
             or "isolated_fragment"
+            or "opening_consumed_wall_remainder"
             or "structural_topology_excluded");
     }
 
@@ -2312,6 +2313,7 @@ internal static class OpenPlanTraceCli
             "rejected_wall_evidence"
             or "object_like_linework"
             or "structural_topology_excluded"
+            or "opening_consumed_wall_remainder"
             or "tiny_door_adjacent_topology_suppressed";
 
     private static int WallSpanCount(JsonElement[] walls, string propertyName) =>

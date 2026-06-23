@@ -3159,6 +3159,7 @@ public sealed class SchemaContractTests
             "rejected_wall_evidence",
             "object_like_linework",
             "isolated_fragment",
+            "opening_consumed_wall_remainder",
             "secondary_object_linework_without_room_boundary_support",
             "secondary_over_sourced_detail_linework",
             "fragmented_interior_without_room_boundary_support",

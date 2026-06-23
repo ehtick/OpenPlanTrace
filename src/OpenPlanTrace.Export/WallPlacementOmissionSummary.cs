@@ -185,6 +185,7 @@ internal static class WallPlacementOmissionSummary
         string.Equals(code, "rejected_wall_evidence", StringComparison.Ordinal)
         || string.Equals(code, "object_like_linework", StringComparison.Ordinal)
         || string.Equals(code, "structural_topology_excluded", StringComparison.Ordinal)
+        || string.Equals(code, "opening_consumed_wall_remainder", StringComparison.Ordinal)
         || string.Equals(code, "tiny_door_adjacent_topology_suppressed", StringComparison.Ordinal);
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(
@@ -288,7 +289,8 @@ internal static class WallPlacementOmissionSummary
             "rejected_wall_evidence" => 80,
             "object_like_linework" => 82,
             "structural_topology_excluded" => 84,
-            "tiny_door_adjacent_topology_suppressed" => 86,
+            "opening_consumed_wall_remainder" => 86,
+            "tiny_door_adjacent_topology_suppressed" => 88,
             "duplicate_clean_topology_span" => 90,
             "duplicate_wall_face" => 92,
             _ => 100
@@ -462,6 +464,7 @@ internal static class WallPlacementOmissionSummary
             "no_clean_topology_spans" => "no clean spans",
             "object_like_linework" => "object linework",
             "weak_promoted_fragment_room_boundary_review_required" => "weak promoted fragments",
+            "opening_consumed_wall_remainder" => "opening-consumed walls",
             "opening_detail_fragment_review_required" => "opening detail fragments",
             "one_endpoint_fragment_review_required" => "one-ended fragments",
             "main_structural_semantic_support_review_required" => "main semantic support",

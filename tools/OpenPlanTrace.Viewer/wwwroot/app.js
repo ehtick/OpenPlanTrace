@@ -14910,6 +14910,7 @@ function visualSnapshotSuppressedWallCount(omissionCounts = {}) {
     "rejected_wall_evidence",
     "object_like_linework",
     "structural_topology_excluded",
+    "opening_consumed_wall_remainder",
     "tiny_door_adjacent_topology_suppressed"
   ].reduce((sum, code) => sum + nonNegativeInteger(omissionCounts[code]), 0);
 }

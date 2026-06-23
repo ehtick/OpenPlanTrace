@@ -539,6 +539,7 @@ public sealed record PlacementSummaryExport(
             "rejected_wall_evidence"
             or "object_like_linework"
             or "structural_topology_excluded"
+            or "opening_consumed_wall_remainder"
             or "tiny_door_adjacent_topology_suppressed";
 
     internal static bool IsReliabilityTrackedWall(PlacementWallExport wall)
@@ -554,6 +555,7 @@ public sealed record PlacementSummaryExport(
             or "rejected_wall_evidence"
             or "object_like_linework"
             or "isolated_fragment"
+            or "opening_consumed_wall_remainder"
             or "structural_topology_excluded");
     }
 
@@ -1391,6 +1393,15 @@ public sealed record PlacementWallOmissionExport(
                 "Use the linked clean wall span for placement and keep this wall only as source/evidence context.");
         }
 
+        if (ContainsEvidence(evidence, "opening cutouts fully consume wall placement run"))
+        {
+            return new PlacementWallOmissionClassification(
+                "opening_consumed_wall_remainder",
+                "OpeningConsumedWallRemainder",
+                "Wall-like linework is omitted from clean placement topology because anchored opening cutouts consume the entire wall run.",
+                "Use the anchored opening as placement evidence and do not import the consumed wall remainder as structural geometry.");
+        }
+
         if (ContainsEvidence(evidence, "outdoor covered-area boundary")
             || ContainsEvidence(evidence, "unpaired outdoor covered-area boundary"))
         {
@@ -1713,6 +1724,7 @@ public sealed record PlacementWallOmissionExport(
         }
 
         var evidence = new List<string>();
+        AddOpeningConsumedWallEvidence(evidence, wall, cutouts);
         var cursor = 0.0;
         PlacementWallOpeningCutoutExport? previous = null;
         foreach (var cutout in cutouts)
@@ -1739,6 +1751,25 @@ public sealed record PlacementWallOmissionExport(
         return evidence
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static void AddOpeningConsumedWallEvidence(
+        List<string> evidence,
+        WallSegment wall,
+        IReadOnlyList<PlacementWallOpeningCutoutExport> cutouts)
+    {
+        var mergedCoverageLength = cutouts.Sum(cutout =>
+            Math.Max(0, Math.Clamp(cutout.EndParameter, 0, 1) - Math.Clamp(cutout.StartParameter, 0, 1)));
+        if (mergedCoverageLength < 0.985)
+        {
+            return;
+        }
+
+        evidence.Add(
+            "opening cutouts fully consume wall placement run; "
+            + $"coverage {mergedCoverageLength:0.###}, "
+            + $"wall length {wall.CenterLine.Length:0.###} drawing units, "
+            + $"opening ids {string.Join(", ", cutouts.Select(cutout => cutout.OpeningId).Distinct(StringComparer.Ordinal))}");
     }
 
     private static IReadOnlyList<string> BuildOpeningLinkedWallEvidence(
