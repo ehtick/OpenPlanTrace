@@ -540,6 +540,7 @@ public sealed record PlacementSummaryExport(
             or "object_like_linework"
             or "structural_topology_excluded"
             or "opening_consumed_wall_remainder"
+            or "repeated_short_detail_review_required"
             or "tiny_door_adjacent_topology_suppressed";
 
     internal static bool IsReliabilityTrackedWall(PlacementWallExport wall)
@@ -556,6 +557,7 @@ public sealed record PlacementSummaryExport(
             or "object_like_linework"
             or "isolated_fragment"
             or "opening_consumed_wall_remainder"
+            or "repeated_short_detail_review_required"
             or "structural_topology_excluded");
     }
 
@@ -1431,6 +1433,16 @@ public sealed record PlacementWallOmissionExport(
                 "Treat this as object/detail evidence, not a wall, unless a reviewer promotes it.");
         }
 
+        if (ContainsEvidence(evidence, "repeated short unlayered")
+            && ContainsEvidence(evidence, "review as detail/object linework"))
+        {
+            return new PlacementWallOmissionClassification(
+                "repeated_short_detail_review_required",
+                "RepeatedDetailReview",
+                "Wall is omitted from clean placement topology because repeated short unlayered linework looks more like detail/object geometry than a reliable wall.",
+                "Keep the candidate for review evidence, but do not import it as a structural wall unless a reviewer promotes it.");
+        }
+
         if (component?.Kind == WallGraphComponentKind.IsolatedFragment)
         {
             return new PlacementWallOmissionClassification(
@@ -1597,16 +1609,6 @@ public sealed record PlacementWallOmissionExport(
                 "ShortParallelPairReview",
                 "Wall is omitted from clean placement topology because a short unlayered parallel-face candidate needs review before exact placement.",
                 "Review the paired faces against the source PDF before importing this wall; it may be a real short return, door/window frame, fixture edge, or stitched detail linework.");
-        }
-
-        if (ContainsEvidence(evidence, "repeated short unlayered")
-            && ContainsEvidence(evidence, "review as detail/object linework"))
-        {
-            return new PlacementWallOmissionClassification(
-                "repeated_short_detail_review_required",
-                "RepeatedDetailReview",
-                "Wall is omitted from clean placement topology because repeated short unlayered linework looks more like detail/object geometry than a reliable wall.",
-                "Keep the candidate for review evidence, but do not import it as a structural wall unless a reviewer promotes it.");
         }
 
         if (evidenceAssessment is not null

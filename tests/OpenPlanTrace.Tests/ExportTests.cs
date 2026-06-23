@@ -959,6 +959,44 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_ClassifiesIsolatedRepeatedShortDetailAsSuppressedDetail()
+    {
+        var fragmentLine = new PlanLineSegment(
+            new PlanPoint(90, 108),
+            new PlanPoint(190, 108));
+        var result = WithContainedWallAsIsolatedReviewFragment(
+            CreateContainedDuplicatePlacementRunResult(fragmentLine),
+            [
+                "wall evidence: repeated short unlayered horizontal linework group has 5 similar candidates; review as detail/object linework before exact wall placement"
+            ]);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var duplicateWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+        var omission = duplicateWall.GetProperty("placementOmission");
+
+        Assert.Equal("repeated_short_detail_review_required", omission.GetProperty("code").GetString());
+        Assert.Equal("RepeatedDetailReview", omission.GetProperty("category").GetString());
+        Assert.Contains(
+            omission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("repeated short unlayered", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementSuppressedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementReviewWallCount").GetInt32());
+        Assert.Equal(
+            1,
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .GetProperty("repeated_short_detail_review_required")
+                .GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_LinksRecoveredWallIdsInDuplicateCleanTopologyOmissions()
     {
         var result = RenameSyntheticWall(
@@ -6425,7 +6463,9 @@ public sealed class ExportTests
         };
     }
 
-    private static PlanScanResult WithContainedWallAsIsolatedReviewFragment(PlanScanResult result)
+    private static PlanScanResult WithContainedWallAsIsolatedReviewFragment(
+        PlanScanResult result,
+        IReadOnlyList<string>? assessmentEvidence = null)
     {
         var containedWall = result.Walls.Single(wall => wall.Id == "duplicate-contained-wall");
         var longWall = result.Walls.Single(wall => wall.Id == "duplicate-long-wall");
@@ -6464,7 +6504,7 @@ public sealed class ExportTests
             RequiresReview: true,
             RejectedAsNoise: false,
             containedWall.SourcePrimitiveIds,
-            ["synthetic isolated review fragment"])
+            assessmentEvidence ?? ["synthetic isolated review fragment"])
         {
             Decision = WallEvidenceDecision.Review
         };

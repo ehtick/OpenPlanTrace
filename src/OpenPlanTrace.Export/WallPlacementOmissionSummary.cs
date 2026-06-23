@@ -186,6 +186,7 @@ internal static class WallPlacementOmissionSummary
         || string.Equals(code, "object_like_linework", StringComparison.Ordinal)
         || string.Equals(code, "structural_topology_excluded", StringComparison.Ordinal)
         || string.Equals(code, "opening_consumed_wall_remainder", StringComparison.Ordinal)
+        || string.Equals(code, "repeated_short_detail_review_required", StringComparison.Ordinal)
         || string.Equals(code, "tiny_door_adjacent_topology_suppressed", StringComparison.Ordinal);
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(
@@ -283,14 +284,14 @@ internal static class WallPlacementOmissionSummary
             "very_short_parallel_pair_review_required" => 28,
             "short_parallel_pair_review_required" => 29,
             "covered_area_boundary_review_required" => 29,
-            "repeated_short_detail_review_required" => 30,
             "secondary_without_room_boundary_support" => 30,
             "isolated_fragment" => 40,
             "rejected_wall_evidence" => 80,
             "object_like_linework" => 82,
             "structural_topology_excluded" => 84,
             "opening_consumed_wall_remainder" => 86,
-            "tiny_door_adjacent_topology_suppressed" => 88,
+            "repeated_short_detail_review_required" => 88,
+            "tiny_door_adjacent_topology_suppressed" => 89,
             "duplicate_clean_topology_span" => 90,
             "duplicate_wall_face" => 92,
             _ => 100
