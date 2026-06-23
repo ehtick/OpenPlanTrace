@@ -6058,6 +6058,16 @@ internal static class OpenPlanTraceCli
                 ValidateBatchVisualSnapshotSummary(visualSnapshot, $"{prefix}.visualSnapshot", messages);
             }
 
+            if (!item.TryGetProperty("wallPlacement", out var wallPlacement)
+                || wallPlacement.ValueKind != JsonValueKind.Object)
+            {
+                messages.Add(new ArtifactValidationMessage("error", $"{prefix} requires object wallPlacement."));
+            }
+            else
+            {
+                ValidateBatchWallPlacementSummary(wallPlacement, $"{prefix}.wallPlacement", messages);
+            }
+
             if (!item.TryGetProperty("importReadiness", out var importReadiness)
                 || importReadiness.ValueKind != JsonValueKind.Object)
             {
@@ -6095,6 +6105,43 @@ internal static class OpenPlanTraceCli
             else if (status is not null)
             {
                 RequireNonEmptyStringProperty(item, prefix, "errorMessage", messages);
+            }
+        }
+    }
+
+    private static void ValidateBatchWallPlacementSummary(
+        JsonElement summary,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        foreach (var propertyName in new[]
+                 {
+                     "placementReadyWallCount",
+                     "placementOmittedWallCount",
+                     "representedWallCount",
+                     "placementSuppressedWallCount",
+                     "placementReviewWallCount"
+                 })
+        {
+            TryReadNonNegativeIntegerProperty(summary, prefix, propertyName, messages);
+        }
+
+        if (!summary.TryGetProperty("omissionCounts", out var omissionCounts)
+            || omissionCounts.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage("error", $"{prefix} requires object omissionCounts."));
+            return;
+        }
+
+        foreach (var property in omissionCounts.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Number
+                || !property.Value.TryGetInt32(out var count)
+                || count < 0)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{prefix}.omissionCounts.{property.Name} must be a non-negative integer."));
             }
         }
     }
@@ -12783,7 +12830,7 @@ internal sealed record BatchScanRunResult(
     int RetryCount,
     IReadOnlyList<BatchScanItemResult> Items)
 {
-    public const string CurrentSchemaVersion = "openplantrace.batch.v6";
+    public const string CurrentSchemaVersion = "openplantrace.batch.v7";
 
     public int ItemCount => Items.Count;
 
@@ -12825,6 +12872,7 @@ internal sealed record BatchScanItemResult(
     string? OverlayDirectory,
     string? VisualSnapshotPath,
     BatchVisualSnapshotSummary VisualSnapshot,
+    BatchWallPlacementSummary WallPlacement,
     BatchImportReadinessSummary ImportReadiness,
     string? ErrorMessage,
     PlanSourceCapability? SourceCapability)
@@ -12858,6 +12906,7 @@ internal sealed record BatchScanItemResult(
             overlayDirectory is null ? null : Path.GetFullPath(overlayDirectory),
             Path.GetFullPath(visualSnapshotPath),
             BatchVisualSnapshotSummary.From(visualSnapshot),
+            BatchWallPlacementSummary.From(visualSnapshot),
             BatchImportReadinessSummary.From(PlanImportReadiness.FromScanResult(scan)),
             scan.Diagnostics.ErrorCount > 0 ? "Scan completed with diagnostic errors." : null,
             null);
@@ -12887,6 +12936,7 @@ internal sealed record BatchScanItemResult(
             null,
             null,
             BatchVisualSnapshotSummary.Empty,
+            BatchWallPlacementSummary.Empty,
             BatchImportReadinessSummary.Empty,
             errorMessage,
             sourceCapability);
@@ -12925,6 +12975,36 @@ internal sealed record BatchVisualSnapshotSummary(
 
     public static BatchVisualSnapshotSummary Empty { get; } =
         new("-", 0, 0, 0, 0, 0, 0, 0, Array.Empty<string>());
+}
+
+internal sealed record BatchWallPlacementSummary(
+    int PlacementReadyWallCount,
+    int PlacementOmittedWallCount,
+    int RepresentedWallCount,
+    int PlacementSuppressedWallCount,
+    int PlacementReviewWallCount,
+    IReadOnlyDictionary<string, int> OmissionCounts)
+{
+    public static BatchWallPlacementSummary From(PlanOverlaySnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var pages = snapshot.Pages ?? Array.Empty<PlanOverlayPageSnapshot>();
+        return new BatchWallPlacementSummary(
+            pages.Sum(page => page.WallPlacement.PlacementReadyWallCount),
+            pages.Sum(page => page.WallPlacement.PlacementOmittedWallCount),
+            pages.Sum(page => page.WallPlacement.RepresentedWallCount),
+            pages.Sum(page => page.WallPlacement.PlacementSuppressedWallCount),
+            pages.Sum(page => page.WallPlacement.PlacementReviewWallCount),
+            pages
+                .SelectMany(page => page.WallPlacement.OmissionCounts)
+                .GroupBy(item => item.Key, StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Sum(item => item.Value), StringComparer.Ordinal));
+    }
+
+    public static BatchWallPlacementSummary Empty { get; } =
+        new(0, 0, 0, 0, 0, new Dictionary<string, int>(StringComparer.Ordinal));
 }
 
 internal sealed record BatchImportReadinessSummary(

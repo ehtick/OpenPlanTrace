@@ -140,10 +140,13 @@ public sealed class BatchScanComparisonResultTests
         Assert.Contains("Geometry totals: walls 39, rooms 0, openings 4", markdown);
         Assert.Contains("Import readiness: 1 blocked item(s), 0/1 geometry-ready, 0/1 metric-ready, 0/1 routing-ready, average score 0.7", markdown);
         Assert.Contains("Import blocking codes: placement.import.low_coordinate_ready_ratio:1", markdown);
+        Assert.Contains("Wall placement QA: ready 18, review 9, omitted 21, suppressed 2, represented 4", markdown);
+        Assert.Contains("Wall placement omissions: wall_evidence_review_required:7, fragmented_short_parallel_pair_review_required:3", markdown);
         Assert.Contains("Visual issue codes: visual.overlay_coverage_high:1", markdown);
         Assert.Contains("## Review Priorities", markdown);
         Assert.Contains("quality review required", markdown);
         Assert.Contains("import readiness Blocked 0.7", markdown);
+        Assert.Contains("wall placement omissions wall_evidence_review_required:7", markdown);
         Assert.Contains("walls detected but no rooms solved", markdown);
         Assert.Contains("## Artifact Index", markdown);
         Assert.Contains(@"C:\runs\candidate\placement.json", markdown);
@@ -224,6 +227,17 @@ public sealed class BatchScanComparisonResultTests
                 ErrorIssueCount: 0,
                 MaxDetectionCoverage: 0.83,
                 IssueCodes: new[] { "visual.overlay_coverage_high" }),
+            WallPlacement: new BatchWallPlacementSummary(
+                PlacementReadyWallCount: 18,
+                PlacementOmittedWallCount: 21,
+                RepresentedWallCount: 4,
+                PlacementSuppressedWallCount: 2,
+                PlacementReviewWallCount: 9,
+                OmissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["wall_evidence_review_required"] = 7,
+                    ["fragmented_short_parallel_pair_review_required"] = 3
+                }),
             ImportReadiness: new BatchImportReadinessSummary(
                 Grade: "Blocked",
                 Score: 0.7,

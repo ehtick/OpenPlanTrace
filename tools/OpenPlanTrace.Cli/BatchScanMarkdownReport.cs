@@ -96,6 +96,8 @@ internal static class BatchScanMarkdownReport
         builder.AppendLine($"- Import readiness: {blocked} blocked item(s), {geometryReady}/{run.Items.Count} geometry-ready, {metricReady}/{run.Items.Count} metric-ready, {routingReady}/{run.Items.Count} routing-ready, average score {FormatConfidence(averageReadinessScore)}");
         builder.AppendLine($"- Import blocking codes: {FormatCounts(run.Items.SelectMany(item => item.ImportReadiness.BlockingIssueCodes))}");
         builder.AppendLine($"- Import review codes: {FormatCounts(run.Items.SelectMany(item => item.ImportReadiness.ReviewIssueCodes))}");
+        builder.AppendLine($"- Wall placement QA: ready {run.Items.Sum(item => item.WallPlacement.PlacementReadyWallCount)}, review {run.Items.Sum(item => item.WallPlacement.PlacementReviewWallCount)}, omitted {run.Items.Sum(item => item.WallPlacement.PlacementOmittedWallCount)}, suppressed {run.Items.Sum(item => item.WallPlacement.PlacementSuppressedWallCount)}, represented {run.Items.Sum(item => item.WallPlacement.RepresentedWallCount)}");
+        builder.AppendLine($"- Wall placement omissions: {FormatDictionaryCounts(run.Items.SelectMany(item => item.WallPlacement.OmissionCounts))}");
         builder.AppendLine($"- Review burden: {run.Items.Count(item => item.Counts.RequiresReview)} review-required item(s), {totals.VisualIssues} visual issue(s), {totals.Diagnostics} diagnostic message(s), {totals.Warnings} warning(s), {totals.Errors} error(s)");
         builder.AppendLine($"- Source kinds: {FormatCounts(run.Items.Select(item => SourceSummary(item)))}");
         builder.AppendLine($"- Quality grades: {FormatCounts(run.Items.Select(item => item.Counts.QualityGrade))}");
@@ -311,6 +313,11 @@ internal static class BatchScanMarkdownReport
             reasons.Add($"{item.Counts.SurfacePatterns} surface/detail pattern(s) excluded from walls");
         }
 
+        if (item.WallPlacement.PlacementOmittedWallCount > 0)
+        {
+            reasons.Add($"wall placement omissions {FormatTopDictionaryCounts(item.WallPlacement.OmissionCounts, 5)}");
+        }
+
         return reasons;
     }
 
@@ -474,6 +481,28 @@ internal static class BatchScanMarkdownReport
             .Select(group => $"{group.Key}:{group.Count()}");
 
         return FormatJoined(counts);
+    }
+
+    private static string FormatDictionaryCounts(IEnumerable<KeyValuePair<string, int>> values) =>
+        FormatTopDictionaryCounts(values, take: null);
+
+    private static string FormatTopDictionaryCounts(
+        IEnumerable<KeyValuePair<string, int>> values,
+        int? take)
+    {
+        var counts = values
+            .Where(item => !string.IsNullOrWhiteSpace(item.Key) && item.Value > 0)
+            .GroupBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                Code = group.Key,
+                Count = group.Sum(item => item.Value)
+            })
+            .OrderByDescending(item => item.Count)
+            .ThenBy(item => item.Code, StringComparer.OrdinalIgnoreCase)
+            .Select(item => $"{item.Code}:{item.Count.ToString(CultureInfo.InvariantCulture)}");
+
+        return FormatJoined(take is null ? counts : counts.Take(take.Value));
     }
 
     private static string FormatJoined(IEnumerable<string> values)

@@ -2224,19 +2224,19 @@ public sealed class SchemaContractTests
             FindRepositoryRoot(),
             "docs",
             "schemas",
-            "openplantrace.batch.v6.schema.json");
+            "openplantrace.batch.v7.schema.json");
         Assert.True(File.Exists(schemaPath), $"Missing documented schema artifact: {schemaPath}");
 
         using var schemaDocument = JsonDocument.Parse(File.ReadAllText(schemaPath));
 
         Assert.Equal("https://json-schema.org/draft/2020-12/schema", schemaDocument.RootElement.GetProperty("$schema").GetString());
-        Assert.Equal("urn:openplantrace:schema:batch:v6", schemaDocument.RootElement.GetProperty("$id").GetString());
-        Assert.Equal("openplantrace.batch.v6", schemaDocument.RootElement.GetProperty("x-openplantrace-schemaVersion").GetString());
+        Assert.Equal("urn:openplantrace:schema:batch:v7", schemaDocument.RootElement.GetProperty("$id").GetString());
+        Assert.Equal("openplantrace.batch.v7", schemaDocument.RootElement.GetProperty("x-openplantrace-schemaVersion").GetString());
         Assert.Equal(
             new[] { "generatedAt", "items", "maxDegreeOfParallelism", "outputDirectory", "retryCount", "schemaVersion" },
             ReadStringArray(schemaDocument.RootElement.GetProperty("required")).Order(StringComparer.Ordinal).ToArray());
 
-        AssertDefinitionRequires(schemaDocument, "batchItem", "itemNumber", "inputPath", "sourceKind", "effectiveSourceKind", "status", "attemptCount", "durationMilliseconds", "counts", "scanJsonPath", "geoJsonPath", "overlayDirectory", "visualSnapshotPath", "visualSnapshot", "importReadiness", "errorMessage", "sourceCapability");
+        AssertDefinitionRequires(schemaDocument, "batchItem", "itemNumber", "inputPath", "sourceKind", "effectiveSourceKind", "status", "attemptCount", "durationMilliseconds", "counts", "scanJsonPath", "geoJsonPath", "overlayDirectory", "visualSnapshotPath", "visualSnapshot", "wallPlacement", "importReadiness", "errorMessage", "sourceCapability");
         Assert.True(
             schemaDocument.RootElement
                 .GetProperty("$defs")
@@ -2245,6 +2245,7 @@ public sealed class SchemaContractTests
                 .TryGetProperty("placementJsonPath", out _),
             "Batch item schema should document placementJsonPath.");
         AssertDefinitionRequires(schemaDocument, "visualSnapshotSummary", "schemaVersion", "pageCount", "layerCount", "drawableItemCount", "issueCount", "warningIssueCount", "errorIssueCount", "maxDetectionCoverage", "issueCodes");
+        AssertDefinitionRequires(schemaDocument, "wallPlacementSummary", "placementReadyWallCount", "placementOmittedWallCount", "representedWallCount", "placementSuppressedWallCount", "placementReviewWallCount", "omissionCounts");
         AssertDefinitionRequires(schemaDocument, "importReadiness", "grade", "score", "readyForGeometryImport", "readyForMetricImport", "readyForRoutingImport", "requiresReview", "blockingIssueCodes", "reviewIssueCodes", "evidence");
         Assert.True(
             schemaDocument.RootElement

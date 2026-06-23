@@ -519,7 +519,7 @@ Export the batch result JSON Schema contract:
 dotnet run --project .\tools\OpenPlanTrace.Cli\OpenPlanTrace.Cli.csproj -- schema batch-result --json .\openplantrace.batch-result.schema.json
 ```
 
-Batch result JSON is schema-versioned as `openplantrace.batch.v6`. The schema lives at `docs/schemas/openplantrace.batch.v6.schema.json` and is embedded in the CLI package through `BatchScanRunResultJsonSchema.ReadCurrent()` / `WriteCurrentAsync(...)`. Result artifacts include per-input output paths, downstream `placement.json` paths, status, source format/capability metadata, scan counts, scan quality, visual-snapshot issue summaries, and import-readiness summaries with coordinate/metric ready ratios.
+Batch result JSON is schema-versioned as `openplantrace.batch.v7`. The schema lives at `docs/schemas/openplantrace.batch.v7.schema.json` and is embedded in the CLI package through `BatchScanRunResultJsonSchema.ReadCurrent()` / `WriteCurrentAsync(...)`. Result artifacts include per-input output paths, downstream `placement.json` paths, status, source format/capability metadata, scan counts, scan quality, visual-snapshot issue summaries, wall-placement QA summaries, and import-readiness summaries with coordinate/metric ready ratios.
 
 Export the batch comparison JSON Schema contract:
 
