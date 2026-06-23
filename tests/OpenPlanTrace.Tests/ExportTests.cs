@@ -3043,6 +3043,26 @@ public sealed class ExportTests
                 .GetProperty("wallPlacementOmissionCounts")
                 .GetProperty("one_endpoint_fragment_review_required")
                 .GetInt32());
+
+        var issue = Assert.Single(
+            document.RootElement.GetProperty("issues").EnumerateArray(),
+            item => item.GetProperty("code").GetString() == "placement.review.one_endpoint_fragment"
+                && item.GetProperty("itemId").GetString() == firstWall.Id);
+        Assert.Equal(
+            "one_endpoint_fragment_review_required",
+            issue.GetProperty("properties").GetProperty("placementOmissionCode").GetString());
+        Assert.Contains("One-ended", issue.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            issue.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("one trusted structural endpoint", StringComparison.OrdinalIgnoreCase) == true);
+
+        var importReadiness = summary.GetProperty("importReadiness");
+        Assert.Contains(
+            "placement.wall_fragment.one_endpoint_fragments_require_review",
+            JsonStrings(importReadiness.GetProperty("reviewIssueCodes")));
+        Assert.DoesNotContain(
+            "placement.review.one_endpoint_fragment",
+            JsonStrings(importReadiness.GetProperty("reviewIssueCodes")));
     }
 
     [Fact]

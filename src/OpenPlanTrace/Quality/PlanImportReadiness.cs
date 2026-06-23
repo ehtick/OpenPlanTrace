@@ -31,6 +31,7 @@ public sealed record PlanImportReadiness(
     private const string OpeningPlacementInconsistentIssueCode = "placement.opening.placement_inconsistent";
     private const string WallEvidenceRequiresReviewIssueCode = "placement.wall_evidence.requires_review";
     private const string FragmentedShortWallPairsRequireReviewIssueCode = "placement.wall_pairs.fragmented_short_pairs_require_review";
+    private const string OneEndpointWallFragmentsRequireReviewIssueCode = "placement.wall_fragment.one_endpoint_fragments_require_review";
     private const string CoveredAreaBoundariesRequireReviewIssueCode = "placement.wall_exterior.covered_area_boundaries_require_review";
 
     public static PlanImportReadiness Empty { get; } =
@@ -466,6 +467,11 @@ public sealed record PlanImportReadiness(
         if (reviewIssueCodes.Contains(FragmentedShortWallPairsRequireReviewIssueCode, StringComparer.Ordinal))
         {
             yield return "Review fragmented short parallel wall-pair candidates before importing exact wall coordinates.";
+        }
+
+        if (reviewIssueCodes.Contains(OneEndpointWallFragmentsRequireReviewIssueCode, StringComparer.Ordinal))
+        {
+            yield return "Review one-ended wall fragments before importing exact wall coordinates.";
         }
 
         if (reviewIssueCodes.Contains(CoveredAreaBoundariesRequireReviewIssueCode, StringComparer.Ordinal))
