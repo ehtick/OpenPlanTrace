@@ -6,6 +6,34 @@ OpenPlanTrace uses project versions in `A.BC.DEF` format. `A` is the release
 generation, `BC` is the major update track, and `DEF` is the small update or bug
 fix counter. Individual JSON contracts keep their own schema versions.
 
+## [0.03.002] - 2026-06-23
+
+### Improved
+- Wall-QA SVG overlays and visual snapshots now spatially prioritize faint
+  source-context primitives around the visible wall/topology review area before
+  applying the source-context cap.
+- Difficult PDFs with very large primitive streams no longer show unrelated
+  first-in-file-order source linework as the wall-QA reference context when the
+  relevant plan linework appears later in the PDF stream.
+- Source-context SVG metadata now records the prioritized focus bounds and the
+  capped supported primitive count when the renderer has to trim context.
+
+### Verified
+- Added SVG and visual-snapshot regression coverage proving wall-QA review
+  source context chooses nearby wall evidence before unrelated earlier
+  primitives when the cap is small.
+- Ran focused wall-QA export tests: `4` tests passed.
+- Ran a three-PDF local corpus in hard/medium/light order with `wall-qa-review`,
+  GeoJSON, placement JSON, visual snapshots, SVG overlays, and Markdown report
+  output.
+- Deep validation passed for the generated `openplantrace.batch.v6` batch
+  result.
+- Rendered and inspected corrected wall-QA screenshots for the supplied hard,
+  medium, and light PDFs. The hard screenshot now shows source linework under
+  the wall overlay instead of an unrelated source primitive island, making the
+  remaining scanner issues visible as true wall recovery/classification work.
+- Ran the full test suite: `734` tests passed.
+
 ## [0.03.001] - 2026-06-23
 
 ### Added

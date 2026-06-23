@@ -126,7 +126,11 @@ public static class PlanOverlaySvgRenderer
         }
         else if (options.IncludeSourceContext)
         {
-            AppendSourceContext(builder, page, options);
+            AppendSourceContext(
+                builder,
+                page,
+                options,
+                PlanOverlaySourceContextSelector.ResolveFocusBounds(result, page, options, contentBounds));
         }
 
         if (options.IncludeRooms)
@@ -493,23 +497,19 @@ public static class PlanOverlaySvgRenderer
     private static void AppendSourceContext(
         StringBuilder builder,
         PlanPage page,
-        SvgOverlayRenderOptions options)
+        SvgOverlayRenderOptions options,
+        PlanRect focusBounds)
     {
-        var limit = Math.Max(0, options.MaxSourceContextPrimitives);
-        if (limit == 0 || page.Primitives.Count == 0)
+        var primitives = PlanOverlaySourceContextSelector.Select(page, options, focusBounds);
+        if (primitives.Count == 0)
         {
             return;
         }
 
         builder.AppendLine("""<g id="source-context" aria-label="Faint source linework context">""");
         var rendered = 0;
-        foreach (var primitive in page.Primitives)
+        foreach (var primitive in primitives)
         {
-            if (rendered >= limit)
-            {
-                break;
-            }
-
             switch (primitive)
             {
                 case LinePrimitive line:
@@ -538,9 +538,10 @@ public static class PlanOverlaySvgRenderer
             }
         }
 
-        if (page.Primitives.Count > limit)
+        var supportedPrimitiveCount = PlanOverlaySourceContextSelector.SupportedPrimitiveCount(page);
+        if (supportedPrimitiveCount > rendered)
         {
-            builder.AppendLine($"""<metadata>source context capped at {limit.ToString(CultureInfo.InvariantCulture)} of {page.Primitives.Count.ToString(CultureInfo.InvariantCulture)} primitives</metadata>""");
+            builder.AppendLine($"""<metadata>source context prioritized around {N(focusBounds.X)},{N(focusBounds.Y)} {N(focusBounds.Width)}x{N(focusBounds.Height)} and capped at {rendered.ToString(CultureInfo.InvariantCulture)} of {supportedPrimitiveCount.ToString(CultureInfo.InvariantCulture)} primitives</metadata>""");
         }
 
         builder.AppendLine("</g>");

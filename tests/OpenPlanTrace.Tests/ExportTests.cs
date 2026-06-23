@@ -1338,6 +1338,43 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void SvgRenderer_WallQaReviewPrioritizesNearbySourceContextBeforePrimitiveCap()
+    {
+        var result = WithWallQaSourceContextOrderingFixture(CreateDenseMinorRoutingDetailResult());
+        var options = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaReview) with
+        {
+            MaxSourceContextPrimitives = 1
+        };
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(result, 1, options);
+
+        Assert.Contains("id=\"source-context\"", svg);
+        Assert.Contains("""<line class="source-context" x1="96" y1="96" x2="304" y2="96" />""", svg);
+        Assert.DoesNotContain("""<line class="source-context" x1="420" y1="340" x2="480" y2="340" />""", svg);
+        Assert.Contains("source context prioritized around", svg);
+    }
+
+    [Fact]
+    public void VisualSnapshot_WallQaReviewSourceContextUsesNearbyPrimitiveBeforePrimitiveCap()
+    {
+        var result = WithWallQaSourceContextOrderingFixture(CreateDenseMinorRoutingDetailResult());
+        var options = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaReview) with
+        {
+            MaxSourceContextPrimitives = 1
+        };
+
+        var snapshot = PlanOverlaySnapshot.From(result, svgOptions: options);
+        var page = Assert.Single(snapshot.Pages);
+        var sourceContext = Assert.Single(page.Layers, layer => layer.Name == "sourceContext");
+
+        Assert.Equal(1, sourceContext.Count);
+        Assert.Equal(96, sourceContext.Bounds.Left);
+        Assert.Equal(96, sourceContext.Bounds.Top);
+        Assert.Equal(304, sourceContext.Bounds.Right);
+        Assert.Equal(96, sourceContext.Bounds.Bottom);
+    }
+
+    [Fact]
     public void SvgRenderer_WallQaFocusProfileCropsWallTopologyAndKeepsLegendVisible()
     {
         var result = CreateDenseMinorRoutingDetailResult() with
@@ -5512,6 +5549,41 @@ public sealed class ExportTests
                 Array.Empty<PipelineStageReport>(),
                 Array.Empty<PlanDiagnostic>()));
       }
+
+    private static PlanScanResult WithWallQaSourceContextOrderingFixture(PlanScanResult result)
+    {
+        var page = Assert.Single(result.Document.Pages);
+        var farContext = new LinePrimitive(
+            new PlanLineSegment(
+                new PlanPoint(420, 340),
+                new PlanPoint(480, 340)))
+        {
+            SourceId = "far-source-context",
+            Layer = "fixture-context"
+        };
+        var nearContext = new LinePrimitive(
+            new PlanLineSegment(
+                new PlanPoint(96, 96),
+                new PlanPoint(304, 96)))
+        {
+            SourceId = "near-wall-source-context",
+            Layer = "fixture-context"
+        };
+
+        return result with
+        {
+            Document = result.Document with
+            {
+                Pages =
+                [
+                    page with
+                    {
+                        Primitives = new PlanPrimitive[] { farContext, nearContext }
+                    }
+                ]
+            }
+        };
+    }
 
     private static PlanScanResult CreateDoorOpeningSplitTopologyResult()
     {

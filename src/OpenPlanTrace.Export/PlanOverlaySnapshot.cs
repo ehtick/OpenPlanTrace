@@ -230,9 +230,14 @@ public sealed record PlanOverlayPageSnapshot(
             && options.IncludeSourceContext
             && string.IsNullOrWhiteSpace(options.BackgroundImageHref))
         {
+            var sourceContextFocusBounds = PlanOverlaySourceContextSelector.ResolveFocusBounds(
+                result,
+                page,
+                options,
+                pageBounds);
             yield return Layer(
                 "sourceContext",
-                SourceContextPrimitives(page, options),
+                PlanOverlaySourceContextSelector.Select(page, options, sourceContextFocusBounds),
                 item => item.Bounds,
                 _ => Confidence.Low);
         }
@@ -469,17 +474,6 @@ public sealed record PlanOverlayPageSnapshot(
             confidenceValues.Length == 0 ? null : PlanOverlaySnapshot.Round(confidenceValues.Max()),
             breakdown ?? new Dictionary<string, int>(StringComparer.Ordinal));
     }
-
-    private static IEnumerable<PlanPrimitive> SourceContextPrimitives(
-        PlanPage page,
-        SvgOverlayRenderOptions options) =>
-        page.Primitives
-            .Where(primitive =>
-                primitive is LinePrimitive
-                or PolylinePrimitive
-                or RectanglePrimitive
-                or ArcPrimitive)
-            .Take(Math.Max(0, options.MaxSourceContextPrimitives));
 
     private static double NormalizedDensity(int count, PlanRectSnapshot normalizedBounds)
     {
