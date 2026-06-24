@@ -1072,6 +1072,76 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_OrthogonalizesNearAxisSourceWallBeforeGraphing()
+    {
+        var top = StrongPairedWall("top-slightly-skewed", new PlanPoint(100, 100), new PlanPoint(320, 102));
+        var left = StrongPairedWall("left-support", new PlanPoint(100, 100), new PlanPoint(100, 260));
+        var context = new ScanContext(
+            Document("wall-near-axis-source-cleanup"),
+            new ScannerOptions { WallSnapTolerance = 3, DefaultWallThickness = 4 });
+        context.Walls.AddRange(new[] { top, left });
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { top.Id, left.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { top.Id, left.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(top, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.92)),
+                Assessment(left, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.92))
+            });
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var normalizedTop = Assert.Single(context.Walls, wall => wall.Id == top.Id);
+
+        Assert.Equal(100, normalizedTop.CenterLine.Start.Y, precision: 3);
+        Assert.Equal(100, normalizedTop.CenterLine.End.Y, precision: 3);
+        Assert.Equal(100, normalizedTop.CenterLine.Start.X, precision: 3);
+        Assert.Equal(320, normalizedTop.CenterLine.End.X, precision: 3);
+        Assert.Contains(
+            normalizedTop.Evidence,
+            item => item.Contains("orthogonalized near-axis wall centerline", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.topology.normalized"
+                && diagnostic.Properties["orthogonalizedWallCenterLineCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallGraphStage_DoesNotOrthogonalizeRealDiagonalSourceWall()
+    {
+        var diagonal = StrongPairedWall("diagonal-wall", new PlanPoint(100, 100), new PlanPoint(220, 116));
+        var context = new ScanContext(
+            Document("wall-real-diagonal-preserved"),
+            new ScannerOptions { WallSnapTolerance = 3, DefaultWallThickness = 4 });
+        context.Walls.Add(diagonal);
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { diagonal.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { diagonal.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[] { Assessment(diagonal, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.92)) });
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.Walls, wall => wall.Id == diagonal.Id);
+
+        Assert.Equal(116, retained.CenterLine.End.Y, precision: 3);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("orthogonalized near-axis wall centerline", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallGraphStage_BlocksShortAcceptedIsolatedGraphWallFromPlacementOutput()
     {
         var isolatedWall = DetectedWall(

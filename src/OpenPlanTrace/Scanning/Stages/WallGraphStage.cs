@@ -38,6 +38,12 @@ internal sealed class WallGraphStage : IPipelineStage
         var graphWalls = context.Walls
             .Where(wall => graphInputWallIds.Contains(wall.Id))
             .ToArray();
+        graphWalls = OrthogonalizeNearAxisGraphWalls(
+            graphWalls,
+            context.Options,
+            context.Calibration,
+            normalizedWallsById,
+            out var orthogonalizedWallCenterLineCount);
         var pointsByWallId = graphWalls.ToDictionary(
             wall => wall.Id,
             wall => new List<PlanPoint> { wall.CenterLine.Start, wall.CenterLine.End });
@@ -308,7 +314,8 @@ internal sealed class WallGraphStage : IPipelineStage
             snappedEndpointGapCount,
             trimmedEndpointOverrunCount,
             suppressedEndpointOverrunTailEdgeCount,
-            normalizedWallSegmentCount);
+            normalizedWallSegmentCount,
+            orthogonalizedWallCenterLineCount);
 
         if (inferredNearTouchJunctionCount > 0)
         {
@@ -433,6 +440,257 @@ internal sealed class WallGraphStage : IPipelineStage
         && band.FaceSeparation >= 3.0
         && band.FaceSeparation <= 18.0
         && band.Confidence.Value >= 0.72;
+
+    private static WallSegment[] OrthogonalizeNearAxisGraphWalls(
+        IReadOnlyList<WallSegment> walls,
+        ScannerOptions options,
+        PlanCalibration calibration,
+        Dictionary<string, WallSegment> normalizedWallsById,
+        out int orthogonalizedWallCenterLineCount)
+    {
+        orthogonalizedWallCenterLineCount = 0;
+        if (walls.Count == 0)
+        {
+            return Array.Empty<WallSegment>();
+        }
+
+        var result = new WallSegment[walls.Count];
+        var wallsByPage = walls
+            .GroupBy(wall => wall.PageNumber)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+
+        for (var index = 0; index < walls.Count; index++)
+        {
+            var wall = walls[index];
+            var pageWalls = wallsByPage[wall.PageNumber];
+            if (TryOrthogonalizeNearAxisGraphWall(wall, pageWalls, options, calibration, out var normalizedWall))
+            {
+                result[index] = normalizedWall;
+                normalizedWallsById[wall.Id] = normalizedWall;
+                orthogonalizedWallCenterLineCount++;
+            }
+            else
+            {
+                result[index] = wall;
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryOrthogonalizeNearAxisGraphWall(
+        WallSegment wall,
+        IReadOnlyList<WallSegment> pageWalls,
+        ScannerOptions options,
+        PlanCalibration calibration,
+        out WallSegment normalizedWall)
+    {
+        normalizedWall = wall;
+        if (wall.CenterLine.Length < Math.Max(options.MinWallLength, 1)
+            || wall.Evidence.Any(IsHardRiskReviewWallEvidence)
+            || wall.Evidence.Any(item =>
+                item.Contains("non-orthogonal", StringComparison.OrdinalIgnoreCase)
+                && !IsNearlyOrthogonalAngleEvidence(item)))
+        {
+            return false;
+        }
+
+        if (!TryResolveNearAxisOrientation(wall.CenterLine, options, out var orientation))
+        {
+            return false;
+        }
+
+        var axisCoordinate = ResolveSupportedOrthogonalAxisCoordinate(wall, pageWalls, orientation, options);
+        var normalizedLine = orientation == OrthogonalAxis.Horizontal
+            ? new PlanLineSegment(
+                new PlanPoint(wall.CenterLine.Start.X, axisCoordinate),
+                new PlanPoint(wall.CenterLine.End.X, axisCoordinate))
+            : new PlanLineSegment(
+                new PlanPoint(axisCoordinate, wall.CenterLine.Start.Y),
+                new PlanPoint(axisCoordinate, wall.CenterLine.End.Y));
+
+        if (normalizedLine.Length <= 1
+            || wall.CenterLine.Start.DistanceTo(normalizedLine.Start) <= 0.001
+            && wall.CenterLine.End.DistanceTo(normalizedLine.End) <= 0.001)
+        {
+            return false;
+        }
+
+        var scaleGroup = calibration.SelectMeasurementScaleGroup(
+            wall.PageNumber,
+            normalizedLine.Bounds.Inflate(Math.Max(wall.Thickness / 2.0, 0.5)),
+            wall.SourceRegionId);
+        var evidence = wall.Evidence
+            .Append($"orthogonalized near-axis wall centerline to {orientation.ToString().ToLowerInvariant()} axis")
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        normalizedWall = wall with
+        {
+            CenterLine = normalizedLine,
+            Evidence = evidence,
+            LengthMeters = calibration.ToMeters(normalizedLine.Length, scaleGroup) ?? wall.LengthMeters,
+            ThicknessMillimeters = calibration.ToMillimeters(wall.Thickness, scaleGroup) ?? wall.ThicknessMillimeters,
+            MeasurementScaleGroupId = scaleGroup?.Id ?? wall.MeasurementScaleGroupId
+        };
+        return true;
+    }
+
+    private static bool IsNearlyOrthogonalAngleEvidence(string evidence)
+    {
+        const double degreesTolerance = 2.75;
+        var anglePrefix = evidence.IndexOf("angle ", StringComparison.OrdinalIgnoreCase);
+        if (anglePrefix < 0)
+        {
+            return false;
+        }
+
+        var start = anglePrefix + "angle ".Length;
+        var end = evidence.IndexOf(" degrees", start, StringComparison.OrdinalIgnoreCase);
+        if (end <= start)
+        {
+            return false;
+        }
+
+        if (!double.TryParse(
+            evidence[start..end],
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var angleDegrees))
+        {
+            return false;
+        }
+
+        var normalized = Math.Abs(angleDegrees % 180.0);
+        var distanceToOrthogonal = Math.Min(
+            Math.Min(normalized, Math.Abs(normalized - 90.0)),
+            Math.Abs(normalized - 180.0));
+        return distanceToOrthogonal <= degreesTolerance;
+    }
+
+    private static bool TryResolveNearAxisOrientation(
+        PlanLineSegment line,
+        ScannerOptions options,
+        out OrthogonalAxis orientation)
+    {
+        var dx = Math.Abs(line.End.X - line.Start.X);
+        var dy = Math.Abs(line.End.Y - line.Start.Y);
+        var skewTolerance = NearAxisSkewTolerance(options);
+        const double angleToleranceRadians = 0.048;
+
+        if (dx >= dy
+            && dy <= skewTolerance
+            && Math.Atan2(dy, Math.Max(dx, 0.001)) <= angleToleranceRadians)
+        {
+            orientation = OrthogonalAxis.Horizontal;
+            return true;
+        }
+
+        if (dy > dx
+            && dx <= skewTolerance
+            && Math.Atan2(dx, Math.Max(dy, 0.001)) <= angleToleranceRadians)
+        {
+            orientation = OrthogonalAxis.Vertical;
+            return true;
+        }
+
+        orientation = default;
+        return false;
+    }
+
+    private static double ResolveSupportedOrthogonalAxisCoordinate(
+        WallSegment wall,
+        IReadOnlyList<WallSegment> pageWalls,
+        OrthogonalAxis orientation,
+        ScannerOptions options)
+    {
+        var supportedCoordinates = SupportedOrthogonalAxisCoordinates(wall, pageWalls, orientation, options)
+            .Order()
+            .ToArray();
+        if (supportedCoordinates.Length > 0)
+        {
+            return DominantCoordinateOrMedian(supportedCoordinates, Math.Max(0.75, options.WallSnapTolerance * 0.25));
+        }
+
+        return orientation == OrthogonalAxis.Horizontal
+            ? (wall.CenterLine.Start.Y + wall.CenterLine.End.Y) / 2.0
+            : (wall.CenterLine.Start.X + wall.CenterLine.End.X) / 2.0;
+    }
+
+    private static IEnumerable<double> SupportedOrthogonalAxisCoordinates(
+        WallSegment wall,
+        IReadOnlyList<WallSegment> pageWalls,
+        OrthogonalAxis orientation,
+        ScannerOptions options)
+    {
+        var supportTolerance = Math.Max(options.WallSnapTolerance, NearAxisSkewTolerance(options));
+        foreach (var other in pageWalls)
+        {
+            if (string.Equals(other.Id, wall.Id, StringComparison.Ordinal)
+                || !TryResolveNearAxisOrientation(other.CenterLine, options, out var otherOrientation)
+                || otherOrientation == orientation)
+            {
+                continue;
+            }
+
+            foreach (var endpoint in new[] { other.CenterLine.Start, other.CenterLine.End })
+            {
+                var parameter = wall.CenterLine.ProjectParameter(endpoint);
+                var projected = wall.CenterLine.PointAt(Math.Clamp(parameter, 0, 1));
+                if (parameter < -0.04
+                    || parameter > 1.04
+                    || endpoint.DistanceTo(projected) > supportTolerance)
+                {
+                    continue;
+                }
+
+                yield return orientation == OrthogonalAxis.Horizontal
+                    ? endpoint.Y
+                    : endpoint.X;
+            }
+        }
+    }
+
+    private static double NearAxisSkewTolerance(ScannerOptions options) =>
+        Math.Max(0.75, Math.Min(Math.Max(options.WallSnapTolerance, 1.0), options.DefaultWallThickness * 0.75));
+
+    private static double DominantCoordinateOrMedian(IReadOnlyList<double> sortedCoordinates, double tolerance)
+    {
+        if (sortedCoordinates.Count == 0)
+        {
+            return 0;
+        }
+
+        var median = Median(sortedCoordinates);
+        var groups = new List<CoordinateGroup>();
+        foreach (var coordinate in sortedCoordinates)
+        {
+            if (groups.Count == 0 || Math.Abs(coordinate - groups[^1].Last) > tolerance)
+            {
+                groups.Add(new CoordinateGroup(coordinate));
+            }
+            else
+            {
+                groups[^1].Add(coordinate);
+            }
+        }
+
+        var dominant = groups
+            .OrderByDescending(group => group.Count)
+            .ThenBy(group => Math.Abs(group.Center - median))
+            .ThenBy(group => group.Center)
+            .First();
+
+        return dominant.Count > 1 ? dominant.Center : median;
+    }
+
+    private static double Median(IReadOnlyList<double> sorted)
+    {
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2.0;
+    }
 
     private static bool IsHardRiskReviewWallEvidence(string evidence)
     {
@@ -3683,12 +3941,14 @@ internal sealed class WallGraphStage : IPipelineStage
         int snappedEndpointGapCount,
         int trimmedEndpointOverrunCount,
         int suppressedEndpointOverrunTailEdgeCount,
-        int normalizedWallSegmentCount)
+        int normalizedWallSegmentCount,
+        int orthogonalizedWallCenterLineCount)
     {
         if (normalizedCollinearJunctionCount == 0
             && snappedEndpointGapCount == 0
             && trimmedEndpointOverrunCount == 0
-            && suppressedEndpointOverrunTailEdgeCount == 0)
+            && suppressedEndpointOverrunTailEdgeCount == 0
+            && orthogonalizedWallCenterLineCount == 0)
         {
             return;
         }
@@ -3697,7 +3957,7 @@ internal sealed class WallGraphStage : IPipelineStage
             "wall_graph.topology.normalized",
             DiagnosticSeverity.Info,
             Name,
-            "Wall graph topology was normalized by connecting supported collinear fragments, snapping safe near-touch endpoint gaps, trimming trusted endpoint overruns, and suppressing reviewed overrun tails from clean graph edges.",
+            "Wall graph topology was normalized by straightening near-axis wall centerlines, connecting supported collinear fragments, snapping safe near-touch endpoint gaps, trimming trusted endpoint overruns, and suppressing reviewed overrun tails from clean graph edges.",
             confidence: Confidence.Medium,
             scope: DiagnosticScope.Detection,
             properties: new Dictionary<string, string>
@@ -3707,6 +3967,7 @@ internal sealed class WallGraphStage : IPipelineStage
                 ["trimmedEndpointOverrunCount"] = trimmedEndpointOverrunCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["suppressedEndpointOverrunTailEdgeCount"] = suppressedEndpointOverrunTailEdgeCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["normalizedWallSegmentCount"] = normalizedWallSegmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["orthogonalizedWallCenterLineCount"] = orthogonalizedWallCenterLineCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["endpointOverrunTrimTolerance"] = EndpointOverrunTrimTolerance(context.Options).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
             });
     }
@@ -5216,6 +5477,12 @@ internal sealed class WallGraphStage : IPipelineStage
         int FragmentMergedWallCount,
         int InteriorWallCount,
         int ExteriorWallCount);
+
+    private enum OrthogonalAxis
+    {
+        Horizontal,
+        Vertical
+    }
 
     private enum DirectionBucket
     {
