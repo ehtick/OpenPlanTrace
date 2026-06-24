@@ -3820,6 +3820,94 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversSourceBackedSpanWhenStrongWallHasBlockedGraphRepair()
+    {
+        var result = WithSourceBackedFallbackBlockedRepairCandidate(
+            CreateSourceBackedFallbackWallResult(
+                evidence:
+                [
+                    "parallel wall-face pair",
+                    "wall evidence: strong double-edge wall body",
+                    "pair score 0.93",
+                    "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+                ]));
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var root = document.RootElement;
+        var repair = Assert.Single(root.GetProperty("wallGraphRepairCandidates").EnumerateArray());
+        var wall = root
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal("TopologyImportBlocked", repair.GetProperty("importImpact").GetString());
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("despite blocked graph repair", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.DoesNotContain(
+            repair.GetProperty("id").GetString(),
+            wall.GetProperty("wallGraphRepairCandidateIds").EnumerateArray().Select(item => item.GetString()));
+
+        var summary = root.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_KeepsTrustedSourceBackedDoorAdjacentWallStub()
+    {
+        var result = WithSourceBackedFallbackBlockedRepairCandidate(
+            CreateSourceBackedFallbackWallResult(
+                wallLength: 85,
+                evidence:
+                [
+                    "parallel wall-face pair",
+                    "wall evidence: strong double-edge wall body",
+                    "pair score 0.84",
+                    "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+                ]));
+        var wall = result.Walls.Single(item => item.Id == "source-backed-fallback-wall");
+        var opening = AnchoredOpening(
+            "source-backed-fallback-door",
+            wall,
+            OpeningType.Door,
+            OpeningOperation.DoubleSwing,
+            0,
+            0.81);
+        result = result with
+        {
+            Openings = [opening]
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var exportedWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(exportedWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, exportedWall.GetProperty("placementOmission").ValueKind);
+        Assert.True(exportedWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(topologySpan.GetProperty("drawingLength").GetDouble() > 6);
+        Assert.True(topologySpan.GetProperty("drawingLength").GetDouble() < 20);
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("source-backed-fallback-door", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversSourceBackedSpanWhenRecoveredInteriorWallBodyHasNoGraphSpan()
     {
         var result = CreateSourceBackedFallbackWallResult(
@@ -8596,9 +8684,46 @@ public sealed class ExportTests
         };
     }
 
-      private static LinePrimitive WallLine(string sourceId, PlanPoint start, PlanPoint end) =>
-          new(new PlanLineSegment(start, end))
-          {
+    private static PlanScanResult WithSourceBackedFallbackBlockedRepairCandidate(PlanScanResult result)
+    {
+        var candidate = new WallGraphRepairCandidate(
+            "repair-source-backed-fallback-gap",
+            1,
+            WallGraphRepairCandidateKind.EndpointToWall,
+            WallGraphRepairAction.SnapEndpointToWall,
+            WallGraphRepairSeverity.High,
+            WallGraphRepairImportImpact.TopologyImportBlocked,
+            WallGraphRepairApplicability.ManualCorrectionRecommended,
+            "source-backed-fallback-end-node",
+            new PlanPoint(180, 120),
+            new PlanPoint(180, 138),
+            null,
+            "source-backed-fallback-host-wall",
+            GapDistance: 18,
+            SafeSnapDistance: 9,
+            ReviewDistanceLimit: 18,
+            ExcessDistanceBeyondSafeSnap: 9,
+            new PlanLineSegment(new PlanPoint(180, 120), new PlanPoint(180, 138)),
+            new PlanRect(178, 118, 4, 22),
+            ["source-backed-fallback-wall", "source-backed-fallback-host-wall"],
+            ["source-backed-fallback-wall"],
+            Confidence.High,
+            RequiresReview: true,
+            ["synthetic high-severity wall graph repair candidate near source-backed fallback wall"]);
+
+        return result with
+        {
+            WallGraph = new WallGraph(
+                result.WallGraph.Nodes,
+                result.WallGraph.Edges,
+                result.WallGraph.Components,
+                result.WallGraph.RepairCandidates.Append(candidate).ToArray())
+        };
+    }
+
+    private static LinePrimitive WallLine(string sourceId, PlanPoint start, PlanPoint end) =>
+        new(new PlanLineSegment(start, end))
+        {
             SourceId = sourceId,
             Layer = "Wall",
             Source = new PrimitiveSourceMetadata

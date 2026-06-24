@@ -32,6 +32,9 @@ internal static class WallTopologySpanVisibility
     private const int MaxSourceBackedFallbackFaceFragmentCount = 48;
     private const int MaxLongSourceBackedFallbackFaceFragmentCount = 72;
     private const int MaxTopologySupportedSourceBackedFallbackFaceFragmentCount = 96;
+    private const double MinTopologyBlockedFallbackPairScore = 0.80;
+    private const double MinTopologyBlockedFallbackOverlapRatio = 0.95;
+    private const int MaxTopologyBlockedFallbackFaceFragmentCount = 48;
 
     public static IReadOnlyList<WallGraphTopologySpan> BuildVisibleTopologySpans(
         PlanScanResult result,
@@ -102,6 +105,9 @@ internal static class WallTopologySpanVisibility
 
         return BuildCleanPlacementTopologySpans(spans, result.Openings, context, result.Walls, pageNumber: null);
     }
+
+    internal static bool IsSourceBackedFallbackTopologySpan(WallGraphTopologySpan span) =>
+        span.Id.Contains(":source-backed-fallback:", StringComparison.Ordinal);
 
     public static IReadOnlyList<WallGraphTopologySpan> BuildRegularizedPlacementTopologySpans(
         PlanScanResult result)
@@ -385,6 +391,22 @@ internal static class WallTopologySpanVisibility
     private static bool ContainsEvidence(IEnumerable<string> evidence, string value) =>
         evidence.Any(item => item.Contains(value, StringComparison.OrdinalIgnoreCase));
 
+    private static bool ContainsAnyEvidence(IEnumerable<string> evidence, params string[] values)
+    {
+        var evidenceItems = evidence.ToArray();
+        return values.Any(value => ContainsEvidence(evidenceItems, value));
+    }
+
+    private static IReadOnlyList<string> FilterTopologyImportBlockedReviewReasons(
+        IReadOnlyList<string> reviewReasons) =>
+        reviewReasons
+            .Where(reason => !IsTopologyImportBlockedWallGraphRepairReason(reason))
+            .ToArray();
+
+    private static bool IsTopologyImportBlockedWallGraphRepairReason(string reason) =>
+        reason.Contains("wall graph repair candidate", StringComparison.OrdinalIgnoreCase)
+        && reason.Contains(nameof(WallGraphRepairImportImpact.TopologyImportBlocked), StringComparison.OrdinalIgnoreCase);
+
     private static IReadOnlyList<WallGraphTopologySpan> BuildSourceBackedFallbackSpans(
         IReadOnlyList<WallSegment> walls,
         IReadOnlyList<WallGraphTopologySpan> cleanSpans,
@@ -430,17 +452,21 @@ internal static class WallTopologySpanVisibility
         WallSegment wall,
         WallTopologySpanVisibilityContext context)
     {
+        context.ComponentByWallId.TryGetValue(wall.Id, out var component);
+        context.WallEvidenceAssessments.TryGetValue(wall.Id, out var assessment);
+        var topologyImportBlocked = context.TopologyImportBlockedWallIds.Contains(wall.Id);
+        var trustedTopologyImportBlockedFallback = topologyImportBlocked
+            && IsTrustedSourceBackedFallbackDespiteTopologyImportBlock(wall, component, assessment);
+
         if (wall.CenterLine.Length < MinSourceBackedFallbackWallLengthDrawingUnits
             || wall.WallType == WallType.Unknown
             || wall.FragmentEvidence?.RequiresGeometryReview == true
             || ResolveDominantOrthogonalOrientation(wall.CenterLine) == PlacementRunOrientation.Unknown
-            || context.TopologyImportBlockedWallIds.Contains(wall.Id))
+            || (topologyImportBlocked && !trustedTopologyImportBlockedFallback))
         {
             return false;
         }
 
-        context.ComponentByWallId.TryGetValue(wall.Id, out var component);
-        context.WallEvidenceAssessments.TryGetValue(wall.Id, out var assessment);
         var reviewReasons = context.ReviewReasonsByWallId.TryGetValue(wall.Id, out var foundReviewReasons)
             ? foundReviewReasons
             : Array.Empty<string>();
@@ -486,12 +512,15 @@ internal static class WallTopologySpanVisibility
             return false;
         }
 
+        var placementReviewReasons = trustedTopologyImportBlockedFallback
+            ? FilterTopologyImportBlockedReviewReasons(reviewReasons)
+            : reviewReasons;
         if (!WallPlacementReadinessEvaluator.Evaluate(
             wall,
             context.Calibration,
             component,
             assessment,
-            reviewReasons).ReadyForCoordinatePlacement)
+            placementReviewReasons).ReadyForCoordinatePlacement)
         {
             return false;
         }
@@ -679,6 +708,11 @@ internal static class WallTopologySpanVisibility
         else
         {
             evidence.Add("source-backed fallback accepted only because paired wall-face evidence is placement-ready");
+        }
+
+        if (context.TopologyImportBlockedWallIds.Contains(wall.Id))
+        {
+            evidence.Add("source-backed fallback accepted despite blocked graph repair because source wall-body geometry is independently coordinate-safe");
         }
 
         if (placementAxis.UsesPairedFaceEvidence)
@@ -1366,6 +1400,10 @@ internal static class WallTopologySpanVisibility
     private static bool IsSourceBackedFallbackSpan(WallGraphTopologySpan span) =>
         span.Id.Contains(":source-backed-fallback:", StringComparison.Ordinal);
 
+    private static bool IsTopologyBlockedSourceBackedFallbackSpan(WallGraphTopologySpan span) =>
+        IsSourceBackedFallbackSpan(span)
+        && ContainsEvidence(span.Evidence, "despite blocked graph repair");
+
     private static double ContainedDuplicateAxisDistance(WallGraphTopologySpan candidate, WallGraphTopologySpan kept) =>
         candidate.SourceWall?.WallType == WallType.Exterior && kept.SourceWall?.WallType == WallType.Exterior
             ? MaxExteriorFacePairAxisDistanceDrawingUnits
@@ -1510,7 +1548,9 @@ internal static class WallTopologySpanVisibility
 
         if (HasDoorLikeAdjacentCutout(previousCutout) || HasDoorLikeAdjacentCutout(nextCutout))
         {
-            return MinOpeningAdjacentCleanRunLengthDrawingUnits;
+            return IsTopologyBlockedSourceBackedFallbackSpan(span) && IsTrustedOpeningAdjacentShortRun(span, sourceWall)
+                ? MinTrustedOpeningAdjacentCleanRunLengthDrawingUnits
+                : MinOpeningAdjacentCleanRunLengthDrawingUnits;
         }
 
         return IsTrustedOpeningAdjacentShortRun(span, sourceWall)
@@ -1619,6 +1659,59 @@ internal static class WallTopologySpanVisibility
                 .Distinct(StringComparer.Ordinal)
                 .ToArray()
         };
+    }
+
+    private static bool IsTrustedSourceBackedFallbackDespiteTopologyImportBlock(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment)
+    {
+        if (component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment
+            || assessment is null
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category is not (WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.RecoveredWallBody)
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is not { } pair
+            || pair.Score < MinTopologyBlockedFallbackPairScore
+            || pair.OverlapRatio < MinTopologyBlockedFallbackOverlapRatio
+            || pair.FaceSeparation < MinSourceBackedFallbackFaceSeparationDrawingUnits
+            || pair.FaceSeparation > MaxSourceBackedFallbackFaceSeparationDrawingUnits
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > MaxTopologyBlockedFallbackFaceFragmentCount)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(component.Evidence)
+            .ToArray();
+        if (ContainsAnyEvidence(
+                evidence,
+                "outdoor covered-area boundary",
+                "unpaired outdoor covered-area boundary",
+                "covered-entry",
+                "covered entry",
+                "overbygd",
+                "surface pattern",
+                "object/fixture",
+                "fixture detail",
+                "repeated short detail",
+                "door/opening"))
+        {
+            return false;
+        }
+
+        return ContainsEvidence(evidence, "geometric room boundary support")
+            || ContainsEvidence(evidence, "explicit room boundary support")
+            || ContainsEvidence(evidence, "detected room evidence on both sides")
+            || component.Kind == WallGraphComponentKind.MainStructural;
     }
 
     private static IReadOnlyList<PlacementWallOpeningCutoutExport> BuildTopologyOpeningCutouts(

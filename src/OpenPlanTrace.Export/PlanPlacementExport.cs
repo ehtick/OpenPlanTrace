@@ -102,19 +102,32 @@ public sealed record PlanPlacementExport(
             .Select(pattern => PlacementSurfacePatternExport.From(pattern, result.Calibration, sourceLookup))
             .ToArray();
         var walls = result.Walls
-            .Select(wall => PlacementWallExport.From(
-                wall,
-                result.Calibration,
-                sourceLookup,
-                wallComponentLookup,
-                wallEvidenceAssessments.TryGetValue(wall.Id, out var assessment) ? assessment : null,
-                wallTopologySpansByWallId.TryGetValue(wall.Id, out var spans) ? spans : Array.Empty<WallGraphTopologySpan>(),
-                wallTopologySpans,
-                openingsByWallId.TryGetValue(wall.Id, out var wallOpenings) ? wallOpenings : Array.Empty<OpeningCandidate>(),
-                wallReviewReasons.TryGetValue(wall.Id, out var reasons) ? reasons : Array.Empty<string>(),
-                wallGraphRepairCandidatesByWallId.TryGetValue(wall.Id, out var repairCandidates)
-                    ? repairCandidates
-                    : Array.Empty<WallGraphRepairCandidate>()))
+            .Select(wall =>
+            {
+                var spans = wallTopologySpansByWallId.TryGetValue(wall.Id, out var foundSpans)
+                    ? foundSpans
+                    : Array.Empty<WallGraphTopologySpan>();
+                var repairCandidates = wallGraphRepairCandidatesByWallId.TryGetValue(wall.Id, out var foundRepairCandidates)
+                    ? foundRepairCandidates
+                    : Array.Empty<WallGraphRepairCandidate>();
+                var effectiveRepairCandidates = FilterWallRepairCandidatesForSourceBackedFallback(spans, repairCandidates);
+                var reviewReasons = wallReviewReasons.TryGetValue(wall.Id, out var foundReviewReasons)
+                    ? foundReviewReasons
+                    : Array.Empty<string>();
+                var effectiveReviewReasons = FilterWallReviewReasonsForSourceBackedFallback(spans, reviewReasons);
+
+                return PlacementWallExport.From(
+                    wall,
+                    result.Calibration,
+                    sourceLookup,
+                    wallComponentLookup,
+                    wallEvidenceAssessments.TryGetValue(wall.Id, out var assessment) ? assessment : null,
+                    spans,
+                    wallTopologySpans,
+                    openingsByWallId.TryGetValue(wall.Id, out var wallOpenings) ? wallOpenings : Array.Empty<OpeningCandidate>(),
+                    effectiveReviewReasons,
+                    effectiveRepairCandidates);
+            })
             .ToArray();
         var placementWallsById = walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
         var roomBoundaryWallUseCounts = BuildRoomBoundaryWallUseCounts(result.Rooms);
@@ -244,6 +257,40 @@ public sealed record PlanPlacementExport(
                 .ToArray(),
             StringComparer.Ordinal);
     }
+
+    private static IReadOnlyList<WallGraphRepairCandidate> FilterWallRepairCandidatesForSourceBackedFallback(
+        IReadOnlyList<WallGraphTopologySpan> topologySpans,
+        IReadOnlyList<WallGraphRepairCandidate> repairCandidates)
+    {
+        if (repairCandidates.Count == 0
+            || !topologySpans.Any(WallTopologySpanVisibility.IsSourceBackedFallbackTopologySpan))
+        {
+            return repairCandidates;
+        }
+
+        return repairCandidates
+            .Where(candidate => candidate.ImportImpact != WallGraphRepairImportImpact.TopologyImportBlocked)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> FilterWallReviewReasonsForSourceBackedFallback(
+        IReadOnlyList<WallGraphTopologySpan> topologySpans,
+        IReadOnlyList<string> reviewReasons)
+    {
+        if (reviewReasons.Count == 0
+            || !topologySpans.Any(WallTopologySpanVisibility.IsSourceBackedFallbackTopologySpan))
+        {
+            return reviewReasons;
+        }
+
+        return reviewReasons
+            .Where(reason => !IsTopologyImportBlockedWallGraphRepairReason(reason))
+            .ToArray();
+    }
+
+    private static bool IsTopologyImportBlockedWallGraphRepairReason(string reason) =>
+        reason.Contains("wall graph repair candidate", StringComparison.OrdinalIgnoreCase)
+        && reason.Contains(nameof(WallGraphRepairImportImpact.TopologyImportBlocked), StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyDictionary<string, IReadOnlyList<OpeningCandidate>> BuildWallOpeningLookup(
         IReadOnlyList<OpeningCandidate> openings)
