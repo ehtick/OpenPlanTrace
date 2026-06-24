@@ -3829,6 +3829,52 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversNoisyOneEndpointMainStructuralPairWhenGeometryIsStrong()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.792,
+            pairOverlapRatio: 1,
+            faceSeparation: 14.771,
+            firstFaceFragmentCount: 1,
+            secondFaceFragmentCount: 336,
+            wallLength: 116.5,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "wall evidence: strong double-edge wall body",
+                "pair score 0.792",
+                "overlap ratio 1",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "one endpoint supported by structural context"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("noisy one-end main structural wall body", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("face fragments 1 and 336", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversSourceBackedSpanWhenStrongWallHasBlockedGraphRepair()
     {
         var result = WithSourceBackedFallbackBlockedRepairCandidate(
@@ -4350,7 +4396,7 @@ public sealed class ExportTests
         Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
         Assert.Contains(
             topologySpan.GetProperty("evidence").EnumerateArray(),
-            evidence => evidence.GetString()?.Contains("clean promoted fragment wall-body", StringComparison.OrdinalIgnoreCase) == true);
+            evidence => evidence.GetString()?.Contains("fragment-merged interior wall body", StringComparison.OrdinalIgnoreCase) == true);
         Assert.Contains(
             topologySpan.GetProperty("evidence").EnumerateArray(),
             evidence => evidence.GetString()?.Contains("fragment wall body 4 fragment", StringComparison.OrdinalIgnoreCase) == true);

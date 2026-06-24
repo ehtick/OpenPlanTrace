@@ -81,6 +81,11 @@ public static class WallPlacementReadinessEvaluator
             wall,
             component,
             evidenceAssessment);
+        var trustedLongOneEndpointFragmentMergedInterior =
+            WallPlacementContextGuards.IsTrustedLongOneEndpointFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                evidenceAssessment);
 
         if (component is not null)
         {
@@ -98,7 +103,11 @@ public static class WallPlacementReadinessEvaluator
 
         if (evidenceAssessment is not null)
         {
-            AddEvidenceReasons(evidenceAssessment, reasons, trustedTwoSidedFragmentMergedRoomBoundary);
+            AddEvidenceReasons(
+                evidenceAssessment,
+                reasons,
+                trustedTwoSidedFragmentMergedRoomBoundary,
+                trustedLongOneEndpointFragmentMergedInterior);
         }
 
         var reviewReasonList = reviewReasons?
@@ -170,7 +179,8 @@ public static class WallPlacementReadinessEvaluator
             && wall.FragmentEvidence?.RequiresGeometryReview != true
             && (evidenceAssessment is null
                 || evidenceAssessment.PlacementReady
-                || trustedTwoSidedFragmentMergedRoomBoundary);
+                || trustedTwoSidedFragmentMergedRoomBoundary
+                || trustedLongOneEndpointFragmentMergedInterior);
         var readyForMetricPlacement =
             readyForCoordinatePlacement
             && calibration.HasReliableMeasurementScale;
@@ -186,9 +196,13 @@ public static class WallPlacementReadinessEvaluator
             || coordinatePlacementBlockedByWeakPromotedFragmentRoomBoundary
             || coordinatePlacementBlockedByNoisyTopologySupportedFragmentedPair
             || coordinatePlacementBlockedByThinExteriorFacePair
-            || (!trustedTwoSidedFragmentMergedRoomBoundary && evidenceAssessment?.RequiresReview == true)
+            || (!trustedTwoSidedFragmentMergedRoomBoundary
+                && !trustedLongOneEndpointFragmentMergedInterior
+                && evidenceAssessment?.RequiresReview == true)
             || evidenceAssessment?.RejectedAsNoise == true
-            || (!trustedTwoSidedFragmentMergedRoomBoundary && evidenceAssessment?.PlacementReady == false),
+            || (!trustedTwoSidedFragmentMergedRoomBoundary
+                && !trustedLongOneEndpointFragmentMergedInterior
+                && evidenceAssessment?.PlacementReady == false),
             wall.Confidence,
             coordinatePlacementBlocked
             || coordinatePlacementBlockedByReviewReason
@@ -227,16 +241,19 @@ public static class WallPlacementReadinessEvaluator
     private static void AddEvidenceReasons(
         WallEvidenceWallAssessment evidenceAssessment,
         List<string> reasons,
-        bool trustedTwoSidedFragmentMergedRoomBoundary)
+        bool trustedTwoSidedFragmentMergedRoomBoundary,
+        bool trustedLongOneEndpointFragmentMergedInterior)
     {
         if (!evidenceAssessment.PlacementReady
-            && !trustedTwoSidedFragmentMergedRoomBoundary)
+            && !trustedTwoSidedFragmentMergedRoomBoundary
+            && !trustedLongOneEndpointFragmentMergedInterior)
         {
             reasons.Add($"wall evidence not placement-ready ({evidenceAssessment.Category})");
         }
 
         if (evidenceAssessment.RequiresReview
-            && !trustedTwoSidedFragmentMergedRoomBoundary)
+            && !trustedTwoSidedFragmentMergedRoomBoundary
+            && !trustedLongOneEndpointFragmentMergedInterior)
         {
             reasons.Add($"wall evidence requires review ({evidenceAssessment.Category})");
         }

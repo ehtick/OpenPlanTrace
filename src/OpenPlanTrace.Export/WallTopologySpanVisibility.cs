@@ -34,6 +34,7 @@ internal static class WallTopologySpanVisibility
     private const int MaxSourceBackedFallbackFaceFragmentCount = 48;
     private const int MaxLongSourceBackedFallbackFaceFragmentCount = 72;
     private const int MaxTopologySupportedSourceBackedFallbackFaceFragmentCount = 96;
+    private const int MaxTrustedNoisySourceBackedFallbackFaceFragmentCount = 360;
     private const double MinRoomSupportedShortPairFallbackWallLengthDrawingUnits = 24.0;
     private const double MaxRoomSupportedShortPairFallbackWallLengthDrawingUnits = 64.0;
     private const double MinRoomSupportedShortPairFallbackPairScore = 0.88;
@@ -505,13 +506,29 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedOneEndpointNoisyMainStructuralInterior =
+            WallPlacementContextGuards.IsTrustedOneEndpointNoisyMainStructuralInteriorWallBody(
+                wall,
+                component,
+                assessment);
+        var hasTrustedLongOneEndpointFragmentMergedInterior =
+            WallPlacementContextGuards.IsTrustedLongOneEndpointFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                assessment);
         if ((!IsPlacementReadyStructuralSpan(component, assessment)
                 && !hasTrustedExteriorShellContinuityFragment
                 && !hasTrustedRoomBoundaryIsolatedFragment
-                && !hasTrustedTwoSidedFragmentMergedRoomBoundary)
+                && !hasTrustedTwoSidedFragmentMergedRoomBoundary
+                && !hasTrustedOneEndpointNoisyMainStructuralInterior
+                && !hasTrustedLongOneEndpointFragmentMergedInterior)
             || assessment is null
-            || (!hasTrustedTwoSidedFragmentMergedRoomBoundary && !assessment.PlacementReady)
-            || (!hasTrustedTwoSidedFragmentMergedRoomBoundary && assessment.RequiresReview)
+            || (!hasTrustedTwoSidedFragmentMergedRoomBoundary
+                && !hasTrustedLongOneEndpointFragmentMergedInterior
+                && !assessment.PlacementReady)
+            || (!hasTrustedTwoSidedFragmentMergedRoomBoundary
+                && !hasTrustedLongOneEndpointFragmentMergedInterior
+                && assessment.RequiresReview)
             || assessment.RejectedAsNoise
             || assessment.Decision == WallEvidenceDecision.Reject
             || (assessment.Category is not (WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.RecoveredWallBody)
@@ -520,7 +537,8 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedRoomSupportedShortPairPromotion
                 && !hasTrustedExteriorShellContinuityFragment
                 && !hasTrustedRoomBoundaryIsolatedFragment
-                && !hasTrustedTwoSidedFragmentMergedRoomBoundary))
+                && !hasTrustedTwoSidedFragmentMergedRoomBoundary
+                && !hasTrustedLongOneEndpointFragmentMergedInterior))
         {
             return false;
         }
@@ -543,7 +561,9 @@ internal static class WallTopologySpanVisibility
             || hasTrustedRoomSupportedShortPairPromotion
             || hasTrustedExteriorShellContinuityFragment
             || hasTrustedRoomBoundaryIsolatedFragment
-            || hasTrustedTwoSidedFragmentMergedRoomBoundary;
+            || hasTrustedTwoSidedFragmentMergedRoomBoundary
+            || hasTrustedOneEndpointNoisyMainStructuralInterior
+            || hasTrustedLongOneEndpointFragmentMergedInterior;
     }
 
     private static bool IsTrustedRoomSupportedShortParallelPairPromotion(
@@ -680,6 +700,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedNoisyOneEndpointMainStructuralInterior =
+            WallPlacementContextGuards.IsTrustedOneEndpointNoisyMainStructuralInteriorWallBody(
+                wall,
+                component,
+                assessment);
         if (!hasTrustedExteriorShellContinuityFragment
             && pair.Score < MinSourceBackedFallbackPairScore)
         {
@@ -697,6 +722,8 @@ internal static class WallTopologySpanVisibility
         var maxFaceFragmentCount = Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount);
         var fragmentLimit = hasTopologySupportedFragmentedPairPromotion
             ? MaxTopologySupportedSourceBackedFallbackFaceFragmentCount
+            : hasTrustedNoisyOneEndpointMainStructuralInterior
+                ? MaxTrustedNoisySourceBackedFallbackFaceFragmentCount
             : hasTrustedExteriorShellContinuityFragment
                 ? int.MaxValue
             : wall.DrawingLength >= MinLongSourceBackedFallbackWallLengthDrawingUnits
@@ -753,6 +780,16 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var trustedOneEndpointNoisyMainStructuralInterior =
+            WallPlacementContextGuards.IsTrustedOneEndpointNoisyMainStructuralInteriorWallBody(
+                wall,
+                component,
+                assessment);
+        var trustedLongOneEndpointFragmentMergedInterior =
+            WallPlacementContextGuards.IsTrustedLongOneEndpointFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                assessment);
         var trustedRoomSupportedShortParallelPairPromotion = IsTrustedRoomSupportedShortParallelPairPromotion(
             wall,
             component,
@@ -778,13 +815,17 @@ internal static class WallTopologySpanVisibility
         {
             evidence.Add(trustedTwoSidedFragmentMergedRoomBoundary
                 ? "source-backed fallback accepted because trusted two-sided fragment-merged room boundary evidence is importable"
-                : "source-backed fallback accepted because clean promoted fragment wall-body evidence is placement-ready");
+                : trustedLongOneEndpointFragmentMergedInterior
+                    ? "source-backed fallback accepted because long one-end fragment-merged interior wall body is clean, structural, and coordinate-safe"
+                    : "source-backed fallback accepted because clean promoted fragment wall-body evidence is placement-ready");
         }
         else
         {
             evidence.Add(trustedRoomSupportedShortParallelPairPromotion
                 ? "source-backed fallback accepted because high-score short paired wall body has explicit room-boundary support"
-                : "source-backed fallback accepted only because paired wall-face evidence is placement-ready");
+                : trustedOneEndpointNoisyMainStructuralInterior
+                    ? "source-backed fallback accepted because noisy one-end main structural wall body has strong paired-face geometry"
+                    : "source-backed fallback accepted only because paired wall-face evidence is placement-ready");
         }
 
         if (context.TopologyImportBlockedWallIds.Contains(wall.Id))

@@ -23,6 +23,17 @@ public static class WallPlacementContextGuards
     private const double MinTrustedNoisyMainStructuralInteriorPairScore = 0.76;
     private const double MinTrustedNoisyMainStructuralInteriorOverlapRatio = 0.85;
     private const int MaxTrustedNoisyMainStructuralInteriorFaceFragments = 360;
+    private const double MinTrustedOneEndpointNoisyMainStructuralInteriorLengthDrawingUnits = 108.0;
+    private const double MinTrustedOneEndpointNoisyMainStructuralInteriorPairScore = 0.78;
+    private const double MinTrustedOneEndpointNoisyMainStructuralInteriorOverlapRatio = 0.97;
+    private const double MinTrustedOneEndpointNoisyMainStructuralInteriorFaceSeparationDrawingUnits = 2.0;
+    private const double MaxTrustedOneEndpointNoisyMainStructuralInteriorFaceSeparationDrawingUnits = 18.0;
+    private const int MaxTrustedOneEndpointNoisyMainStructuralInteriorFaceFragments = 360;
+    private const double MinTrustedLongOneEndpointFragmentMergedInteriorLengthDrawingUnits = 90.0;
+    private const double MinTrustedLongOneEndpointFragmentMergedInteriorConfidence = 0.84;
+    private const double MinTrustedLongOneEndpointFragmentMergedInteriorAssessmentConfidence = 0.82;
+    private const int MaxTrustedLongOneEndpointFragmentMergedInteriorFragments = 12;
+    private const int MaxTrustedLongOneEndpointFragmentMergedInteriorDuplicatePrimitives = 8;
     private const double MinTrustedRecoveredMainStructuralInteriorLengthDrawingUnits = 100.0;
     private const double MinTrustedRecoveredMainStructuralInteriorPairScore = 0.80;
     private const double MinTrustedRecoveredMainStructuralInteriorOverlapRatio = 0.95;
@@ -47,6 +58,12 @@ public static class WallPlacementContextGuards
 
     public const string TrustedRecoveredMainStructuralInteriorEvidence =
         "trusted recovered main structural interior wall body";
+
+    public const string TrustedOneEndpointNoisyMainStructuralInteriorEvidence =
+        "trusted one-end noisy main structural interior wall body";
+
+    public const string TrustedLongOneEndpointFragmentMergedInteriorEvidence =
+        "trusted long one-end fragment-merged interior wall body";
 
     public static bool IsTrustedRecoveredMainStructuralInteriorWallBody(
         WallSegment wall,
@@ -128,6 +145,156 @@ public static class WallPlacementContextGuards
             "door leaf",
             "door arc",
             "tiny door-adjacent placement topology piece suppressed",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
+    public static bool IsTrustedOneEndpointNoisyMainStructuralInteriorWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component?.Kind != WallGraphComponentKind.MainStructural
+            || component.ExcludedFromStructuralTopology
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedOneEndpointNoisyMainStructuralInteriorLengthDrawingUnits
+            || wall.Confidence.Value < 0.86
+            || assessment is null
+            || assessment.Confidence.Value < 0.86
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category != WallEvidenceCategory.StrongWallBody
+            || wall.PairEvidence is not { } pair
+            || !HasStrongPairedWallBodyEvidence(wall, assessment))
+        {
+            return false;
+        }
+
+        if (pair.Score < MinTrustedOneEndpointNoisyMainStructuralInteriorPairScore
+            || pair.OverlapRatio < MinTrustedOneEndpointNoisyMainStructuralInteriorOverlapRatio
+            || pair.FaceSeparation < MinTrustedOneEndpointNoisyMainStructuralInteriorFaceSeparationDrawingUnits
+            || pair.FaceSeparation > MaxTrustedOneEndpointNoisyMainStructuralInteriorFaceSeparationDrawingUnits
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount)
+                > MaxTrustedOneEndpointNoisyMainStructuralInteriorFaceFragments)
+        {
+            return false;
+        }
+
+        var evidence = extraEvidence is null
+            ? WallEvidenceFor(wall, assessment)
+            : WallEvidenceFor(wall, assessment).Concat(extraEvidence).ToArray();
+        if (!EvidenceContains(evidence, "supported wall evidence inside exterior envelope")
+            || !EvidenceContains(evidence, "one endpoint supported by structural context"))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "object/fixture",
+            "fixture detail",
+            "stair",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
+    public static bool IsTrustedLongOneEndpointFragmentMergedInteriorWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.PairEvidence is not null
+            || wall.DrawingLength < MinTrustedLongOneEndpointFragmentMergedInteriorLengthDrawingUnits
+            || wall.Confidence.Value < MinTrustedLongOneEndpointFragmentMergedInteriorConfidence
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence
+            || assessment is null
+            || assessment.Confidence.Value < MinTrustedLongOneEndpointFragmentMergedInteriorAssessmentConfidence
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category != WallEvidenceCategory.MediumWallBody)
+        {
+            return false;
+        }
+
+        var uniqueSourcePrimitiveCount = Math.Max(0, wall.SourcePrimitiveIds.Count - fragmentEvidence.DuplicatePrimitiveCount);
+        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, uniqueSourcePrimitiveCount);
+        if (fragmentCount is < 2 or > MaxTrustedLongOneEndpointFragmentMergedInteriorFragments
+            || fragmentEvidence.DuplicatePrimitiveCount > MaxTrustedLongOneEndpointFragmentMergedInteriorDuplicatePrimitives
+            || fragmentEvidence.GapRatio > 0.001
+            || fragmentEvidence.TotalHealedGap > 0.001)
+        {
+            return false;
+        }
+
+        var evidence = extraEvidence is null
+            ? WallEvidenceFor(wall, assessment).Concat(component.Evidence).ToArray()
+            : WallEvidenceFor(wall, assessment).Concat(component.Evidence).Concat(extraEvidence).ToArray();
+        if (!EvidenceContains(evidence, "supported wall evidence inside exterior envelope")
+            || (!EvidenceContains(evidence, "one endpoint supported by structural context")
+                && !EvidenceContains(evidence, "both endpoints supported by structural context"))
+            || !EvidenceContains(evidence, "merged collinear wall fragments"))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "object/fixture",
+            "fixture detail",
+            "stair",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening-linked wall fragment",
             "not trusted",
             "without shell support",
             "alone is not trusted");
@@ -317,6 +484,12 @@ public static class WallPlacementContextGuards
             || wall.DrawingLength < 48
             || (!wall.CenterLine.IsHorizontal() && !wall.CenterLine.IsVertical())
             || HasTrustedTwoSidedRoomBoundarySupport(wall, wallEvidenceByWallId)
+            || (component.WallIds.Count > 1
+                && SecondaryStructuralComponentHasTrustedPairedWallBodySupport(
+                    wall,
+                    component,
+                    wallById,
+                    wallEvidenceByWallId))
             || !LooksLikeOverSourcedCompactSecondaryComponent(component, wallById, wallEvidenceByWallId)
             || !detailLineworkCandidatesByPage.TryGetValue(wall.PageNumber, out var candidates))
         {
@@ -389,6 +562,11 @@ public static class WallPlacementContextGuards
         }
 
         if (HasTrustedNoisyMainStructuralInteriorWallBodySupport(wall, component, assessment, evidence))
+        {
+            return false;
+        }
+
+        if (IsTrustedOneEndpointNoisyMainStructuralInteriorWallBody(wall, component, assessment, evidence))
         {
             return false;
         }
