@@ -7,6 +7,12 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private const string StageName = "wall-type-refinement";
     private const double MinTrustedDimensionLikeDenseRoomBoundaryPairScore = 0.80;
     private const double MinSecondaryTrustedDimensionLikeDenseRoomBoundaryLength = 32.0;
+    private const double MinMainStructuralOneEndpointDenseRoomBoundaryLength = 42.0;
+    private const double MaxMainStructuralOneEndpointDenseRoomBoundaryLength = 96.0;
+    private const double MinMainStructuralOneEndpointDenseRoomBoundaryPairScore = 0.94;
+    private const int MinMainStructuralOneEndpointDenseRoomBoundarySideRoomHits = 6;
+    private const int MaxMainStructuralOneEndpointDenseRoomBoundaryFaceFragments = 12;
+    private const int MaxMainStructuralOneEndpointDenseRoomBoundaryTotalFaceFragments = 20;
     private const int MaxTrustedDimensionLikeDenseRoomBoundaryFaceFragments = 32;
     private const int MaxTrustedDimensionLikeDenseRoomBoundaryTotalFaceFragments = 48;
 
@@ -2106,7 +2112,19 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && wall.DrawingLength <= 72.0
             && (component.Kind == WallGraphComponentKind.MainStructural
                 || component.Kind == WallGraphComponentKind.SecondaryStructural);
-        if (!hasGeometricRoomBoundaryProof && !hasStrongSideEndpointProof)
+        var hasMainStructuralOneEndpointSideProof =
+            component.Kind == WallGraphComponentKind.MainStructural
+            && sideRoomHitCount >= MinMainStructuralOneEndpointDenseRoomBoundarySideRoomHits
+            && supportedTopologyEndpointCount >= 1
+            && pairScore >= MinMainStructuralOneEndpointDenseRoomBoundaryPairScore
+            && pairOverlap >= 0.98
+            && wall.DrawingLength >= MinMainStructuralOneEndpointDenseRoomBoundaryLength
+            && wall.DrawingLength <= MaxMainStructuralOneEndpointDenseRoomBoundaryLength
+            && faceFragments.MaxFaceFragmentCount <= MaxMainStructuralOneEndpointDenseRoomBoundaryFaceFragments
+            && faceFragments.TotalFaceFragmentCount <= MaxMainStructuralOneEndpointDenseRoomBoundaryTotalFaceFragments;
+        if (!hasGeometricRoomBoundaryProof
+            && !hasStrongSideEndpointProof
+            && !hasMainStructuralOneEndpointSideProof)
         {
             return false;
         }

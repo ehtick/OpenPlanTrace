@@ -44,6 +44,7 @@ internal static class WallTopologySpanVisibility
     private const double MinTrustedShortExteriorSourceBackedFallbackWallLengthDrawingUnits = 36.0;
     private const double MinTrustedShortExteriorSourceBackedFallbackPairScore = 0.88;
     private const double MinTrustedShortExteriorSourceBackedFallbackOverlapRatio = 0.95;
+    private const double MinRoomSupportedShortExteriorFallbackFaceSeparationDrawingUnits = 1.2;
     private const double MinUnsafeCleanTopologyProjectionDriftDrawingUnits = 12.0;
     private const double MaxUnsafeCleanTopologyProjectionDriftThicknessRatio = 3.0;
     private const double MinUnsafeCleanTopologyLengthOverrunRatio = 0.10;
@@ -750,7 +751,6 @@ internal static class WallTopologySpanVisibility
             || wall.PairEvidence is not { } pair
             || pair.Score < MinTrustedShortExteriorSourceBackedFallbackPairScore
             || pair.OverlapRatio < MinTrustedShortExteriorSourceBackedFallbackOverlapRatio
-            || pair.FaceSeparation < MinSourceBackedFallbackFaceSeparationDrawingUnits
             || pair.FaceSeparation > MaxSourceBackedFallbackFaceSeparationDrawingUnits
             || !assessment.PlacementReady
             || assessment.RequiresReview
@@ -781,16 +781,28 @@ internal static class WallTopologySpanVisibility
             || ContainsEvidence(evidence, "near detected floorplan")
             || ContainsEvidence(evidence, "geometric room boundary support")
             || ContainsEvidence(evidence, "outdoor/terrace room evidence");
+        var hasRoomBoundarySupport =
+            ContainsEvidence(evidence, "geometric room boundary support")
+            || ContainsEvidence(evidence, "explicit room boundary support")
+            || ContainsEvidence(evidence, "detected room evidence on one side")
+            || ContainsEvidence(evidence, "detected room evidence on both sides")
+            || ContainsEvidence(evidence, "shared by room adjacency boundary");
         if (!hasSolidWallBodyEvidence || !hasExteriorSupport)
         {
             return false;
         }
 
-        return !ContainsAnyEvidence(
+        if (pair.FaceSeparation < MinSourceBackedFallbackFaceSeparationDrawingUnits)
+        {
+            if (!hasRoomBoundarySupport
+                || pair.FaceSeparation < MinRoomSupportedShortExteriorFallbackFaceSeparationDrawingUnits)
+            {
+                return false;
+            }
+        }
+
+        if (ContainsAnyEvidence(
             evidence,
-            "surface pattern",
-            "non-structural surface",
-            "surface/detail",
             "object/fixture",
             "fixture detail",
             "repeated short detail",
@@ -805,7 +817,22 @@ internal static class WallTopologySpanVisibility
             "railing",
             "stair-like linework",
             "door swing",
-            "door leaf");
+            "door leaf"))
+        {
+            return false;
+        }
+
+        if (ContainsAnyEvidence(
+                evidence,
+                "surface pattern",
+                "non-structural surface",
+                "surface/detail")
+            && !hasRoomBoundarySupport)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool IsTrustedSourceBackedExteriorShellClosureFallback(
@@ -3189,7 +3216,9 @@ internal static class WallTopologySpanVisibility
         var sequence = 1;
         foreach (var opening in openings)
         {
-            if (!ShouldSplitTopologyForOpening(opening))
+            if (!ShouldSplitTopologyForOpening(opening)
+                || !OpeningDirectlyReferencesWall(wall, opening)
+                    && OpeningUsesWeakRecoveredHostReference(opening))
             {
                 continue;
             }
@@ -3211,6 +3240,24 @@ internal static class WallTopologySpanVisibility
             or OpeningOperation.DoubleSwing
             or OpeningOperation.Sliding
             or OpeningOperation.PocketSliding;
+
+    private static bool OpeningDirectlyReferencesWall(WallSegment wall, OpeningCandidate opening) =>
+        string.Equals(opening.WallId, wall.Id, StringComparison.Ordinal)
+        || opening.HostWallIds.Contains(wall.Id, StringComparer.Ordinal)
+        || string.Equals(opening.Placement?.HostWallId, wall.Id, StringComparison.Ordinal)
+        || opening.Placement?.AnchorWallIds.Contains(wall.Id, StringComparer.Ordinal) == true;
+
+    private static bool OpeningUsesWeakRecoveredHostReference(OpeningCandidate opening)
+    {
+        var hostIds = opening.HostWallIds
+            .Append(opening.WallId ?? string.Empty)
+            .Append(opening.Placement?.HostWallId ?? string.Empty)
+            .Concat(opening.Placement?.AnchorWallIds ?? Array.Empty<string>());
+
+        return hostIds.Any(id =>
+            id.Contains("wall-evidence-recovered-short", StringComparison.OrdinalIgnoreCase)
+            || id.Contains("recovered-short", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static IReadOnlyList<PlacementWallOpeningCutoutExport> MergeTopologyOpeningCutouts(
         IReadOnlyList<PlacementWallOpeningCutoutExport> cutouts)

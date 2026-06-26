@@ -1471,6 +1471,39 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_DoesNotSplitCleanTopologyForNearbyOpeningHostedByWeakRecoveredWall()
+    {
+        var result = CreateOpeningCutoutPlacementReviewResult();
+        var opening = result.Openings.Single();
+        var placement = opening.Placement!;
+        const string weakHostWallId = "page:1:wall-evidence-recovered-short:nearby-host";
+        var nearbyOpening = opening with
+        {
+            WallId = weakHostWallId,
+            HostWallIds = [weakHostWallId],
+            Placement = placement with
+            {
+                HostWallId = weakHostWallId,
+                AnchorWallIds = [weakHostWallId]
+            }
+        };
+        result = result with { Openings = [nearbyOpening] };
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var wall = Assert.Single(document.RootElement.GetProperty("walls").EnumerateArray());
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Equal(80, topologySpan.GetProperty("centerLine").GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(280, topologySpan.GetProperty("centerLine").GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.DoesNotContain(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("split around anchored door/opening cutouts", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RejoinsOpeningSplitPlacementGraphSpine()
     {
         var result = CreateOpeningCutoutPlacementReviewResult(startParameter: 0.35, endParameter: 0.65);
@@ -4344,6 +4377,54 @@ public sealed class ExportTests
             "no_clean_topology_spans",
             wall.GetProperty("placementOmission").GetProperty("code").GetString());
         Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+    }
+
+    [Fact]
+    public void PlacementExporter_RecoversRoomSupportedShortExteriorWallSolidDespiteSurfaceDetailOverlap()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.94,
+            pairOverlapRatio: 1,
+            faceSeparation: 1.45,
+            wallLength: 44,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.SecondaryStructural,
+            evidence:
+            [
+                "filled wall-solid primitive",
+                "parallel wall-face pair",
+                "wall evidence: filled closed vector wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall type refined exterior: detected room evidence on one side only",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment",
+                "wall overlaps non-structural surface/detail pattern page:1:surface-pattern:001 at wall overlap ratio 1",
+                "pair score 0.94",
+                "overlap ratio 1"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("short exterior wall-solid body", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
     }
 
     [Fact]

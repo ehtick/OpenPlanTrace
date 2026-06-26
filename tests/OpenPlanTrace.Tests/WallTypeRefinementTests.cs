@@ -1937,6 +1937,77 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_KeepsMainStructuralDimensionLikeDenseLocalWallWithStrongSideRoomAndOneEndpointEvidence()
+    {
+        var wall = ShortUnlayeredInteriorWall("wall-main-dimension-like-side-room-one-endpoint", 100, 100, 156, 100) with
+        {
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "pair score 0,96",
+                "overlap ratio 1",
+                "first face merged 4 fragments",
+                "second face merged 5 fragments",
+                "first face collapsed 4 duplicate or near-duplicate wall line primitive(s)",
+                "second face collapsed 4 duplicate or near-duplicate wall line primitive(s)",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type refined interior: detected room evidence on both sides",
+                "wall evidence: strong double-edge wall body"
+            ]
+        };
+        var context = CreateContext("main-dimension-like-dense-local-side-room-one-endpoint-protection");
+        var neighbors = AxisDenseDetailNeighborWalls().ToArray();
+        context.Walls.Add(wall);
+        context.Walls.AddRange(neighbors);
+        context.Rooms.Add(Room(
+            "room-above-one-endpoint-supported",
+            RoomUseKind.Office,
+            new PlanRect(90, 70, 76, 25),
+            new[]
+            {
+                new PlanPoint(90, 70),
+                new PlanPoint(166, 70),
+                new PlanPoint(166, 95),
+                new PlanPoint(90, 95)
+            }));
+        context.Rooms.Add(Room(
+            "room-below-one-endpoint-supported",
+            RoomUseKind.Office,
+            new PlanRect(90, 105, 76, 25),
+            new[]
+            {
+                new PlanPoint(90, 105),
+                new PlanPoint(166, 105),
+                new PlanPoint(166, 130),
+                new PlanPoint(90, 130)
+            }));
+        context.WallGraph = OneSupportedEndpointGraphFor(wall, WallGraphComponentKind.MainStructural);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(retained.PlacementReady);
+        Assert.False(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("dense local detail/stair-like linework", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "0");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_KeepsDimensionLikeDenseLocalWallWithGeometricRoomBoundaryAndSupportedEndpoints()
     {
         var wall = ShortUnlayeredInteriorWall("wall-dimension-like-geometric-room-boundary", 100, 100, 154.8, 100) with
