@@ -1560,11 +1560,39 @@ internal static class WallEvidenceExportHelpers
         bool hasPlacementGeometry)
     {
         var reasons = new List<string>();
+        var trustedExteriorShellContinuityFragment =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
+                wall,
+                component,
+                evidenceAssessment);
+        var trustedExteriorShellRepairSupportedWall =
+            WallPlacementReadinessEvaluator.IsTrustedExteriorShellRepairSupportedWall(
+                wall,
+                component,
+                evidenceAssessment);
+        var trustedLongIsolatedExteriorShellWallBody =
+            WallPlacementReadinessEvaluator.IsTrustedLongIsolatedExteriorShellWallBody(
+                wall,
+                component,
+                evidenceAssessment);
+        var trustedRoomBoundaryIsolatedFragment =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedFragment(
+                wall,
+                component,
+                evidenceAssessment);
         var trustedRecoveredRoomBoundaryObjectLikeWall =
             WallPlacementReadinessEvaluator.IsTrustedRecoveredRoomBoundaryObjectLikeWall(
                 wall,
                 component,
                 evidenceAssessment);
+        var trustedIsolatedFragment =
+            trustedExteriorShellContinuityFragment
+            || trustedExteriorShellRepairSupportedWall
+            || trustedLongIsolatedExteriorShellWallBody
+            || trustedRoomBoundaryIsolatedFragment;
+        var trustedStructuralTopologyOverride =
+            trustedIsolatedFragment
+            || trustedRecoveredRoomBoundaryObjectLikeWall;
 
         if (component?.Kind == WallGraphComponentKind.ObjectLikeIsland
             && !trustedRecoveredRoomBoundaryObjectLikeWall)
@@ -1572,13 +1600,14 @@ internal static class WallEvidenceExportHelpers
             reasons.Add("wall graph component is object-like detail, not placement wall geometry");
         }
 
-        if (component?.Kind == WallGraphComponentKind.IsolatedFragment)
+        if (component?.Kind == WallGraphComponentKind.IsolatedFragment
+            && !trustedIsolatedFragment)
         {
             reasons.Add("wall graph component is an isolated fragment requiring review");
         }
 
         if (excludedFromStructuralTopology
-            && !trustedRecoveredRoomBoundaryObjectLikeWall)
+            && !trustedStructuralTopologyOverride)
         {
             reasons.Add("excluded from structural topology");
         }
@@ -1593,10 +1622,15 @@ internal static class WallEvidenceExportHelpers
                 || evidenceAssessment.RequiresReview
                 || evidenceAssessment.Decision == WallEvidenceDecision.Review))
         {
-            reasons.Add("wall evidence requires review before exact coordinate placement");
+            if (!trustedExteriorShellRepairSupportedWall
+                && !trustedLongIsolatedExteriorShellWallBody)
+            {
+                reasons.Add("wall evidence requires review before exact coordinate placement");
+            }
         }
 
-        if (wall?.FragmentEvidence?.RequiresGeometryReview == true)
+        if (wall?.FragmentEvidence?.RequiresGeometryReview == true
+            && !trustedExteriorShellRepairSupportedWall)
         {
             reasons.Add("fragmented or healed wall geometry requires coordinate review");
         }

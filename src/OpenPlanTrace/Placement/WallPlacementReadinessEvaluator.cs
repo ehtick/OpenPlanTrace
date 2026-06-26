@@ -165,6 +165,7 @@ public static class WallPlacementReadinessEvaluator
             .Where(reason => !IsTrustedContextReviewReasonOverride(
                 reason,
                 trustedExteriorShellRepairSupportedWall,
+                trustedLongIsolatedExteriorShellWallBody,
                 trustedTwoSidedFragmentMergedRoomBoundary,
                 trustedOneEndpointNoisyMainStructuralInterior,
                 trustedLongOneEndpointFragmentMergedInterior))
@@ -1115,7 +1116,10 @@ public static class WallPlacementReadinessEvaluator
             .Concat(evidenceAssessment.ScoreBreakdown.NegativeEvidence)
             .Concat(component.Evidence)
             .ToArray();
-        if (!EvidenceContains(evidence, "wall type exterior")
+        var hasExteriorTypeSupport =
+            wall.WallType == WallType.Exterior
+            || EvidenceContains(evidence, "wall type exterior");
+        if (!hasExteriorTypeSupport
             || !EvidenceContainsAny(
                 evidence,
                 "parallel wall-face pair",
@@ -1333,12 +1337,15 @@ public static class WallPlacementReadinessEvaluator
     private static bool IsTrustedContextReviewReasonOverride(
         string reason,
         bool trustedExteriorShellRepairSupportedWall,
+        bool trustedLongIsolatedExteriorShellWallBody,
         bool trustedTwoSidedFragmentMergedRoomBoundary,
         bool trustedOneEndpointNoisyMainStructuralInterior,
         bool trustedLongOneEndpointFragmentMergedInterior)
     {
-        if (trustedExteriorShellRepairSupportedWall
+        if ((trustedExteriorShellRepairSupportedWall || trustedLongIsolatedExteriorShellWallBody)
             && (reason.Contains("isolated wall graph fragment", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("isolated fragment", StringComparison.OrdinalIgnoreCase)
+                || reason.Contains("excluded from structural topology", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("wall fragment geometry requires review", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("wall evidence not placement-ready", StringComparison.OrdinalIgnoreCase)
                 || reason.Contains("wall evidence requires review", StringComparison.OrdinalIgnoreCase)))

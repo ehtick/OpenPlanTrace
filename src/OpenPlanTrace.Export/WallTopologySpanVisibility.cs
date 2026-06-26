@@ -226,7 +226,13 @@ internal static class WallTopologySpanVisibility
     {
         context.ComponentByWallId.TryGetValue(span.WallId, out var component);
         context.WallEvidenceAssessments.TryGetValue(span.WallId, out var assessment);
-        if (!IsPlacementReadyStructuralSpan(component, assessment))
+        var hasTrustedLongIsolatedExteriorShellWallBody =
+            WallPlacementReadinessEvaluator.IsTrustedLongIsolatedExteriorShellWallBody(
+                span.SourceWall,
+                component,
+                assessment);
+        if (!IsPlacementReadyStructuralSpan(component, assessment)
+            && !hasTrustedLongIsolatedExteriorShellWallBody)
         {
             return false;
         }

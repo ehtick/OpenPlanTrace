@@ -10524,6 +10524,13 @@ public sealed class ExportTests
         Assert.False(exportedWall.GetProperty("excludedFromStructuralTopology").GetBoolean());
         Assert.False(graphEdge.GetProperty("excludedFromStructuralTopology").GetBoolean());
         Assert.Equal(160, graphEdge.GetProperty("drawingLength").GetDouble(), precision: 3);
+
+        using var scanDocument = JsonDocument.Parse(PlanTraceJsonExporter.Serialize(result));
+        var scanWall = Assert.Single(scanDocument.RootElement.GetProperty("walls").EnumerateArray());
+        Assert.Equal("Ready", scanWall.GetProperty("placementStatus").GetString());
+        Assert.True(scanWall.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.False(scanWall.GetProperty("requiresReview").GetBoolean());
+        Assert.Empty(scanWall.GetProperty("reviewReasons").EnumerateArray());
     }
 
     [Fact]

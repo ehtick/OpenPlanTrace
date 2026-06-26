@@ -1747,6 +1747,71 @@ public sealed class WallPlacementReadinessTests
         Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
     }
 
+    [Fact]
+    public void Evaluate_AllowsTrustedLongIsolatedExteriorShellWallBodyWithStructuredExteriorType()
+    {
+        var wall = Wall("wall:trusted-isolated-exterior-shell-structured-type", Confidence.High) with
+        {
+            WallType = WallType.Exterior,
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 96), new PlanPoint(300, 96)),
+                new PlanLineSegment(new PlanPoint(100, 104), new PlanPoint(300, 104)),
+                FaceSeparation: 8,
+                OverlapRatio: 0.99,
+                Score: 0.93,
+                FirstFaceFragmentCount: 72,
+                SecondFaceFragmentCount: 39,
+                FirstFaceSourcePrimitiveIds: ["trusted-isolated-exterior-structured-face-a"],
+                SecondFaceSourcePrimitiveIds: ["trusted-isolated-exterior-structured-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: true,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Decision = WallEvidenceDecision.Review,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                0.7,
+                0,
+                0.7,
+                0.5,
+                0,
+                0.2,
+                0,
+                0,
+                0,
+                new[] { "strong parallel-face wall pair", "both endpoints supported by structural context" },
+                new[] { "not placement-ready without review" })
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence,
+            [
+                "wall graph component is an isolated fragment requiring review",
+                "excluded from structural topology",
+                "wall evidence requires review before exact coordinate placement"
+            ]);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall component excluded from structural topology", readiness.Reasons);
+        Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
     private static WallSegment Wall(string id, Confidence confidence) =>
         new(
             id,
