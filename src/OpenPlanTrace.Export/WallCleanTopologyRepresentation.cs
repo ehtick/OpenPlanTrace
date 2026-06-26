@@ -10,9 +10,11 @@ internal static class WallCleanTopologyRepresentationMatcher
     private const double MinRepresentedByCleanTopologyOverlapRatio = 0.92;
     private const double MinRecoveredRoomBoundaryRepresentedOverlapRatio = 0.80;
     private const double MinNearIsolatedFragmentRepresentedOverlapRatio = 0.88;
+    private const double MinTrustedSourceBackedExteriorRepresentedOverlapRatio = 0.88;
     private const double MaxInteriorRepresentedByCleanTopologyAxisDistance = 6.0;
     private const double MaxExteriorRepresentedByCleanTopologyAxisDistance = 18.0;
     private const double MaxNearIsolatedFragmentAxisDistance = 4.0;
+    private const double MaxTrustedSourceBackedExteriorRepresentationAxisDistance = 8.0;
     private const int MaxNearIsolatedFragmentCount = 8;
     private const double MaxNearIsolatedFragmentGapRatio = 0.001;
 
@@ -106,6 +108,14 @@ internal static class WallCleanTopologyRepresentationMatcher
                 readyForCoordinatePlacement,
                 span)
                 ? MinRecoveredRoomBoundaryRepresentedOverlapRatio
+            : IsTrustedSourceBackedExteriorRepresentationCandidate(
+                wall,
+                component,
+                evidenceAssessment,
+                readyForCoordinatePlacement,
+                span,
+                axisDistance)
+                ? MinTrustedSourceBackedExteriorRepresentedOverlapRatio
             : MinRepresentedByCleanTopologyOverlapRatio;
 
     private static bool IsRecoveredRoomBoundaryPairCandidate(
@@ -203,6 +213,78 @@ internal static class WallCleanTopologyRepresentationMatcher
             "railing",
             "stair",
             "terrace");
+    }
+
+    private static bool IsTrustedSourceBackedExteriorRepresentationCandidate(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? evidenceAssessment,
+        bool readyForCoordinatePlacement,
+        WallGraphTopologySpan span,
+        double axisDistance)
+    {
+        if (!readyForCoordinatePlacement
+            || component?.ExcludedFromStructuralTopology == true
+            || component?.Kind == WallGraphComponentKind.ObjectLikeIsland
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.WallType != WallType.Exterior
+            || span.SourceWall is null
+            || span.SourceWall.WallType != WallType.Exterior
+            || span.DrawingLength < wall.DrawingLength
+            || wall.PairEvidence is not { Score: >= 0.75, OverlapRatio: >= 0.90 } pair
+            || evidenceAssessment is null
+            || evidenceAssessment.Decision != WallEvidenceDecision.Accept
+            || evidenceAssessment.RequiresReview
+            || evidenceAssessment.RejectedAsNoise
+            || evidenceAssessment.PlacementReady != true)
+        {
+            return false;
+        }
+
+        var axisLimit = Math.Min(
+            MaxTrustedSourceBackedExteriorRepresentationAxisDistance,
+            Math.Max(Math.Max(wall.Thickness, span.Thickness), pair.FaceSeparation) + 1.5);
+        if (axisDistance > axisLimit)
+        {
+            return false;
+        }
+
+        var hostEvidence = span.Evidence;
+        if (!hostEvidence.Any(item => item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase))
+            || !hostEvidence.Any(item =>
+                item.Contains("exterior shell", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("wall type exterior", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("paired wall-face evidence is placement-ready", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("source-backed fallback pair score", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return ContainsAnyEvidence(
+                wall,
+                component,
+                evidenceAssessment,
+                "filled wall-solid primitive",
+                "filled closed vector wall body",
+                "strong double-edge wall body",
+                "wall type exterior")
+            && !ContainsAnyEvidence(
+                wall,
+                component,
+                evidenceAssessment,
+                "covered-area",
+                "covered entry",
+                "covered-entry",
+                "door leaf",
+                "door swing",
+                "fixture detail",
+                "object/fixture",
+                "overbygd",
+                "railing",
+                "repeated short detail",
+                "stair",
+                "surface pattern",
+                "terrace");
     }
 
     private static double OverlapRatio(

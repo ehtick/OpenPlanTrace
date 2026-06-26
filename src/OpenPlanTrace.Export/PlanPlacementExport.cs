@@ -3423,11 +3423,14 @@ public sealed record PlacementWallGraphExport(
     private const double MaxInlinePlacementGraphMergeAxisDistanceDrawingUnits = 1.5;
     private const double MaxInlinePlacementGraphMergeAxisDistanceByThicknessDrawingUnits = 4.0;
     private const double MaxExteriorShellInlinePlacementGraphMergeAxisDistanceDrawingUnits = 8.0;
+    private const double MaxOverlappingStructuralPlacementGraphMergeAxisDistanceDrawingUnits = 4.0;
     private const double MaxInlinePlacementGraphMergeGapDrawingUnits = 12.0;
     private const double MaxInlinePlacementGraphStructuralMergeGapDrawingUnits = 36.0;
     private const double MaxInlinePlacementGraphSameWallGapDrawingUnits = 48.0;
     private const double MaxInlinePlacementGraphExteriorShellMergeGapDrawingUnits = 72.0;
     private const double MaxInlinePlacementGraphMergeThicknessDeltaDrawingUnits = 4.0;
+    private const double MinOverlappingStructuralPlacementGraphMergeLengthDrawingUnits = 12.0;
+    private const double MinOverlappingStructuralPlacementGraphMergeOverlapRatio = 0.2;
     private const double MaxContainedPlacementGraphEdgeAxisDistanceDrawingUnits = 1.5;
     private const double MaxNearContainedPlacementGraphEdgeAxisDistanceDrawingUnits = 4.0;
     private const double MaxExteriorShellContainedPlacementGraphEdgeAxisDistanceDrawingUnits = 8.0;
@@ -3548,20 +3551,35 @@ public sealed record PlacementWallGraphExport(
         edges = postFinalEndpointAbsorptionNodeCoordinateAlignment.Edges;
         var postFinalEndpointAbsorptionNodeNormalization = NormalizePlacementGraphNodeReferencesFromGeometry(edges);
         edges = postFinalEndpointAbsorptionNodeNormalization.Edges;
+        var postPairResidualEndpointSnap = SnapResidualPlacementGraphEndpointsOntoHostEdges(edges);
+        edges = postPairResidualEndpointSnap.Edges;
+        var postPairResidualSnapAxisRegularization = RegularizeAxisAlignedPlacementGraphEdges(edges);
+        edges = postPairResidualSnapAxisRegularization.Edges;
+        var postPairResidualSnapCompactionPreEdgeCount = edges.Length;
+        edges = CollapseInlineCollinearPlacementGraphEdges(edges);
+        var postPairResidualSnapCollapsedEdgeCount = Math.Max(0, postPairResidualSnapCompactionPreEdgeCount - edges.Length);
+        edges = SuppressContainedPlacementGraphEdges(edges, out var postPairResidualSnapSuppressedContainedEdgeCount);
+        var postPairResidualNodeCoordinateAlignment = AlignPlacementGraphEdgesToCanonicalNodePositions(edges);
+        edges = postPairResidualNodeCoordinateAlignment.Edges;
+        var postPairResidualNodeNormalization = NormalizePlacementGraphNodeReferencesFromGeometry(edges);
+        edges = postPairResidualNodeNormalization.Edges;
         var residualEndpointOnHostSummary = SummarizeResidualPlacementGraphEndpointOnHostEdges(edges);
         var finalCompactedEdgeCount = Math.Max(0, finalCompactionPreEdgeCount - finalPostCompactionEdgeCount);
         var alignedEndpointCount = preNormalizationNodeCoordinateAlignment.AlignedEndpointCount
             + postAbsorptionPreNormalizationNodeCoordinateAlignment.AlignedEndpointCount
             + postNormalizationNodeCoordinateAlignment.AlignedEndpointCount
-            + postFinalEndpointAbsorptionNodeCoordinateAlignment.AlignedEndpointCount;
+            + postFinalEndpointAbsorptionNodeCoordinateAlignment.AlignedEndpointCount
+            + postPairResidualNodeCoordinateAlignment.AlignedEndpointCount;
         var alignedNodeCount = preNormalizationNodeCoordinateAlignment.AlignedNodeCount
             + postAbsorptionPreNormalizationNodeCoordinateAlignment.AlignedNodeCount
             + postNormalizationNodeCoordinateAlignment.AlignedNodeCount
-            + postFinalEndpointAbsorptionNodeCoordinateAlignment.AlignedNodeCount;
+            + postFinalEndpointAbsorptionNodeCoordinateAlignment.AlignedNodeCount
+            + postPairResidualNodeCoordinateAlignment.AlignedNodeCount;
         var regularizedAxisEdgeCount = initialAxisRegularization.RegularizedEdgeCount
             + postSharedNodeHostSnapAxisRegularization.RegularizedEdgeCount
             + finalAxisRegularization.RegularizedEdgeCount
-            + postResidualSnapAxisRegularization.RegularizedEdgeCount;
+            + postResidualSnapAxisRegularization.RegularizedEdgeCount
+            + postPairResidualSnapAxisRegularization.RegularizedEdgeCount;
         var postAbsorptionCompactedEdgeCount = Math.Max(0, postAbsorptionEdgeCount - edges.Length);
         var nodes = BuildPlacementWallGraphNodes(graph, edges, calibration);
         var components = graph.Components
@@ -3596,6 +3614,9 @@ public sealed record PlacementWallGraphExport(
             $"placement wall graph snapped {finalEndpointPairSnap.SnappedEndpointCount} nearby endpoint coordinate(s) across {finalEndpointPairSnap.SnappedPairCount} structural endpoint pair(s)",
             $"placement wall graph post-snap compacted {postResidualSnapCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postResidualSnapSuppressedContainedEdgeCount} contained duplicate edge(s)",
             $"placement wall graph split {postFinalEndpointAbsorptionNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after final endpoint-on-wall cleanup",
+            $"placement wall graph post-pair snapped {postPairResidualEndpointSnap.SnappedEndpointCount} residual endpoint(s) onto host wall runs",
+            $"placement wall graph post-pair compacted {postPairResidualSnapCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postPairResidualSnapSuppressedContainedEdgeCount} contained duplicate edge(s)",
+            $"placement wall graph split {postPairResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-pair residual cleanup",
             "placement wall graph residual endpoint-on-host-wall candidates after cleanup: "
             + $"{residualEndpointOnHostSummary.CandidateEndpointCount} total, "
             + $"{residualEndpointOnHostSummary.CoincidentCandidateEndpointCount} coincident, "
@@ -4093,7 +4114,9 @@ public sealed record PlacementWallGraphExport(
         }
 
         var axis = WeightedAxis(cluster);
-        if (Math.Abs(span.Axis - axis) > PlacementGraphMergeAxisTolerance(cluster, span))
+        var axisDistance = Math.Abs(span.Axis - axis);
+        if (axisDistance > PlacementGraphMergeAxisTolerance(cluster, span)
+            && !CanUseOverlappingStructuralPlacementGraphMergeAxisTolerance(cluster, span, axisDistance))
         {
             return false;
         }
@@ -4112,6 +4135,47 @@ public sealed record PlacementWallGraphExport(
         var maxGap = PlacementGraphMergeGapTolerance(cluster, span);
         return span.Start <= clusterEnd + maxGap
             && span.End >= clusterStart - maxGap;
+    }
+
+    private static bool CanUseOverlappingStructuralPlacementGraphMergeAxisTolerance(
+        IReadOnlyList<PlacementGraphMergeSpan> cluster,
+        PlacementGraphMergeSpan span,
+        double axisDistance)
+    {
+        if (cluster.Count == 0
+            || !cluster.All(item => IsStructuralPlacementGraphMergeContinuation(item.Edge))
+            || !IsStructuralPlacementGraphMergeContinuation(span.Edge)
+            || HasPlacementGraphDetailOrSurfaceEvidence(span.Edge)
+            || cluster.Any(item => HasPlacementGraphDetailOrSurfaceEvidence(item.Edge)))
+        {
+            return false;
+        }
+
+        var maxThickness = cluster
+            .Select(item => item.Edge.ThicknessDrawingUnits)
+            .Append(span.Edge.ThicknessDrawingUnits)
+            .DefaultIfEmpty(0)
+            .Max();
+        var tolerance = Math.Clamp(
+            maxThickness * 0.65,
+            MaxInlinePlacementGraphMergeAxisDistanceDrawingUnits,
+            MaxOverlappingStructuralPlacementGraphMergeAxisDistanceDrawingUnits);
+        if (axisDistance > tolerance)
+        {
+            return false;
+        }
+
+        var clusterStart = cluster.Min(item => item.Start);
+        var clusterEnd = cluster.Max(item => item.End);
+        var clusterLength = Math.Max(0, clusterEnd - clusterStart);
+        var overlap = Math.Min(span.End, clusterEnd) - Math.Max(span.Start, clusterStart);
+        if (overlap < MinOverlappingStructuralPlacementGraphMergeLengthDrawingUnits)
+        {
+            return false;
+        }
+
+        var overlapRatio = overlap / Math.Max(Math.Min(span.Length, clusterLength), 0.001);
+        return overlapRatio >= MinOverlappingStructuralPlacementGraphMergeOverlapRatio;
     }
 
     private static bool TouchesProtectedPlacementGraphJunction(
@@ -4562,6 +4626,30 @@ public sealed record PlacementWallGraphExport(
             || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
             || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
             || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasPlacementGraphDetailOrSurfaceEvidence(PlacementWallGraphEdgeExport edge) =>
+        edge.Evidence.Any(IsPlacementGraphDetailOrSurfaceEvidence);
+
+    private static bool IsPlacementGraphDetailOrSurfaceEvidence(string evidence)
+    {
+        if (evidence.Contains("shared by room adjacency that includes outdoor/terrace room evidence", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return evidence.Contains("object-like", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("object/fixture", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("review as detail/object", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("terrace", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("railing", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsStructuralPlacementGraphComponentKind(string? componentKind) =>
@@ -6051,6 +6139,11 @@ public sealed record PlacementWallGraphExport(
         PlacementGraphMergeSpan endpointSpan,
         PlacementGraphMergeSpan hostSpan)
     {
+        if (CanUseTrustedSourceBackedExteriorResidualEndpointSnap(endpointSpan, hostSpan))
+        {
+            return true;
+        }
+
         if (!IsStructuralPlacementGraphComponentKind(endpointSpan.Edge.WallComponentKind))
         {
             return false;
@@ -6063,17 +6156,31 @@ public sealed record PlacementWallGraphExport(
             return false;
         }
 
-        return !endpointSpan.Edge.Evidence.Concat(hostSpan.Edge.Evidence).Any(item =>
-            item.Contains("object-like", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("object/fixture", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase));
+        return !endpointSpan.Edge.Evidence.Concat(hostSpan.Edge.Evidence)
+            .Any(IsPlacementGraphDetailOrSurfaceEvidence);
+    }
+
+    private static bool CanUseTrustedSourceBackedExteriorResidualEndpointSnap(
+        PlacementGraphMergeSpan endpointSpan,
+        PlacementGraphMergeSpan hostSpan)
+    {
+        if (endpointSpan.Orientation == hostSpan.Orientation
+            || endpointSpan.Length < MinDominantPlacementGraphMergeAxisLengthDrawingUnits
+            || hostSpan.Length < MinDominantPlacementGraphMergeAxisLengthDrawingUnits)
+        {
+            return false;
+        }
+
+        if (!IsTrustedSourceBackedPlacementGraphHost(endpointSpan.Edge)
+            || !IsTrustedSourceBackedPlacementGraphHost(hostSpan.Edge)
+            || !endpointSpan.Edge.Evidence.Any(IsExteriorPlacementGraphEvidence)
+            || !hostSpan.Edge.Evidence.Any(IsExteriorPlacementGraphEvidence))
+        {
+            return false;
+        }
+
+        return !endpointSpan.Edge.Evidence.Concat(hostSpan.Edge.Evidence)
+            .Any(IsPlacementGraphDetailOrSurfaceEvidence);
     }
 
     private static bool IsTrustedSourceBackedPlacementGraphHost(PlacementWallGraphEdgeExport edge) =>
