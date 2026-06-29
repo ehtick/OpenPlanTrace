@@ -41,6 +41,8 @@ public static class PlanOverlaySvgRenderer
             .sheet-image { image-rendering: auto; }
             .source-context { stroke: #242933; stroke-width: 0.34; stroke-linecap: round; stroke-linejoin: round; fill: none; opacity: 0.22; vector-effect: non-scaling-stroke; }
             .source-context-rect { fill: none; opacity: 0.18; }
+            svg[data-profile="placement-graph-qa"] .source-context { stroke: #303642; stroke-width: 0.28; opacity: 0.16; }
+            svg[data-profile="placement-graph-qa"] .source-context-rect { opacity: 0.12; }
             svg[data-profile="wall-qa"] .source-context,
             svg[data-profile="wall-qa-focus"] .source-context,
             svg[data-profile="wall-qa-review"] .source-context { stroke: #202631; stroke-width: 0.44; opacity: 0.34; }
@@ -741,7 +743,9 @@ public static class PlanOverlaySvgRenderer
         }
         else if (options.Profile == SvgOverlayRenderProfile.PlacementGraphQa)
         {
-            rows.Add("Exported placement wall graph only");
+            rows.Add(options.IncludeSourceContext && string.IsNullOrWhiteSpace(options.BackgroundImageHref)
+                ? "Exported placement wall graph over source context"
+                : "Exported placement wall graph only");
             rows.Add("Blue = exterior, green = interior");
             if (options.CropToFloorplanContent)
             {

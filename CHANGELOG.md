@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.07.010] - 2026-06-29
+
+- Improved placement graph QA source context.
+- Improved wall screenshot render performance.
+- Small improvement to SVG profile documentation.
+
 ## [0.07.009] - 2026-06-29
 
 - Improved wall QA viewer graph rendering.

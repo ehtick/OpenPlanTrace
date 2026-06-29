@@ -233,7 +233,8 @@ public sealed record SvgOverlayRenderOptions
                 IncludePlacementWallGraph = true,
                 IncludePlacementWallGraphNodes = true,
                 IncludeRoutingLayer = false,
-                IncludeSourceContext = false
+                IncludeSourceContext = true,
+                MaxSourceContextPrimitives = 3500
             },
             _ => new SvgOverlayRenderOptions()
             {

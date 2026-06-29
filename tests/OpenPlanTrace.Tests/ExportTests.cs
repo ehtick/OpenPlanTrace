@@ -2656,27 +2656,29 @@ public sealed class ExportTests
     }
 
     [Fact]
-    public void SvgRenderer_PlacementGraphQaProfileDrawsExportedWallGraphOnly()
+    public void SvgRenderer_PlacementGraphQaProfileDrawsExportedWallGraphOverSourceContext()
     {
         var result = CreateInlineCollinearPlacementGraphResult();
+        var options = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.PlacementGraphQa);
         var pageSummary = Assert.Single(PlanPlacementExport.From(result).Summary.PageSummaries);
 
         var svg = PlanOverlaySvgRenderer.RenderPage(
             result,
             1,
-            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.PlacementGraphQa));
+            options);
 
+        Assert.Equal(3500, options.MaxSourceContextPrimitives);
         Assert.Contains("data-profile=\"placement-graph-qa\"", svg);
         Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
         Assert.Contains("id=\"placement-wall-graph-nodes\"", svg);
         Assert.Contains("placement wall graph edge", svg);
-        Assert.Contains("Exported placement wall graph only", svg);
+        Assert.Contains("Exported placement wall graph over source context", svg);
+        Assert.Contains("id=\"source-context\"", svg);
         Assert.Contains($"{pageSummary.PlacementReadyWallCount} placement-ready walls", svg);
         Assert.Contains($"{pageSummary.PlacementOmittedWallCount} omitted wall candidates total", svg);
         Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("id=\"wall-body-footprints\"", svg);
         Assert.DoesNotContain("id=\"walls\"", svg);
-        Assert.DoesNotContain("id=\"source-context\"", svg);
     }
 
     [Fact]
@@ -2693,11 +2695,13 @@ public sealed class ExportTests
         Assert.Equal("placement-graph-qa", page.SvgProfile);
         Assert.Contains("placementWallGraphEdges", page.VisibleLayerNames);
         Assert.Contains("placementWallGraphNodes", page.VisibleLayerNames);
+        Assert.Contains("sourceContext", page.VisibleLayerNames);
         Assert.DoesNotContain("walls", page.VisibleLayerNames);
         Assert.DoesNotContain("wallTopologySpans", page.VisibleLayerNames);
         Assert.DoesNotContain("wallBodyFootprints", page.VisibleLayerNames);
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "placementWallGraphEdges").Count);
         Assert.Equal(2, page.Layers.Single(layer => layer.Name == "placementWallGraphNodes").Count);
+        Assert.Contains(page.Layers, layer => layer.Name == "sourceContext" && layer.Count > 0);
     }
 
     [Fact]
