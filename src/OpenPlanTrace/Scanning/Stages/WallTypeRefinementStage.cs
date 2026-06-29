@@ -2118,7 +2118,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && supportedTopologyEndpointCount >= 2
             && pairScore >= 0.84
             && pairOverlap >= 0.98
-            && wall.DrawingLength >= 24.0
+            && wall.DrawingLength >= MinSecondaryTrustedDimensionLikeDenseRoomBoundaryLength
             && wall.DrawingLength <= 72.0
             && (component.Kind == WallGraphComponentKind.MainStructural
                 || component.Kind == WallGraphComponentKind.SecondaryStructural);
