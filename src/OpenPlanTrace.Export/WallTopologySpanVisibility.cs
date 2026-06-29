@@ -27,6 +27,9 @@ internal static class WallTopologySpanVisibility
     private const double MaxContainedExteriorFragmentAxisDistanceDrawingUnits = 6.0;
     private const double MaxContainedExteriorFragmentLengthRatio = 0.55;
     private const double MinContainedExteriorFragmentOverlapRatio = 0.985;
+    private const double MaxContainedSourceBackedFallbackAxisDistanceDrawingUnits = 6.0;
+    private const double MaxContainedSourceBackedFallbackLengthRatio = 0.55;
+    private const double MinContainedSourceBackedFallbackOverlapRatio = 0.985;
     private const double MinExteriorFacePairAxisDistanceDrawingUnits = 2.0;
     private const double MaxExteriorFacePairAxisDistanceDrawingUnits = 18.0;
     private const double MinExteriorFacePairOverlapRatio = 0.88;
@@ -2788,7 +2791,7 @@ internal static class WallTopologySpanVisibility
 
                 if (candidateIsSourceBackedFallback
                     && !IsSameSourceBackedFallbackPlacement(candidate, kept)
-                    && !CanRepresentContainedSourceBackedFallback(candidate, kept))
+                    && !CanRepresentContainedSourceBackedFallback(candidate, kept, overlapRatio, axisDistance))
                 {
                     continue;
                 }
@@ -2810,7 +2813,9 @@ internal static class WallTopologySpanVisibility
             || overlapRatio < MinContainedExteriorFragmentOverlapRatio
             || candidate.DrawingLength <= 0.001
             || kept.DrawingLength <= 0.001
-            || candidate.DrawingLength > kept.DrawingLength * MaxContainedExteriorFragmentLengthRatio)
+            || candidate.DrawingLength > kept.DrawingLength * MaxContainedExteriorFragmentLengthRatio
+            || (!HasContainedExteriorFragmentNoiseEvidence(candidate)
+                && !IsFilledWallSolidContainedInNoisyLongExteriorRun(candidate, kept)))
         {
             return false;
         }
@@ -2818,6 +2823,44 @@ internal static class WallTopologySpanVisibility
         var overhang = Math.Max(0, AxisMin(kept.CenterLine) - AxisMin(candidate.CenterLine))
             + Math.Max(0, AxisMax(candidate.CenterLine) - AxisMax(kept.CenterLine));
         return overhang <= NearContainedDuplicateOverhangTolerance(candidate, kept);
+    }
+
+    private static bool HasContainedExteriorFragmentNoiseEvidence(WallGraphTopologySpan span)
+    {
+        var evidence = (span.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(span.Evidence)
+            .ToArray();
+        return ContainsAnyEvidence(
+            evidence,
+            "duplicate or near-duplicate",
+            "healed",
+            "fragmented exterior",
+            "repeated short detail",
+            "wall-like linework near anchored opening");
+    }
+
+    private static bool IsFilledWallSolidContainedInNoisyLongExteriorRun(
+        WallGraphTopologySpan candidate,
+        WallGraphTopologySpan kept)
+    {
+        var candidateEvidence = (candidate.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(candidate.Evidence)
+            .ToArray();
+        if (!ContainsEvidence(candidateEvidence, "filled wall-solid primitive"))
+        {
+            return false;
+        }
+
+        var keptEvidence = (kept.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(kept.Evidence)
+            .ToArray();
+        return ContainsAnyEvidence(
+            keptEvidence,
+            "duplicate or near-duplicate",
+            "fragment geometry",
+            "merged collinear wall fragments",
+            "run collapsed",
+            "run merged");
     }
 
     private static bool IsContainedDuplicateOverlapAcceptable(
@@ -2880,18 +2923,37 @@ internal static class WallTopologySpanVisibility
 
     private static bool CanRepresentContainedSourceBackedFallback(
         WallGraphTopologySpan candidate,
-        WallGraphTopologySpan kept) =>
-        candidate.SourceWall?.WallType == WallType.Exterior
-        && kept.SourceWall?.WallType == WallType.Exterior
-        && !IsTopologyBlockedSourceBackedFallbackSpan(candidate)
-        && !IsTopologyBlockedSourceBackedFallbackSpan(kept)
-        && candidate.DrawingLength <= kept.DrawingLength
-        && ContainsAnyEvidence(
-            candidate.Evidence,
-            "global exterior-shell repair confirmed",
-            "trusted exterior shell continuity",
-            "exterior shell repair confirmed",
-            "exterior-shell repair confirmed");
+        WallGraphTopologySpan kept,
+        double overlapRatio,
+        double axisDistance)
+    {
+        var candidateWallType = candidate.SourceWall?.WallType ?? WallType.Unknown;
+        var keptWallType = kept.SourceWall?.WallType ?? WallType.Unknown;
+        if (candidateWallType != keptWallType
+            || candidateWallType == WallType.Unknown
+            || IsTopologyBlockedSourceBackedFallbackSpan(candidate)
+            || IsTopologyBlockedSourceBackedFallbackSpan(kept)
+            || candidate.DrawingLength > kept.DrawingLength)
+        {
+            return false;
+        }
+
+        if (candidateWallType == WallType.Exterior
+            && ContainsAnyEvidence(
+                candidate.Evidence,
+                "global exterior-shell repair confirmed",
+                "trusted exterior shell continuity",
+                "exterior shell repair confirmed",
+                "exterior-shell repair confirmed"))
+        {
+            return true;
+        }
+
+        return axisDistance <= MaxContainedSourceBackedFallbackAxisDistanceDrawingUnits
+            && overlapRatio >= MinContainedSourceBackedFallbackOverlapRatio
+            && candidate.DrawingLength <= kept.DrawingLength * MaxContainedSourceBackedFallbackLengthRatio
+            && ContainsEvidence(candidate.Evidence, "source-backed fallback accepted");
+    }
 
     private static bool HasComparableExteriorFaceExtent(
         WallGraphTopologySpan first,

@@ -1035,7 +1035,21 @@ public sealed class ExportTests
     {
         var result = CreateContainedDuplicatePlacementRunResult(
             new PlanLineSegment(new PlanPoint(145, 104.8), new PlanPoint(235, 104.8)),
+            containedWallDetectionKind: WallDetectionKind.ParallelLinePair,
             wallType: WallType.Exterior);
+        result = result with
+        {
+            Walls = result.Walls
+                .Select(wall => wall.Id == "duplicate-contained-wall"
+                    ? wall with
+                    {
+                        Evidence = wall.Evidence
+                            .Append("second face collapsed 2 duplicate or near-duplicate wall line primitive(s)")
+                            .ToArray()
+                    }
+                    : wall)
+                .ToArray()
+        };
 
         using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
             result,
@@ -1056,6 +1070,55 @@ public sealed class ExportTests
         Assert.Contains(
             wallGraph.GetProperty("evidence").EnumerateArray(),
             evidence => evidence.GetString()?.Contains("contained duplicate clean edge", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public void PlacementExporter_SuppressesContainedFilledExteriorSolidInsideNoisyLongExteriorRun()
+    {
+        var result = CreateContainedDuplicatePlacementRunResult(
+            new PlanLineSegment(new PlanPoint(145, 104.8), new PlanPoint(235, 104.8)),
+            containedWallDetectionKind: WallDetectionKind.ParallelLinePair,
+            wallType: WallType.Exterior);
+        result = result with
+        {
+            Walls = result.Walls
+                .Select(wall => wall.Id switch
+                {
+                    "duplicate-long-wall" => wall with
+                    {
+                        DetectionKind = WallDetectionKind.FragmentMerged,
+                        Evidence = wall.Evidence
+                            .Append("merged collinear wall fragments")
+                            .Append("run collapsed 7 duplicate or near-duplicate wall line primitive(s)")
+                            .ToArray()
+                    },
+                    "duplicate-contained-wall" => wall with
+                    {
+                        Evidence = wall.Evidence
+                            .Append("filled wall-solid primitive")
+                            .Append("wall evidence: filled closed vector wall body")
+                            .ToArray()
+                    },
+                    _ => wall
+                })
+                .ToArray()
+        };
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var wallGraph = document.RootElement.GetProperty("wallGraph");
+        var edge = Assert.Single(wallGraph.GetProperty("edges").EnumerateArray());
+        var duplicateWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+
+        Assert.Equal("duplicate-long-wall:clean-run:1", edge.GetProperty("id").GetString());
+        Assert.Empty(duplicateWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "duplicate_clean_topology_span",
+            duplicateWall.GetProperty("placementOmission").GetProperty("code").GetString());
     }
 
     [Fact]
@@ -1485,9 +1548,9 @@ public sealed class ExportTests
         Assert.Contains(
             span.GetProperty("evidence").EnumerateArray(),
             item => item.GetString()?.Contains("centered between close parallel exterior face spans", StringComparison.OrdinalIgnoreCase) == true);
-        Assert.DoesNotContain(spans, item =>
+        Assert.Contains(spans, item =>
             item.GetProperty("id").GetString() == "parallel-face-partial-fragment:clean-run:1");
-        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+        Assert.Equal(2, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
     }
 
     [Fact]
@@ -5614,6 +5677,83 @@ public sealed class ExportTests
         var summary = document.RootElement.GetProperty("summary");
         Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
         Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_RepresentsShortContainedInteriorSourceBackedFallbackWithLongerSameTypeSpan()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            includeNearbyGraphSpan: true,
+            wallLength: 80,
+            wallType: WallType.Interior,
+            nearbyGraphWallType: WallType.Interior);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+
+        var fallbackWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        Assert.Empty(fallbackWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "duplicate_clean_topology_span",
+            fallbackWall.GetProperty("placementOmission").GetProperty("code").GetString());
+
+        var graphWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "nearby-graph-wall");
+        Assert.Single(graphWall.GetProperty("topologySpans").EnumerateArray());
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("representedWallCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_RepresentsShortContainedExteriorPairedSourceBackedFallbackWithLongerSameTypeSpan()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            includeNearbyGraphSpan: true,
+            wallLength: 80,
+            wallType: WallType.Exterior,
+            nearbyGraphWallType: WallType.Exterior,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "wall evidence: strong double-edge wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "pair score 0.93"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+
+        var fallbackWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        Assert.Empty(fallbackWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "duplicate_clean_topology_span",
+            fallbackWall.GetProperty("placementOmission").GetProperty("code").GetString());
+
+        var graphWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "nearby-graph-wall");
+        Assert.Single(graphWall.GetProperty("topologySpans").EnumerateArray());
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("representedWallCount").GetInt32());
     }
 
     [Fact]
