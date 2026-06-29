@@ -1366,6 +1366,73 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_ClassifiesRecoveredDuplicateIsolatedFragmentAsDuplicateWallFace()
+    {
+        var fragmentLine = new PlanLineSegment(
+            new PlanPoint(90, 108),
+            new PlanPoint(190, 108));
+        var result = WithContainedWallAsIsolatedReviewFragment(
+            CreateContainedDuplicatePlacementRunResult(
+                fragmentLine,
+                WallDetectionKind.FragmentMerged,
+                new WallFragmentEvidence(
+                    FragmentCount: 6,
+                    TotalHealedGap: 0,
+                    MaxHealedGap: 0,
+                    DuplicatePrimitiveCount: 6,
+                    GapRatio: 0,
+                    RequiresGeometryReview: false,
+                    Evidence: ["synthetic offset fragment with stable geometry"])),
+            assessmentEvidence:
+            [
+                "wall evidence: recovered duplicate wall body already represented by stronger nearby paired wall body duplicate-long-wall; keep for review but block exact placement"
+            ]);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var duplicateWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+        var omission = duplicateWall.GetProperty("placementOmission");
+
+        Assert.Equal("duplicate_wall_face", omission.GetProperty("code").GetString());
+        Assert.Equal("DuplicateWallFace", omission.GetProperty("category").GetString());
+        Assert.Contains(
+            omission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("recovered duplicate wall body", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.DoesNotContain(
+            omission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("wall omitted from clean placement topology (isolated_fragment)", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public void PlacementExporter_PreservesCleanTopologyDuplicateClassificationForRecoveredDuplicateEvidence()
+    {
+        var result = WithContainedWallAsIsolatedReviewFragment(
+            CreateContainedDuplicatePlacementRunResult(),
+            assessmentEvidence:
+            [
+                "wall evidence: recovered duplicate wall body already represented by stronger nearby paired wall body duplicate-long-wall; keep for review but block exact placement"
+            ]);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var duplicateWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+        var omission = duplicateWall.GetProperty("placementOmission");
+
+        Assert.Equal("duplicate_clean_topology_span", omission.GetProperty("code").GetString());
+        Assert.Contains(
+            omission.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("already represented by clean topology span", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
     public void PlacementExporter_ClassifiesExcludedIsolatedFragmentAsSuppressedTopologyNoise()
     {
         var fragmentLine = new PlanLineSegment(

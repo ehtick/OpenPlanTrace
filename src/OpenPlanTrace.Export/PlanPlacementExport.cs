@@ -1557,8 +1557,10 @@ public sealed record PlacementWallOmissionExport(
                 "Resolve or manually review the wall graph repair candidate before importing this wall as clean topology.");
         }
 
+        var hasCleanTopologyRepresentation = ContainsEvidence(evidence, "already represented by clean topology span");
         if (ContainsEvidence(evidence, "duplicate wall-face")
-            || ContainsEvidence(evidence, "already represented by stronger paired wall body"))
+            || ContainsEvidence(evidence, "already represented by stronger paired wall body")
+            || (!hasCleanTopologyRepresentation && ContainsDuplicateWallBodyRepresentationEvidence(evidence)))
         {
             return new PlacementWallOmissionClassification(
                 "duplicate_wall_face",
@@ -1567,7 +1569,7 @@ public sealed record PlacementWallOmissionExport(
                 "Use the linked stronger wall body for placement and keep this wall as review evidence only.");
         }
 
-        if (ContainsEvidence(evidence, "already represented by clean topology span"))
+        if (hasCleanTopologyRepresentation)
         {
             return new PlacementWallOmissionClassification(
                 "duplicate_clean_topology_span",
@@ -2176,6 +2178,22 @@ public sealed record PlacementWallOmissionExport(
 
     private static bool ContainsEvidence(IReadOnlyList<string> evidence, string text) =>
         evidence.Any(item => item.Contains(text, StringComparison.OrdinalIgnoreCase));
+
+    private static bool ContainsDuplicateWallBodyRepresentationEvidence(IEnumerable<string> evidence)
+    {
+        var evidenceItems = evidence.ToArray();
+        var isExplicitDuplicate = evidenceItems.Any(item =>
+            item.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("recovered duplicate wall body", StringComparison.OrdinalIgnoreCase));
+        if (!isExplicitDuplicate)
+        {
+            return false;
+        }
+
+        return evidenceItems.Any(item =>
+            item.Contains("already represented by stronger", StringComparison.OrdinalIgnoreCase)
+            && item.Contains("paired wall body", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static bool IsSuppressedOpeningLinkedIsolatedFragment(
         WallGraphComponent? component,
@@ -9684,7 +9702,13 @@ internal static class PlacementReliability
             .Concat(assessment.ScoreBreakdown.PositiveEvidence)
             .Concat(assessment.ScoreBreakdown.NegativeEvidence)
             .ToArray();
-        var isExplicitDuplicate = evidence.Any(item =>
+        return ContainsDuplicateWallBodyRepresentationEvidence(evidence);
+    }
+
+    private static bool ContainsDuplicateWallBodyRepresentationEvidence(IEnumerable<string> evidence)
+    {
+        var evidenceItems = evidence.ToArray();
+        var isExplicitDuplicate = evidenceItems.Any(item =>
             item.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
             || item.Contains("recovered duplicate wall body", StringComparison.OrdinalIgnoreCase));
         if (!isExplicitDuplicate)
@@ -9692,7 +9716,7 @@ internal static class PlacementReliability
             return false;
         }
 
-        return evidence.Any(item =>
+        return evidenceItems.Any(item =>
             item.Contains("already represented by stronger", StringComparison.OrdinalIgnoreCase)
             && item.Contains("paired wall body", StringComparison.OrdinalIgnoreCase));
     }
