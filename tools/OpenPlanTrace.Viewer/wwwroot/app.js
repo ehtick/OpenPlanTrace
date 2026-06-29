@@ -75,11 +75,11 @@ const defaultEnabledLayers = [
 ];
 
 const wallQaEnabledLayers = [
-  "wallTopologySpans"
+  "walls"
 ];
 
 const wallQaReviewEnabledLayers = [
-  "wallTopologySpans",
+  "walls",
   "wallTopologyReviewSpans",
   "placementIssues"
 ];
@@ -3109,33 +3109,56 @@ function drawOverlay() {
   }
 
   if (state.enabledLayers.has("walls")) {
-    state.scan.walls.filter(onCurrentPage).forEach((wall) => {
-      if (!visibleBySourceLayer(wall)) {
-        return;
-      }
-      if (!shouldDrawWallAsPlacementWall(wall)) {
-        return;
-      }
-      const component = wall.wallComponentKind
-        ? `${wall.wallComponentKind}${wall.excludedFromStructuralTopology ? ", topology excluded" : ""}`
-        : "no component";
-      const inspection = describeItem("wall", wall);
-      const reliability = wallReliabilitySummary(wall);
-      const title = [
-        `${wall.id} - ${component}`,
-        wall.wallType ? `type ${wall.wallType}` : "",
-        wall.evidenceAssessment?.category ? `evidence ${wall.evidenceAssessment.category}` : "",
-        `confidence ${wall.confidence.toFixed(2)}`,
-        reliability
-      ].filter(Boolean).join(" - ");
-      wallCleanTopologySpans(wall).forEach((span) => {
-        const className = wallClassName(wall);
-        const opacity = wallDrawOpacity({ ...wall, confidence: span.confidence ?? wall.confidence });
-        addLine(span.centerLine, `${className} wall-halo`, "", 1);
-        addLine(span.centerLine, className, title, opacity, inspection);
+    const graphEdges = placementGraphWallEdges(state.scan).filter(onCurrentPage);
+    if (graphEdges.length) {
+      graphEdges.forEach((edge) => {
+        if (!visibleBySourceLayer(edge)) {
+          return;
+        }
+
+        const title = [
+          `${edge.id} - placement graph edge`,
+          edge.wallType ? `type ${edge.wallType}` : "",
+          edge.wallComponentKind ? `component ${edge.wallComponentKind}` : "",
+          edge.wallId ? `source wall ${edge.wallId}` : "",
+          Number.isFinite(Number(edge.drawingLength)) ? `${formatNumber(edge.drawingLength)} units` : "",
+          edge.confidence == null ? "" : `confidence ${formatNumber(edge.confidence)}`
+        ].filter(Boolean).join(" - ");
+        const inspection = describeItem("placement wall graph edge", edge);
+        const className = placementGraphWallEdgeClassName(edge);
+        addLine(edge.centerLine, `${className} wall-halo`, "", 1);
+        addLine(edge.centerLine, className, title, confidence(edge.confidence), inspection);
+        addLine(edge.centerLine, "wall-hit-target", title, 1, inspection);
       });
-      addWallHitTarget(wall, title, inspection);
-    });
+    } else {
+      state.scan.walls.filter(onCurrentPage).forEach((wall) => {
+        if (!visibleBySourceLayer(wall)) {
+          return;
+        }
+        if (!shouldDrawWallAsPlacementWall(wall)) {
+          return;
+        }
+        const component = wall.wallComponentKind
+          ? `${wall.wallComponentKind}${wall.excludedFromStructuralTopology ? ", topology excluded" : ""}`
+          : "no component";
+        const inspection = describeItem("wall", wall);
+        const reliability = wallReliabilitySummary(wall);
+        const title = [
+          `${wall.id} - ${component}`,
+          wall.wallType ? `type ${wall.wallType}` : "",
+          wall.evidenceAssessment?.category ? `evidence ${wall.evidenceAssessment.category}` : "",
+          `confidence ${wall.confidence.toFixed(2)}`,
+          reliability
+        ].filter(Boolean).join(" - ");
+        wallCleanTopologySpans(wall).forEach((span) => {
+          const className = wallClassName(wall);
+          const opacity = wallDrawOpacity({ ...wall, confidence: span.confidence ?? wall.confidence });
+          addLine(span.centerLine, `${className} wall-halo`, "", 1);
+          addLine(span.centerLine, className, title, opacity, inspection);
+        });
+        addWallHitTarget(wall, title, inspection);
+      });
+    }
   }
 
   if (state.enabledLayers.has("nodes")) {
@@ -4438,6 +4461,66 @@ function wallClassName(wall) {
   }
 
   return classes.join(" ");
+}
+
+function placementGraphWallEdges(scan = state.scan) {
+  if (!Array.isArray(scan?.edges) || !scan.edges.length) {
+    return [];
+  }
+
+  const wallsById = new Map((scan.walls ?? [])
+    .filter((wall) => wall?.id)
+    .map((wall) => [String(wall.id), wall]));
+
+  return scan.edges
+    .filter((edge) => edge?.centerLine?.start && edge?.centerLine?.end)
+    .filter((edge) => edge.excludedFromStructuralTopology !== true)
+    .map((edge) => {
+      const sourceWall = wallsById.get(String(edge.wallId || ""));
+      return {
+        ...edge,
+        wallType: sourceWall?.wallType || wallTypeFromGraphEvidence(edge),
+        wallComponentKind: edge.wallComponentKind || sourceWall?.wallComponentKind || "",
+        evidenceAssessment: sourceWall?.evidenceAssessment ?? null,
+        reliability: sourceWall?.reliability ?? null,
+        sourceWall
+      };
+    });
+}
+
+function placementGraphWallEdgeClassName(edge) {
+  const classes = ["wall", wallTypeClassName(edge)];
+  switch (edge.wallComponentKind) {
+    case "MainStructural":
+      classes.push("wall-main");
+      break;
+    case "SecondaryStructural":
+      classes.push("wall-secondary");
+      break;
+    case "ObjectLikeIsland":
+      classes.push("wall-object-like");
+      break;
+    case "IsolatedFragment":
+      classes.push("wall-fragment");
+      break;
+    default:
+      break;
+  }
+
+  return classes.join(" ");
+}
+
+function wallTypeFromGraphEvidence(edge) {
+  const evidence = normalizeStringArray(edge?.evidence).join(" | ").toLowerCase();
+  if (evidence.includes("wall type exterior") || evidence.includes("exterior shell")) {
+    return "Exterior";
+  }
+
+  if (evidence.includes("wall type interior") || evidence.includes("interior wall")) {
+    return "Interior";
+  }
+
+  return "Unknown";
 }
 
 function wallTypeClassName(wall) {
@@ -10055,7 +10138,8 @@ function layerTotalForKey(scan, key) {
     case "rawWalls":
       return rawWallAuditLineCount(scan);
     case "walls":
-      return wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);
+      return placementGraphWallEdges(scan).length
+        || wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);
     case "wallBodyFootprints":
       return wallBodyFootprintCount(scan);
     case "wallTopologySpans":
@@ -10117,7 +10201,8 @@ function layerCountForKey(scan, key) {
     case "rawWalls":
       return rawWallAuditLineCount(scan, state.currentPage);
     case "walls":
-      return wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);
+      return placementGraphWallEdges(scan).filter(onCurrentPage).length
+        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);
     case "wallBodyFootprints":
       return wallBodyFootprintCount(scan, state.currentPage);
     case "wallTopologySpans":

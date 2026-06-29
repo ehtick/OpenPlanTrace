@@ -3654,6 +3654,19 @@ public sealed record PlacementWallGraphExport(
         edges = finalTinyOpeningBridgeSuppression.Edges;
         var postBridgeResidualEndpointSnap = SnapResidualPlacementGraphEndpointsOntoHostEdges(edges);
         edges = postBridgeResidualEndpointSnap.Edges;
+        var postBridgeResidualAxisRegularization = RegularizeAxisAlignedPlacementGraphEdges(edges);
+        edges = postBridgeResidualAxisRegularization.Edges;
+        var postBridgeResidualCompactionPreEdgeCount = edges.Length;
+        edges = CollapseInlineCollinearPlacementGraphEdges(edges);
+        var postBridgeResidualCollapsedEdgeCount =
+            Math.Max(0, postBridgeResidualCompactionPreEdgeCount - edges.Length);
+        edges = SuppressContainedPlacementGraphEdges(
+            edges,
+            out var postBridgeResidualSuppressedContainedEdgeCount);
+        var postBridgeResidualNodeCoordinateAlignment = AlignPlacementGraphEdgesToCanonicalNodePositions(edges);
+        edges = postBridgeResidualNodeCoordinateAlignment.Edges;
+        var postBridgeResidualNodeNormalization = NormalizePlacementGraphNodeReferencesFromGeometry(edges);
+        edges = postBridgeResidualNodeNormalization.Edges;
         var residualEndpointOnHostSummary = SummarizeResidualPlacementGraphEndpointOnHostEdges(edges);
         var finalCompactedEdgeCount = Math.Max(0, finalCompactionPreEdgeCount - finalPostCompactionEdgeCount);
         var alignedEndpointCount = preNormalizationNodeCoordinateAlignment.AlignedEndpointCount
@@ -3662,20 +3675,23 @@ public sealed record PlacementWallGraphExport(
             + postFinalEndpointAbsorptionNodeCoordinateAlignment.AlignedEndpointCount
             + postPairResidualNodeCoordinateAlignment.AlignedEndpointCount
             + postRedundantEndpointOnHostFragmentNodeCoordinateAlignment.AlignedEndpointCount
-            + postRedundantResidualNodeCoordinateAlignment.AlignedEndpointCount;
+            + postRedundantResidualNodeCoordinateAlignment.AlignedEndpointCount
+            + postBridgeResidualNodeCoordinateAlignment.AlignedEndpointCount;
         var alignedNodeCount = preNormalizationNodeCoordinateAlignment.AlignedNodeCount
             + postAbsorptionPreNormalizationNodeCoordinateAlignment.AlignedNodeCount
             + postNormalizationNodeCoordinateAlignment.AlignedNodeCount
             + postFinalEndpointAbsorptionNodeCoordinateAlignment.AlignedNodeCount
             + postPairResidualNodeCoordinateAlignment.AlignedNodeCount
             + postRedundantEndpointOnHostFragmentNodeCoordinateAlignment.AlignedNodeCount
-            + postRedundantResidualNodeCoordinateAlignment.AlignedNodeCount;
+            + postRedundantResidualNodeCoordinateAlignment.AlignedNodeCount
+            + postBridgeResidualNodeCoordinateAlignment.AlignedNodeCount;
         var regularizedAxisEdgeCount = initialAxisRegularization.RegularizedEdgeCount
             + postSharedNodeHostSnapAxisRegularization.RegularizedEdgeCount
             + finalAxisRegularization.RegularizedEdgeCount
             + postResidualSnapAxisRegularization.RegularizedEdgeCount
             + postPairResidualSnapAxisRegularization.RegularizedEdgeCount
-            + postRedundantResidualAxisRegularization.RegularizedEdgeCount;
+            + postRedundantResidualAxisRegularization.RegularizedEdgeCount
+            + postBridgeResidualAxisRegularization.RegularizedEdgeCount;
         var postAbsorptionCompactedEdgeCount = Math.Max(0, postAbsorptionEdgeCount - edges.Length);
         var nodes = BuildPlacementWallGraphNodes(graph, edges, calibration);
         var components = graph.Components
@@ -3722,6 +3738,8 @@ public sealed record PlacementWallGraphExport(
             $"placement wall graph split {postRedundantResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after final residual cleanup",
             $"placement wall graph suppressed {finalTinyOpeningBridgeSuppression.SuppressedBridgeCount} tiny opening bridge edge(s) whose endpoints already land on host wall runs",
             $"placement wall graph post-bridge snapped {postBridgeResidualEndpointSnap.SnappedEndpointCount} residual endpoint(s) onto host wall runs",
+            $"placement wall graph post-bridge compacted {postBridgeResidualCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postBridgeResidualSuppressedContainedEdgeCount} contained duplicate edge(s)",
+            $"placement wall graph split {postBridgeResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-bridge residual cleanup",
             "placement wall graph residual endpoint-on-host-wall candidates after cleanup: "
             + $"{residualEndpointOnHostSummary.CandidateEndpointCount} total, "
             + $"{residualEndpointOnHostSummary.CoincidentCandidateEndpointCount} coincident, "

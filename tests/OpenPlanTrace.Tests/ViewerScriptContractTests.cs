@@ -160,9 +160,16 @@ public sealed class ViewerScriptContractTests
         Assert.DoesNotContain("function wallVisualDrawLines", normalized);
         Assert.DoesNotContain("return wallRawDrawLines(wall)", normalized);
 
+        Assert.Contains("const wallQaEnabledLayers = [\n  \"walls\"\n];", normalized);
+        Assert.Contains("const graphEdges = placementGraphWallEdges(state.scan).filter(onCurrentPage);", normalized);
+        Assert.Contains("if (graphEdges.length) {", normalized);
+        Assert.Contains("placement graph edge", normalized);
+        Assert.Contains("} else {\n      state.scan.walls.filter(onCurrentPage).forEach((wall) => {", normalized);
         Assert.Contains("if (!shouldDrawWallAsPlacementWall(wall))", normalized);
-        Assert.Contains("case \"walls\":\n      return wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);", normalized);
-        Assert.Contains("case \"walls\":\n      return wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);", normalized);
+        Assert.Contains("function placementGraphWallEdges", normalized);
+        Assert.Contains("function placementGraphWallEdgeClassName", normalized);
+        Assert.Contains("return placementGraphWallEdges(scan).length\n        || wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);", normalized);
+        Assert.Contains("return placementGraphWallEdges(scan).filter(onCurrentPage).length\n        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);", normalized);
         Assert.Contains("function wallReviewTopologySpans", normalized);
         Assert.Contains("case \"wallTopologyReviewSpans\":\n      return wallReviewTopologySpanCount(scan);", normalized);
         Assert.Contains("case \"wallTopologyReviewSpans\":\n      return wallReviewTopologySpanCount(scan, state.currentPage);", normalized);

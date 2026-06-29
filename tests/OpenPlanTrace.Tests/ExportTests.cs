@@ -10322,6 +10322,9 @@ public sealed class ExportTests
             export.Evidence,
             item => item.Contains("final-compacted", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(
+            export.Evidence,
+            item => item.Contains("post-bridge compacted", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
             edge.Evidence,
             item => item.Contains("inline run merged 2 collinear edge", StringComparison.OrdinalIgnoreCase));
     }
