@@ -7634,6 +7634,88 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversContinuitySupportedTerraceExteriorUnsafeCleanFallback()
+    {
+        var result = CreateOffAxisTopologySpanResult(
+            "filled-exterior-terrace-continuity-drift",
+            new PlanPoint(222, 100),
+            sourceEndX: 222,
+            detectionKind: WallDetectionKind.ParallelLinePair,
+            wallType: WallType.Exterior,
+            category: WallEvidenceCategory.StrongWallBody,
+            assessmentEvidence:
+            [
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall type refined exterior: room evidence on both sides includes outdoor/terrace space",
+                "wall evidence: continuity-supported short paired wall body; 1 collinear structural continuation wall(s)",
+                "wall evidence geometry synchronized after wall graph topology normalization",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+            ]);
+        var sourceWall = result.Walls.Single();
+        var continuityPair = new WallPairEvidence(
+            new PlanLineSegment(new PlanPoint(100, 97), new PlanPoint(330, 97)),
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(330, 100)),
+            3,
+            1,
+            0.94,
+            42,
+            15,
+            ["first-face"],
+            ["second-face"]);
+        result = result with
+        {
+            Walls =
+            [
+                sourceWall with
+                {
+                    Thickness = 3,
+                    PairEvidence = continuityPair,
+                    FragmentEvidence = new WallFragmentEvidence(
+                        FragmentCount: 57,
+                        TotalHealedGap: 2.1,
+                        MaxHealedGap: 0.68,
+                        DuplicatePrimitiveCount: 13,
+                        GapRatio: 0.017,
+                        RequiresGeometryReview: true,
+                        Evidence:
+                        [
+                            "fragment geometry: 57 fragment(s)",
+                            "fragment geometry requires review"
+                        ]),
+                    Evidence = sourceWall.Evidence
+                        .Append("parallel wall-face pair")
+                        .Append("filled wall-solid primitive")
+                        .Append("wall evidence: filled closed vector wall body")
+                        .Append("wall type exterior: near detected floorplan/wall envelope or local outer boundary")
+                        .Append("wall type refined exterior: room evidence on both sides includes outdoor/terrace space")
+                        .Append("wall evidence: continuity-supported short paired wall body; 1 collinear structural continuation wall(s)")
+                        .Append("wall evidence geometry synchronized after wall graph topology normalization")
+                        .Append("wall evidence: geometric room boundary support from reliable room-boundary alignment")
+                        .ToArray()
+                }
+            ]
+        };
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var root = document.RootElement;
+        var wall = Assert.Single(root.GetProperty("walls").EnumerateArray());
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("source-backed fallback accepted", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_KeepsPromotedMediumShortDanglingPairedWallReturn()
     {
         var result = CreateOffAxisTopologySpanResult(

@@ -1049,6 +1049,19 @@ internal static class WallTopologySpanVisibility
             .Concat(assessment.ScoreBreakdown.PositiveEvidence)
             .Concat(component.Evidence)
             .ToArray();
+        var hasFilledWallBody =
+            ContainsEvidence(evidence, "filled wall-solid primitive")
+            && ContainsEvidence(evidence, "filled closed vector wall body");
+        var hasRoomBoundarySupport =
+            ContainsEvidence(evidence, "geometric room boundary support")
+            || ContainsEvidence(evidence, "explicit room boundary support")
+            || ContainsEvidence(evidence, "detected room evidence on both sides")
+            || ContainsEvidence(evidence, "shared by room adjacency boundary");
+        var hasContinuitySupportedSyncedWallBody =
+            hasFilledWallBody
+            && hasRoomBoundarySupport
+            && ContainsEvidence(evidence, "continuity-supported short paired wall body")
+            && ContainsEvidence(evidence, "wall evidence geometry synchronized after wall graph topology normalization");
         if (ContainsAnyEvidence(
                 evidence,
                 "outdoor covered-area boundary",
@@ -1057,7 +1070,8 @@ internal static class WallTopologySpanVisibility
                 "covered entry",
                 "covered-entry",
                 "overbygd",
-                "terrace",
+                "terrace boundary",
+                "terrace detail",
                 "railing",
                 "surface pattern",
                 "object/fixture",
@@ -1065,6 +1079,12 @@ internal static class WallTopologySpanVisibility
                 "repeated short detail",
                 "door swing",
                 "door leaf"))
+        {
+            return false;
+        }
+
+        if (ContainsEvidence(evidence, "terrace")
+            && !hasContinuitySupportedSyncedWallBody)
         {
             return false;
         }
@@ -1088,9 +1108,6 @@ internal static class WallTopologySpanVisibility
             return true;
         }
 
-        var hasFilledWallBody =
-            ContainsEvidence(evidence, "filled wall-solid primitive")
-            && ContainsEvidence(evidence, "filled closed vector wall body");
         var maxFaceFragmentCount = Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount);
         var totalFaceFragmentCount = pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount;
         return wall.DrawingLength >= MinTrustedFilledExteriorUnsafeCleanProjectionLengthDrawingUnits
