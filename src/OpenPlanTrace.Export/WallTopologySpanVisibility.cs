@@ -43,6 +43,12 @@ internal static class WallTopologySpanVisibility
     private const double MinPlacementRegularizationToleranceDrawingUnits = 1.25;
     private const double MaxPlacementRegularizationToleranceDrawingUnits = 6.0;
     private const double MinPlacementRegularizationClusterLengthDrawingUnits = 60.0;
+    private const double MinDominantExteriorAxisHostLengthDrawingUnits = 72.0;
+    private const double MinDominantExteriorAxisHostLengthRatio = 1.45;
+    private const double MaxDominantExteriorFragmentAxisSnapDrawingUnits = 6.5;
+    private const double MaxDominantExteriorFragmentAxisSnapGapDrawingUnits = 18.0;
+    private const double MaxDominantExteriorFragmentLengthRatio = 0.65;
+    private const double MaxDominantExteriorFragmentLengthDrawingUnits = 120.0;
     private const double MaxDominantAxisSkewRatio = 0.04;
     private const double MaxDominantAxisSkewDrawingUnits = 8.0;
     private const double MinSourceBackedFallbackWallLengthDrawingUnits = 48.0;
@@ -2204,11 +2210,185 @@ internal static class WallTopologySpanVisibility
         IReadOnlyList<WallGraphTopologySpan> spans)
     {
         var canonical = CanonicalizeExteriorParallelFaceSpans(spans);
-        var overlapped = MergeOverlappingCollinearPlacementSpans(canonical);
+        var dominantAxisSnapped = SnapExteriorFragmentsToDominantPlacementAxis(canonical);
+        var overlapped = MergeOverlappingCollinearPlacementSpans(dominantAxisSnapped);
         var bridged = BridgeCollinearExteriorPlacementRunGaps(overlapped);
         var endpointSnapped = SnapCleanPlacementSpanEndpointsToNearbyOrthogonalSpans(bridged);
-        var rebridged = BridgeCollinearExteriorPlacementRunGaps(endpointSnapped);
+        var resnapped = SnapExteriorFragmentsToDominantPlacementAxis(endpointSnapped);
+        var rebridged = BridgeCollinearExteriorPlacementRunGaps(resnapped);
         return SuppressContainedDuplicatePlacementSpans(MergeOverlappingCollinearPlacementSpans(rebridged));
+    }
+
+    private static IReadOnlyList<WallGraphTopologySpan> SnapExteriorFragmentsToDominantPlacementAxis(
+        IReadOnlyList<WallGraphTopologySpan> spans)
+    {
+        if (spans.Count <= 1)
+        {
+            return spans;
+        }
+
+        var replacements = new Dictionary<string, WallGraphTopologySpan>(StringComparer.Ordinal);
+        foreach (var group in spans
+            .Where(IsAxisAlignedPlacementSpan)
+            .Where(span => span.SourceWall?.WallType == WallType.Exterior)
+            .Where(span => !IsSourceBackedFallbackSpan(span))
+            .GroupBy(span => new PlacementRegularizationKey(
+                span.PageNumber,
+                WallType.Exterior,
+                ResolveAxisOrientation(span.CenterLine))))
+        {
+            var candidates = group
+                .OrderBy(span => span.DrawingLength)
+                .ThenBy(span => span.Id, StringComparer.Ordinal)
+                .ToArray();
+            foreach (var candidate in candidates)
+            {
+                if (!IsDominantExteriorAxisSnapCandidate(candidate)
+                    || !TryFindDominantExteriorAxisHost(candidate, candidates, out var host))
+                {
+                    continue;
+                }
+
+                replacements[candidate.Id] = SnapExteriorFragmentToDominantAxis(candidate, host);
+            }
+        }
+
+        if (replacements.Count == 0)
+        {
+            return spans;
+        }
+
+        return spans
+            .Select(span => replacements.TryGetValue(span.Id, out var replacement) ? replacement : span)
+            .ToArray();
+    }
+
+    private static bool IsDominantExteriorAxisSnapCandidate(WallGraphTopologySpan span)
+    {
+        if (span.DrawingLength < MinCleanRunLengthDrawingUnits
+            || span.DrawingLength > MaxDominantExteriorFragmentLengthDrawingUnits)
+        {
+            return false;
+        }
+
+        return !HasDominantExteriorAxisSnapBlockedEvidence(span);
+    }
+
+    private static bool TryFindDominantExteriorAxisHost(
+        WallGraphTopologySpan candidate,
+        IReadOnlyList<WallGraphTopologySpan> spans,
+        out DominantExteriorAxisSnapHost host)
+    {
+        host = default;
+        DominantExteriorAxisSnapHost? best = null;
+        foreach (var current in spans)
+        {
+            if (current.Id == candidate.Id
+                || current.SourceWall?.WallType != WallType.Exterior
+                || IsSourceBackedFallbackSpan(current)
+                || HasDominantExteriorAxisSnapBlockedEvidence(current)
+                || current.DrawingLength < MinDominantExteriorAxisHostLengthDrawingUnits
+                || current.DrawingLength < candidate.DrawingLength * MinDominantExteriorAxisHostLengthRatio
+                || candidate.DrawingLength > current.DrawingLength * MaxDominantExteriorFragmentLengthRatio)
+            {
+                continue;
+            }
+
+            var axisDistance = Math.Abs(AxisCoordinate(candidate) - AxisCoordinate(current));
+            if (axisDistance <= MaxOverlappingCollinearMergeAxisDistanceDrawingUnits
+                || axisDistance > MaxDominantExteriorFragmentAxisSnapDrawingUnits)
+            {
+                continue;
+            }
+
+            if (!HasDominantExteriorAxisIntervalSupport(candidate, current, out var intervalGap, out var overlapRatio))
+            {
+                continue;
+            }
+
+            var score = axisDistance + (intervalGap * 0.25) + ((1 - overlapRatio) * 2.0);
+            var next = new DominantExteriorAxisSnapHost(current, axisDistance, intervalGap, overlapRatio, score);
+            if (best is null
+                || next.Score < best.Value.Score
+                || (Math.Abs(next.Score - best.Value.Score) <= 0.001
+                    && next.Span.DrawingLength > best.Value.Span.DrawingLength))
+            {
+                best = next;
+            }
+        }
+
+        if (best is null)
+        {
+            return false;
+        }
+
+        host = best.Value;
+        return true;
+    }
+
+    private static bool HasDominantExteriorAxisSnapBlockedEvidence(WallGraphTopologySpan span)
+    {
+        var evidence = (span.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(span.Evidence)
+            .ToArray();
+        return ContainsAnyEvidence(
+            evidence,
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "dimension",
+            "door leaf",
+            "door swing",
+            "fixture detail",
+            "object/fixture",
+            "opening detail",
+            "overbygd",
+            "railing",
+            "repeated short detail",
+            "stair",
+            "surface pattern",
+            "terrace detail",
+            "witness/extension",
+            "non-wall");
+    }
+
+    private static bool HasDominantExteriorAxisIntervalSupport(
+        WallGraphTopologySpan candidate,
+        WallGraphTopologySpan host,
+        out double intervalGap,
+        out double overlapRatio)
+    {
+        var candidateMin = AxisMin(candidate.CenterLine);
+        var candidateMax = AxisMax(candidate.CenterLine);
+        var hostMin = AxisMin(host.CenterLine);
+        var hostMax = AxisMax(host.CenterLine);
+        var overlap = Math.Min(candidateMax, hostMax) - Math.Max(candidateMin, hostMin);
+        intervalGap = IntervalGap(candidateMin, candidateMax, hostMin, hostMax);
+        overlapRatio = Math.Max(0, overlap) / Math.Max(candidate.DrawingLength, 0.001);
+
+        return intervalGap > 0.001
+            && intervalGap <= MaxDominantExteriorFragmentAxisSnapGapDrawingUnits;
+    }
+
+    private static WallGraphTopologySpan SnapExteriorFragmentToDominantAxis(
+        WallGraphTopologySpan candidate,
+        DominantExteriorAxisSnapHost host)
+    {
+        var orientation = ResolveAxisOrientation(candidate.CenterLine);
+        var targetCoordinate = AxisCoordinate(host.Span);
+        var line = orientation == PlacementRunOrientation.Horizontal
+            ? new PlanLineSegment(
+                new PlanPoint(candidate.CenterLine.Start.X, targetCoordinate),
+                new PlanPoint(candidate.CenterLine.End.X, targetCoordinate))
+            : new PlanLineSegment(
+                new PlanPoint(targetCoordinate, candidate.CenterLine.Start.Y),
+                new PlanPoint(targetCoordinate, candidate.CenterLine.End.Y));
+        var evidence =
+            "clean placement dominant exterior axis snap: aligned short exterior fragment to dominant exterior span "
+            + $"{host.Span.Id}; axis shift {host.AxisDistance:0.###}, interval gap "
+            + $"{host.IntervalGap:0.###}, overlap ratio {host.OverlapRatio:0.###}";
+
+        return RebuildPlacementSpanLine(candidate, line, [evidence], host.AxisDistance);
     }
 
     private static IReadOnlyList<WallGraphTopologySpan> SnapCleanPlacementSpanEndpointsToNearbyOrthogonalSpans(
@@ -2388,6 +2568,21 @@ internal static class WallTopologySpanVisibility
         if (value > max)
         {
             return value - max;
+        }
+
+        return 0;
+    }
+
+    private static double IntervalGap(double firstMin, double firstMax, double secondMin, double secondMax)
+    {
+        if (firstMax < secondMin)
+        {
+            return secondMin - firstMax;
+        }
+
+        if (secondMax < firstMin)
+        {
+            return firstMin - secondMax;
         }
 
         return 0;
@@ -4187,6 +4382,13 @@ internal static class WallTopologySpanVisibility
     private readonly record struct ContainedDuplicatePlacementKey(
         int PageNumber,
         PlacementRunOrientation Orientation);
+
+    private readonly record struct DominantExteriorAxisSnapHost(
+        WallGraphTopologySpan Span,
+        double AxisDistance,
+        double IntervalGap,
+        double OverlapRatio,
+        double Score);
 
     private readonly record struct CleanSpanInterval(double Start, double End);
 

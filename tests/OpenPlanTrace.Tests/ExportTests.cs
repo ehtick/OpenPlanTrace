@@ -800,6 +800,73 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_SnapsOffsetExteriorContinuationToDominantAxisBeforeBridge()
+    {
+        var result = CreateContainedDuplicatePlacementRunResult(
+            new PlanLineSegment(new PlanPoint(304, 106), new PlanPoint(345, 106)),
+            wallType: WallType.Exterior);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+
+        var span = Assert.Single(document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .SelectMany(wall => wall.GetProperty("topologySpans").EnumerateArray()));
+        var centerLine = span.GetProperty("centerLine");
+
+        Assert.Equal(100, centerLine.GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(100, centerLine.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(345, centerLine.GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(100, centerLine.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("dominant exterior axis snap", StringComparison.OrdinalIgnoreCase) == true);
+
+        var wallGraph = document.RootElement.GetProperty("wallGraph");
+        var edge = Assert.Single(wallGraph.GetProperty("edges").EnumerateArray());
+        Assert.Equal(245, edge.GetProperty("drawingLength").GetDouble(), precision: 3);
+        Assert.Equal(2, wallGraph.GetProperty("nodes").GetArrayLength());
+    }
+
+    [Fact]
+    public void PlacementExporter_DoesNotSnapExteriorContinuationToDimensionLikeHost()
+    {
+        var result = CreateContainedDuplicatePlacementRunResult(
+            new PlanLineSegment(new PlanPoint(304, 106), new PlanPoint(345, 106)),
+            wallType: WallType.Exterior);
+        result = result with
+        {
+            Walls = result.Walls
+                .Select(wall => wall.Id == "duplicate-long-wall"
+                    ? wall with
+                    {
+                        Evidence = wall.Evidence
+                            .Append("layer evidence: contains dimension-like text")
+                            .ToArray()
+                    }
+                    : wall)
+                .ToArray()
+        };
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+
+        var spans = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .SelectMany(wall => wall.GetProperty("topologySpans").EnumerateArray())
+            .ToArray();
+
+        Assert.Equal(2, spans.Length);
+        Assert.DoesNotContain(
+            spans.SelectMany(span => span.GetProperty("evidence").EnumerateArray()),
+            evidence => evidence.GetString()?.Contains("dominant exterior axis snap", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
     public void PlacementExporter_KeepsSmallGapsBetweenCollinearInteriorCleanPlacementRunsSeparate()
     {
         var result = CreateCollinearGapPlacementRunResult(WallType.Interior);
