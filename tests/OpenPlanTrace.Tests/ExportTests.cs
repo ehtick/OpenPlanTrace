@@ -4786,6 +4786,101 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversRoomBoundaryShortExteriorReviewWallSolid()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.94,
+            pairOverlapRatio: 1,
+            faceSeparation: 4.25,
+            firstFaceFragmentCount: 1,
+            secondFaceFragmentCount: 1,
+            wallLength: 33,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.SecondaryStructural,
+            category: WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            evidence:
+            [
+                "filled wall-solid primitive",
+                "parallel wall-face pair",
+                "wall evidence: filled closed vector wall body",
+                "wall type refined exterior: room evidence on both sides includes outdoor/terrace space",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment",
+                "one endpoint supported by structural context",
+                "pair score 0.94",
+                "overlap ratio 1"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("geometric room-boundary support", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(33, topologySpan.GetProperty("drawingLength").GetDouble(), precision: 3);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_DoesNotRecoverRoomBoundaryShortExteriorReviewWallSolidWhenSurfaceDetailExists()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.94,
+            pairOverlapRatio: 1,
+            faceSeparation: 4.25,
+            firstFaceFragmentCount: 1,
+            secondFaceFragmentCount: 1,
+            wallLength: 33,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.SecondaryStructural,
+            category: WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            evidence:
+            [
+                "filled wall-solid primitive",
+                "parallel wall-face pair",
+                "wall evidence: filled closed vector wall body",
+                "wall type refined exterior: room evidence on both sides includes outdoor/terrace space",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment",
+                "one endpoint supported by structural context",
+                "wall overlaps non-structural surface/detail pattern page:1:surface-pattern:001 at wall overlap ratio 1",
+                "pair score 0.94",
+                "overlap ratio 1"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal("wall_evidence_review_required", wall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversShortRecoveredRoomBoundaryWhenGraphSpanIsMissing()
     {
         var result = CreateShortRecoveredRoomBoundaryFallbackResult();
@@ -8512,6 +8607,125 @@ public sealed class ExportTests
         Assert.Contains(
             host.Evidence,
             item => item.Contains("inline run merged 2 collinear edge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PlacementWallGraphExport_RejoinsStructuralHostWallAcrossProtectedInlineJunction()
+    {
+        var nodes = new[]
+        {
+            SyntheticNode("protected-structural-node-left", 80, 100, WallNodeKind.Endpoint),
+            SyntheticNode("protected-structural-node-junction", 160, 100, WallNodeKind.TJunction),
+            SyntheticNode("protected-structural-node-right", 240, 100, WallNodeKind.Endpoint),
+            SyntheticNode("protected-structural-node-top", 160, 60, WallNodeKind.Endpoint)
+        };
+        var edges = new[]
+        {
+            new WallEdge(
+                "protected-structural-host-left-edge",
+                1,
+                nodes[0].Id,
+                nodes[1].Id,
+                "protected-structural-host-left-wall",
+                Confidence.High),
+            new WallEdge(
+                "protected-structural-host-right-edge",
+                1,
+                nodes[1].Id,
+                nodes[2].Id,
+                "protected-structural-host-right-wall",
+                Confidence.High),
+            new WallEdge(
+                "protected-structural-branch-edge",
+                1,
+                nodes[3].Id,
+                nodes[1].Id,
+                "protected-structural-branch-wall",
+                Confidence.High)
+        };
+        var spans = new[]
+        {
+            StructuralSpan(
+                edges[0],
+                new PlanLineSegment(new PlanPoint(80, 100), new PlanPoint(160, 100))),
+            StructuralSpan(
+                edges[1],
+                new PlanLineSegment(new PlanPoint(160, 100), new PlanPoint(240, 100))),
+            StructuralSpan(
+                edges[2],
+                new PlanLineSegment(new PlanPoint(160, 60), new PlanPoint(160, 100)))
+        };
+        var component = new WallGraphComponent(
+            "protected-structural-component",
+            1,
+            WallGraphComponentKind.MainStructural,
+            new PlanRect(78, 58, 164, 44),
+            edges.Select(edge => edge.WallId).ToArray(),
+            nodes.Select(node => node.Id).ToArray(),
+            edges.Select(edge => edge.Id).ToArray(),
+            spans.SelectMany(span => span.SourcePrimitiveIds).ToArray(),
+            spans.Sum(span => span.DrawingLength),
+            Confidence.High,
+            ["synthetic protected structural inline junction"]);
+        var componentLookup = edges
+            .Select(edge => edge.WallId)
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(id => id, _ => component, StringComparer.Ordinal);
+
+        var export = PlacementWallGraphExport.From(
+            new WallGraph(nodes, edges, [component]),
+            spans,
+            PlanCalibration.Empty,
+            new Dictionary<string, PrimitiveSourceExport>(StringComparer.Ordinal),
+            componentLookup,
+            new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal));
+
+        var host = Assert.Single(export.Edges, edge =>
+            edge.SourceWallGraphEdgeIds.Contains("protected-structural-host-left-edge")
+            && edge.SourceWallGraphEdgeIds.Contains("protected-structural-host-right-edge"));
+        var branch = Assert.Single(export.Edges, edge => edge.Id == "protected-structural-branch-edge");
+        var junction = Assert.Single(export.Nodes, node => node.Id == "protected-structural-node-junction");
+
+        Assert.Equal(2, export.Edges.Count);
+        Assert.Equal(160, host.DrawingLength, precision: 3);
+        Assert.Equal("protected-structural-node-left", host.FromNodeId);
+        Assert.Equal("protected-structural-node-right", host.ToNodeId);
+        Assert.Equal("protected-structural-node-junction", branch.ToNodeId);
+        Assert.Equal("TJunction", junction.Kind);
+        Assert.Contains(
+            junction.Evidence,
+            item => item.Contains("attached to host wall edge", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            host.Evidence,
+            item => item.Contains("inline run merged 2 collinear edge", StringComparison.OrdinalIgnoreCase));
+
+        static WallGraphTopologySpan StructuralSpan(WallEdge edge, PlanLineSegment centerLine)
+        {
+            var bounds = centerLine.Bounds.Inflate(2);
+            return new WallGraphTopologySpan(
+                edge.Id,
+                1,
+                edge.WallId,
+                edge.FromNodeId,
+                edge.ToNodeId,
+                centerLine,
+                bounds,
+                centerLine.Length,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                4,
+                Confidence.High,
+                [edge.WallId],
+                [edge.Id],
+                ["synthetic structural placement span"],
+                null);
+        }
     }
 
     [Fact]
@@ -13156,7 +13370,9 @@ public sealed class ExportTests
         IReadOnlyList<string>? componentEvidence = null,
         IReadOnlyList<string>? evidence = null,
         bool includeRoomReference = false,
-        WallType? nearbyGraphWallType = null)
+        WallType? nearbyGraphWallType = null,
+        bool placementReady = true,
+        bool requiresReview = false)
     {
         var wallEndX = 80 + wallLength;
         var wallEvidence = evidence ??
@@ -13224,8 +13440,8 @@ public sealed class ExportTests
                 item.Bounds,
                 item.Id == wall.Id ? category : WallEvidenceCategory.StrongWallBody,
                 Confidence.High,
-                PlacementReady: true,
-                RequiresReview: false,
+                PlacementReady: item.Id == wall.Id ? placementReady : true,
+                RequiresReview: item.Id == wall.Id ? requiresReview : false,
                 RejectedAsNoise: false,
                 item.SourcePrimitiveIds,
                 item.Id == wall.Id ? wallEvidence : ["synthetic accepted nearby graph wall body"]))
