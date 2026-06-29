@@ -4719,6 +4719,64 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversInferredExteriorShellWhenSourceLineSupportIsStrong()
+    {
+        var result = CreateInferredExteriorShellFallbackResult();
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "page:1:wall-exterior-shell-inferred:001");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("inferred exterior shell has strong room-boundary and source-line support", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(70, topologySpan.GetProperty("drawingLength").GetDouble(), precision: 3);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_DoesNotRecoverInferredExteriorShellWhenSourceLineSupportIsWeak()
+    {
+        var result = CreateInferredExteriorShellFallbackResult(sourceLineCoverage: 0.48);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "page:1:wall-exterior-shell-inferred:001");
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "no_clean_topology_spans",
+            wall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_DoesNotRecoverShortExteriorWallSolidWhenSurfaceDetailEvidenceExists()
     {
         var result = CreateSourceBackedFallbackWallResult(
@@ -13052,6 +13110,79 @@ public sealed class ExportTests
                 assessments,
                 walls.Count,
                 0)
+        };
+    }
+
+    private static PlanScanResult CreateInferredExteriorShellFallbackResult(
+        double sourceLineCoverage = 1,
+        int sourcePrimitiveCount = 20,
+        IReadOnlyList<string>? extraEvidence = null)
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            wallLength: 70,
+            wallType: WallType.Exterior,
+            category: WallEvidenceCategory.RecoveredWallBody);
+        var sourcePrimitiveIds = Enumerable.Range(1, sourcePrimitiveCount)
+            .Select(index => $"inferred-shell-source-{index:000}")
+            .ToArray();
+        var sourceLineCoverageText = sourceLineCoverage.ToString("0.###", CultureInfo.InvariantCulture);
+        var evidence = new[]
+            {
+                "wall evidence: inferred exterior shell wall from indoor room boundary with outside on opposite side",
+                "wall evidence: exterior-shell inference room page:1:room:7, outside side top, overlap length 70, sample offset 12",
+                $"wall evidence: exterior-shell inference source-line support coverage {sourceLineCoverageText} from {sourcePrimitiveCount.ToString(CultureInfo.InvariantCulture)} primitive(s)"
+            }
+            .Concat(extraEvidence ?? Array.Empty<string>())
+            .ToArray();
+        var sourceWall = result.Walls.Single(item => item.Id == "source-backed-fallback-wall");
+        var inferredWall = sourceWall with
+        {
+            Id = "page:1:wall-exterior-shell-inferred:001",
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Exterior,
+            PairEvidence = null,
+            FragmentEvidence = null,
+            SourcePrimitiveIds = sourcePrimitiveIds,
+            Confidence = new Confidence(0.66),
+            Evidence = evidence
+        };
+        var assessment = new WallEvidenceWallAssessment(
+            inferredWall.Id,
+            inferredWall.PageNumber,
+            inferredWall.Bounds,
+            WallEvidenceCategory.RecoveredWallBody,
+            new Confidence(0.66),
+            PlacementReady: true,
+            RequiresReview: false,
+            RejectedAsNoise: false,
+            sourcePrimitiveIds,
+            evidence)
+        {
+            Decision = WallEvidenceDecision.Accept,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.66,
+                NegativeScore: 0,
+                DecisionScore: 0.66,
+                PairSupportScore: 0,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.44,
+                RecoverySupportScore: 0.22,
+                NoisePenalty: 0,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence: evidence,
+                NegativeEvidence: Array.Empty<string>())
+        };
+
+        return result with
+        {
+            Walls = [inferredWall],
+            WallGraph = WallGraph.Empty,
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                [assessment],
+                SourceCandidateWallCount: 1,
+                RecoveredCandidateWallCount: 1)
         };
     }
 
