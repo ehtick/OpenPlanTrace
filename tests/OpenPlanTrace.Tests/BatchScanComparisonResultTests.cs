@@ -155,6 +155,14 @@ public sealed class BatchScanComparisonResultTests
                 wallPlacementReady: 55,
                 wallPlacementRepresented: 37,
                 wallPlacementOmitted: 92,
+                importReadiness: ImportReadiness(
+                    score: 0.838,
+                    coordinateRatio: 0.837,
+                    coordinateReady: 92,
+                    coordinateTracked: 110,
+                    metricRatio: 0.837,
+                    metricReady: 92,
+                    metricTracked: 110),
                 omissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
                 {
                     ["duplicate_clean_topology_span"] = 30,
@@ -166,6 +174,14 @@ public sealed class BatchScanComparisonResultTests
                 wallPlacementReady: 54,
                 wallPlacementRepresented: 38,
                 wallPlacementOmitted: 93,
+                importReadiness: ImportReadiness(
+                    score: 0.837,
+                    coordinateRatio: 0.833,
+                    coordinateReady: 92,
+                    coordinateTracked: 110,
+                    metricRatio: 0.833,
+                    metricReady: 92,
+                    metricTracked: 110),
                 omissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
                 {
                     ["duplicate_clean_topology_span"] = 31,
@@ -185,6 +201,15 @@ public sealed class BatchScanComparisonResultTests
         Assert.Contains(comparison.Signals, signal =>
             signal.Code == "wall_placement.omission.duplicate_clean_topology_span_represented_increased"
             && signal.Severity == BatchScanComparisonSignalSeverity.Info);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.Code == "import_readiness.score_represented_offset"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Info);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.Code == "import_readiness.coordinate_ratio_represented_offset"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Info);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.Code == "import_readiness.metric_ratio_represented_offset"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Info);
         Assert.DoesNotContain(comparison.Signals, signal =>
             signal.Code == "wall_placement.ready_decreased"
             && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
@@ -194,16 +219,27 @@ public sealed class BatchScanComparisonResultTests
         Assert.DoesNotContain(comparison.Signals, signal =>
             signal.Code == "wall_placement.omission.duplicate_clean_topology_span_increased"
             && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.Code == "import_readiness.score_regressed"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.Code == "import_readiness.coordinate_ratio_regressed"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.Code == "import_readiness.metric_ratio_regressed"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
 
         var item = Assert.Single(comparison.Items);
         Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementReady" && delta.Delta == -1);
         Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementRepresented" && delta.Delta == 1);
         Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementEffective" && delta.Delta == 0);
         Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementOmitted" && delta.Delta == 1);
+        Assert.Contains(item.Deltas, delta => delta.Name == "importReadinessScore" && Math.Round(delta.Delta!.Value, 3) == -0.001);
 
         var markdown = BatchScanComparisonMarkdownReport.Create(comparison);
         Assert.Contains("wall_placement.ready_represented_offset", markdown);
         Assert.Contains("wall_placement.omitted_represented_offset", markdown);
+        Assert.Contains("import_readiness.score_represented_offset", markdown);
     }
 
     [Fact]

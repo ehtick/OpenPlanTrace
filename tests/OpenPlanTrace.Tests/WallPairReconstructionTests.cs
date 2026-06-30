@@ -475,6 +475,52 @@ public sealed class WallPairReconstructionTests
     }
 
     [Fact]
+    public async Task ScanAsync_KeepsContinuousHighFragmentRunCoordinateStable()
+    {
+        var primitives = new List<PlanPrimitive>();
+        for (var index = 0; index < 90; index++)
+        {
+            var x = 80 + (index * 4);
+            primitives.Add(UnlayeredLine(
+                $"continuous-wall-fragment-{index}",
+                new PlanPoint(x, 120),
+                new PlanPoint(x + 4, 120)));
+        }
+
+        var document = new PlanDocument(
+            "continuous-high-fragment-wall",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(520, 240),
+                    primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        var wall = Assert.Single(result.Walls);
+        Assert.Equal(WallDetectionKind.FragmentMerged, wall.DetectionKind);
+        var fragmentEvidence = Assert.IsType<WallFragmentEvidence>(wall.FragmentEvidence);
+        Assert.Equal(90, fragmentEvidence.FragmentCount);
+        Assert.Equal(0, fragmentEvidence.TotalHealedGap);
+        Assert.False(fragmentEvidence.RequiresGeometryReview);
+        Assert.True(wall.Confidence.Value > 0.54);
+        Assert.DoesNotContain(
+            wall.Evidence,
+            item => item.Contains("requires review", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            result.Diagnostics.Messages,
+            diagnostic => diagnostic.Code == "walls.fragment_merged_geometry.review");
+
+        using var placementDocument = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(result));
+        var placementFragmentEvidence = placementDocument.RootElement
+            .GetProperty("walls")[0]
+            .GetProperty("fragmentEvidence");
+        Assert.False(placementFragmentEvidence.GetProperty("requiresGeometryReview").GetBoolean());
+    }
+
+    [Fact]
     public async Task ScanAsync_ReconstructsParallelPairsFromFragmentedWallFaces()
     {
         var document = new PlanDocument(

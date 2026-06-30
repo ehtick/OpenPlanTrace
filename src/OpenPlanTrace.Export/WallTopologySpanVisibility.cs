@@ -3464,13 +3464,21 @@ internal static class WallTopologySpanVisibility
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var sourceWall = span.SourceWall;
-        if (sourceWall is null || sourceWall.CenterLine.Length <= 0.001)
+        if (sourceWall is null
+            || sourceWall.CenterLine.Length <= 0.001
+            || IsMultiSourceBridgeSpan(span))
         {
             return span with
             {
                 CenterLine = line,
                 Bounds = bounds,
                 DrawingLength = line.Length,
+                SourceWallStartOffsetDrawingUnits = null,
+                SourceWallEndOffsetDrawingUnits = null,
+                SourceWallProjectedLengthDrawingUnits = null,
+                SourceWallStartParameter = null,
+                SourceWallEndParameter = null,
+                SourceWallCenterParameter = null,
                 SourceWallStartProjectionDistanceDrawingUnits = MaxNullable(
                     span.SourceWallStartProjectionDistanceDrawingUnits,
                     maxEndpointShift),
@@ -3505,6 +3513,9 @@ internal static class WallTopologySpanVisibility
             Evidence = evidence
         };
     }
+
+    private static bool IsMultiSourceBridgeSpan(WallGraphTopologySpan span) =>
+        ContainsEvidence(span.Evidence, "clean placement multi-source bridge");
 
     private static IReadOnlyList<WallGraphTopologySpan> MergeOverlappingCollinearPlacementSpans(
         IReadOnlyList<WallGraphTopologySpan> spans)
@@ -4055,7 +4066,7 @@ internal static class WallTopologySpanVisibility
             second,
             gap,
             "clean placement exterior run bridge: bridged collinear exterior placement spans",
-            emitSingleSourceProjection: true);
+            emitSingleSourceProjection: false);
 
     private static WallGraphTopologySpan CreateMultiSourceBridgedCollinearPlacementSpan(
         WallGraphTopologySpan first,

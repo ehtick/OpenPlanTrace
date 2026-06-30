@@ -476,6 +476,9 @@ internal sealed record BatchScanComparisonResult(
         BatchScanComparisonOptions options,
         ICollection<BatchScanComparisonSignal> signals)
     {
+        var representedWallOffset =
+            IsStableWallCoverageRepresentedOffset(baseline.WallPlacement, candidate.WallPlacement);
+
         if (!string.Equals(baseline.ImportReadiness.Grade, candidate.ImportReadiness.Grade, StringComparison.OrdinalIgnoreCase))
         {
             var baselineRank = ImportReadinessGradeRank(baseline.ImportReadiness.Grade);
@@ -516,7 +519,8 @@ internal sealed record BatchScanComparisonResult(
             baseline.ImportReadiness.Score,
             candidate.ImportReadiness.Score,
             options.ImportReadinessScoreChangeThreshold,
-            signals);
+            signals,
+            representedWallOffset);
         AddOptionalScoreSignal(
             key,
             "import_readiness.coordinate_ratio",
@@ -524,7 +528,8 @@ internal sealed record BatchScanComparisonResult(
             baseline.ImportReadiness.CoordinateReadyRatio,
             candidate.ImportReadiness.CoordinateReadyRatio,
             options.ImportReadinessScoreChangeThreshold,
-            signals);
+            signals,
+            representedWallOffset);
         AddOptionalScoreSignal(
             key,
             "import_readiness.metric_ratio",
@@ -532,7 +537,8 @@ internal sealed record BatchScanComparisonResult(
             baseline.ImportReadiness.MetricReadyRatio,
             candidate.ImportReadiness.MetricReadyRatio,
             options.ImportReadinessScoreChangeThreshold,
-            signals);
+            signals,
+            representedWallOffset);
 
         AddReadinessBoolSignal(
             key,
@@ -707,11 +713,23 @@ internal sealed record BatchScanComparisonResult(
         double baseline,
         double candidate,
         double threshold,
-        ICollection<BatchScanComparisonSignal> signals)
+        ICollection<BatchScanComparisonSignal> signals,
+        bool suppressRegressionForRepresentedWallOffset = false)
     {
         var delta = candidate - baseline;
         if (delta <= -threshold)
         {
+            if (suppressRegressionForRepresentedWallOffset)
+            {
+                signals.Add(Info(
+                    key,
+                    $"{codePrefix}_represented_offset",
+                    $"Candidate {label} decreased, but effective wall-placement coverage is stable through represented wall consolidation.",
+                    FormatRatio(baseline),
+                    FormatRatio(candidate)));
+                return;
+            }
+
             signals.Add(Regression(
                 key,
                 $"{codePrefix}_regressed",
@@ -737,14 +755,23 @@ internal sealed record BatchScanComparisonResult(
         double? baseline,
         double? candidate,
         double threshold,
-        ICollection<BatchScanComparisonSignal> signals)
+        ICollection<BatchScanComparisonSignal> signals,
+        bool suppressRegressionForRepresentedWallOffset = false)
     {
         if (baseline is null || candidate is null)
         {
             return;
         }
 
-        AddScoreSignal(key, codePrefix, label, baseline.Value, candidate.Value, threshold, signals);
+        AddScoreSignal(
+            key,
+            codePrefix,
+            label,
+            baseline.Value,
+            candidate.Value,
+            threshold,
+            signals,
+            suppressRegressionForRepresentedWallOffset);
     }
 
     private static void AddReadinessBoolSignal(
@@ -994,6 +1021,13 @@ internal sealed record BatchScanComparisonResult(
 
     private static int EffectiveWallPlacementCount(BatchWallPlacementSummary summary) =>
         summary.PlacementReadyWallCount + summary.RepresentedWallCount;
+
+    private static bool IsStableWallCoverageRepresentedOffset(
+        BatchWallPlacementSummary baseline,
+        BatchWallPlacementSummary candidate) =>
+        candidate.PlacementReadyWallCount < baseline.PlacementReadyWallCount
+        && candidate.RepresentedWallCount > baseline.RepresentedWallCount
+        && EffectiveWallPlacementCount(candidate) >= EffectiveWallPlacementCount(baseline);
 
     private static string WallPlacementSummaryText(BatchWallPlacementSummary summary) =>
         $"ready {summary.PlacementReadyWallCount.ToString(CultureInfo.InvariantCulture)}, represented {summary.RepresentedWallCount.ToString(CultureInfo.InvariantCulture)}, effective {EffectiveWallPlacementCount(summary).ToString(CultureInfo.InvariantCulture)}, review {summary.PlacementReviewWallCount.ToString(CultureInfo.InvariantCulture)}, omitted {summary.PlacementOmittedWallCount.ToString(CultureInfo.InvariantCulture)}";

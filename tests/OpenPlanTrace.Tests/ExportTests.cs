@@ -796,6 +796,11 @@ public sealed class ExportTests
         Assert.Contains(
             span.GetProperty("evidence").EnumerateArray(),
             evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("multi-source bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(JsonValueKind.Null, span.GetProperty("sourceWallStartParameter").ValueKind);
+        Assert.Equal(JsonValueKind.Null, span.GetProperty("sourceWallEndParameter").ValueKind);
         Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
     }
 

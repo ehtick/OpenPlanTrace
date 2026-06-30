@@ -4450,6 +4450,7 @@ internal sealed class WallDetectionStage : IPipelineStage
             run.FragmentCount,
             run.TotalGapLength,
             run.MaxGapLength,
+            run.DuplicatePrimitiveCount,
             length,
             run.LayerEvidence,
             options);
@@ -4479,6 +4480,7 @@ internal sealed class WallDetectionStage : IPipelineStage
             run.FragmentCount,
             run.TotalGapLength,
             run.MaxGapLength,
+            run.DuplicatePrimitiveCount,
             length,
             run.LayerEvidence,
             options);
@@ -4534,6 +4536,7 @@ internal sealed class WallDetectionStage : IPipelineStage
         int fragmentCount,
         double totalGapLength,
         double maxGapLength,
+        int duplicatePrimitiveCount,
         double length,
         IEnumerable<string> layerEvidence,
         ScannerOptions options)
@@ -4544,7 +4547,11 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         var gapRatio = totalGapLength / Math.Max(1, length);
-        return fragmentCount >= 80
+        var continuousHighFragmentRun = fragmentCount >= 80
+            && totalGapLength <= 0.001
+            && maxGapLength <= 0.001
+            && duplicatePrimitiveCount <= 2;
+        return (fragmentCount >= 80 && !continuousHighFragmentRun)
             || (fragmentCount >= 40 && totalGapLength > options.WallMergeTolerance)
             || (fragmentCount >= 16 && gapRatio >= 0.08)
             || (fragmentCount >= 24 && maxGapLength >= Math.Max(options.WallSnapTolerance, options.MaxWallFragmentGap * 0.8));
