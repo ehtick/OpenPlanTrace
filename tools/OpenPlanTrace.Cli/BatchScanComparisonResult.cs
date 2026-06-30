@@ -580,14 +580,56 @@ internal sealed record BatchScanComparisonResult(
         BatchScanComparisonOptions options,
         ICollection<BatchScanComparisonSignal> signals)
     {
-        AddCountMoreIsBetterSignal(
-            key,
-            "wall_placement.ready",
-            "placement-ready wall count",
-            baseline.WallPlacement.PlacementReadyWallCount,
-            candidate.WallPlacement.PlacementReadyWallCount,
-            options.WallPlacementCountChangeThreshold,
-            signals);
+        var baselineReady = baseline.WallPlacement.PlacementReadyWallCount;
+        var candidateReady = candidate.WallPlacement.PlacementReadyWallCount;
+        var baselineEffective = EffectiveWallPlacementCount(baseline.WallPlacement);
+        var candidateEffective = EffectiveWallPlacementCount(candidate.WallPlacement);
+        var readyDelta = candidateReady - baselineReady;
+        var effectiveDelta = candidateEffective - baselineEffective;
+        if (effectiveDelta != readyDelta)
+        {
+            AddCountMoreIsBetterSignal(
+                key,
+                "wall_placement.effective",
+                "effective wall-placement coverage",
+                baselineEffective,
+                candidateEffective,
+                options.WallPlacementCountChangeThreshold,
+                signals);
+        }
+
+        if (readyDelta <= -options.WallPlacementCountChangeThreshold
+            && effectiveDelta >= 0)
+        {
+            signals.Add(Info(
+                key,
+                "wall_placement.ready_represented_offset",
+                "Candidate placement-ready wall count decreased, but represented wall coverage offsets the drop.",
+                WallPlacementSummaryText(baseline.WallPlacement),
+                WallPlacementSummaryText(candidate.WallPlacement)));
+        }
+        else if (readyDelta >= options.WallPlacementCountChangeThreshold
+                 && effectiveDelta <= 0)
+        {
+            signals.Add(Info(
+                key,
+                "wall_placement.ready_represented_tradeoff",
+                "Candidate placement-ready wall count increased, but represented wall coverage fell enough to offset it.",
+                WallPlacementSummaryText(baseline.WallPlacement),
+                WallPlacementSummaryText(candidate.WallPlacement)));
+        }
+        else
+        {
+            AddCountMoreIsBetterSignal(
+                key,
+                "wall_placement.ready",
+                "placement-ready wall count",
+                baselineReady,
+                candidateReady,
+                options.WallPlacementCountChangeThreshold,
+                signals);
+        }
+
         AddCountLessIsBetterSignal(
             key,
             "wall_placement.review",
@@ -596,14 +638,33 @@ internal sealed record BatchScanComparisonResult(
             candidate.WallPlacement.PlacementReviewWallCount,
             options.WallPlacementCountChangeThreshold,
             signals);
-        AddCountLessIsBetterSignal(
-            key,
-            "wall_placement.omitted",
-            "omitted wall candidate count",
-            baseline.WallPlacement.PlacementOmittedWallCount,
-            candidate.WallPlacement.PlacementOmittedWallCount,
-            options.WallPlacementCountChangeThreshold,
-            signals);
+        var omittedDelta = candidate.WallPlacement.PlacementOmittedWallCount
+            - baseline.WallPlacement.PlacementOmittedWallCount;
+        var representedOmissionDelta =
+            RepresentedOmissionCount(candidate.WallPlacement)
+            - RepresentedOmissionCount(baseline.WallPlacement);
+        if (omittedDelta >= options.WallPlacementCountChangeThreshold
+            && effectiveDelta >= 0
+            && representedOmissionDelta >= omittedDelta)
+        {
+            signals.Add(Info(
+                key,
+                "wall_placement.omitted_represented_offset",
+                "Candidate omitted wall count increased only through represented duplicate/context wall consolidation.",
+                WallPlacementSummaryText(baseline.WallPlacement),
+                WallPlacementSummaryText(candidate.WallPlacement)));
+        }
+        else
+        {
+            AddCountLessIsBetterSignal(
+                key,
+                "wall_placement.omitted",
+                "omitted wall candidate count",
+                baseline.WallPlacement.PlacementOmittedWallCount,
+                candidate.WallPlacement.PlacementOmittedWallCount,
+                options.WallPlacementCountChangeThreshold,
+                signals);
+        }
 
         foreach (var reason in baseline.WallPlacement.OmissionCounts.Keys
                      .Concat(candidate.WallPlacement.OmissionCounts.Keys)
@@ -616,6 +677,18 @@ internal sealed record BatchScanComparisonResult(
             var candidateCount = candidate.WallPlacement.OmissionCounts.TryGetValue(reason, out var candidateReasonCount)
                 ? candidateReasonCount
                 : 0;
+            if (IsRepresentedOmissionReason(reason))
+            {
+                AddRepresentedOmissionReasonSignal(
+                    key,
+                    reason,
+                    baselineCount,
+                    candidateCount,
+                    options.WallPlacementOmissionReasonChangeThreshold,
+                    signals);
+                continue;
+            }
+
             AddCountLessIsBetterSignal(
                 key,
                 $"wall_placement.omission.{reason}",
@@ -902,6 +975,7 @@ internal sealed record BatchScanComparisonResult(
             CountDelta("visualErrorIssues", baseline.VisualSnapshot.ErrorIssueCount, candidate.VisualSnapshot.ErrorIssueCount),
             NumberDelta("visualMaxDetectionCoverage", baseline.VisualSnapshot.MaxDetectionCoverage, candidate.VisualSnapshot.MaxDetectionCoverage, "ratio"),
             CountDelta("wallPlacementReady", baseline.WallPlacement.PlacementReadyWallCount, candidate.WallPlacement.PlacementReadyWallCount),
+            CountDelta("wallPlacementEffective", EffectiveWallPlacementCount(baseline.WallPlacement), EffectiveWallPlacementCount(candidate.WallPlacement)),
             CountDelta("wallPlacementReview", baseline.WallPlacement.PlacementReviewWallCount, candidate.WallPlacement.PlacementReviewWallCount),
             CountDelta("wallPlacementOmitted", baseline.WallPlacement.PlacementOmittedWallCount, candidate.WallPlacement.PlacementOmittedWallCount),
             CountDelta("wallPlacementSuppressed", baseline.WallPlacement.PlacementSuppressedWallCount, candidate.WallPlacement.PlacementSuppressedWallCount),
@@ -917,6 +991,50 @@ internal sealed record BatchScanComparisonResult(
 
     private static BatchScanMetricDelta CountDelta(string name, int baseline, int candidate) =>
         NumberDelta(name, baseline, candidate, "count");
+
+    private static int EffectiveWallPlacementCount(BatchWallPlacementSummary summary) =>
+        summary.PlacementReadyWallCount + summary.RepresentedWallCount;
+
+    private static string WallPlacementSummaryText(BatchWallPlacementSummary summary) =>
+        $"ready {summary.PlacementReadyWallCount.ToString(CultureInfo.InvariantCulture)}, represented {summary.RepresentedWallCount.ToString(CultureInfo.InvariantCulture)}, effective {EffectiveWallPlacementCount(summary).ToString(CultureInfo.InvariantCulture)}, review {summary.PlacementReviewWallCount.ToString(CultureInfo.InvariantCulture)}, omitted {summary.PlacementOmittedWallCount.ToString(CultureInfo.InvariantCulture)}";
+
+    private static int RepresentedOmissionCount(BatchWallPlacementSummary summary) =>
+        summary.OmissionCounts
+            .Where(pair => IsRepresentedOmissionReason(pair.Key))
+            .Sum(pair => Math.Max(0, pair.Value));
+
+    private static bool IsRepresentedOmissionReason(string reason) =>
+        string.Equals(reason, "duplicate_clean_topology_span", StringComparison.Ordinal)
+        || string.Equals(reason, "duplicate_wall_face", StringComparison.Ordinal);
+
+    private static void AddRepresentedOmissionReasonSignal(
+        string key,
+        string reason,
+        int baseline,
+        int candidate,
+        int threshold,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        var delta = candidate - baseline;
+        if (delta >= threshold)
+        {
+            signals.Add(Info(
+                key,
+                $"wall_placement.omission.{reason}_represented_increased",
+                $"Candidate represented duplicate/context wall omissions for {reason} increased.",
+                baseline.ToString(CultureInfo.InvariantCulture),
+                candidate.ToString(CultureInfo.InvariantCulture)));
+        }
+        else if (-delta >= threshold)
+        {
+            signals.Add(Info(
+                key,
+                $"wall_placement.omission.{reason}_represented_reduced",
+                $"Candidate represented duplicate/context wall omissions for {reason} decreased.",
+                baseline.ToString(CultureInfo.InvariantCulture),
+                candidate.ToString(CultureInfo.InvariantCulture)));
+        }
+    }
 
     private static BatchScanMetricDelta NumberDelta(string name, double baseline, double candidate, string unit) =>
         new(name, baseline, candidate, candidate - baseline, unit);
@@ -1334,7 +1452,9 @@ internal static class BatchScanComparisonMarkdownReport
             "diagnosticErrors",
             "visualIssues",
             "qualityConfidence",
+            "wallPlacementEffective",
             "wallPlacementReady",
+            "wallPlacementRepresented",
             "wallPlacementReview",
             "wallPlacementOmitted",
             "importReadinessScore",

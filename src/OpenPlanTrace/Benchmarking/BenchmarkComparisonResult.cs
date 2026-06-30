@@ -765,15 +765,42 @@ public sealed record BenchmarkComparisonResult(
 
         AddDecreaseIsRegressionSignal(
             fixtureId,
-            "wall_placement.ready_walls",
-            baselineSummary.PlacementReadyWallCount,
-            candidateSummary.PlacementReadyWallCount,
+            "wall_placement.effective_ready_walls",
+            baselineSummary.EffectivePlacementWallCount,
+            candidateSummary.EffectivePlacementWallCount,
             options.WallPlacementReadyWallRegressionMinimumDelta,
-            "Candidate has fewer placement-ready walls.",
-            "Candidate has more placement-ready walls.",
+            "Candidate has fewer effective placement walls after represented-wall consolidation.",
+            "Candidate has more effective placement walls after represented-wall consolidation.",
             baselineText,
             candidateText,
             signals);
+        var readyDropOffsetByRepresentation =
+            candidateSummary.PlacementReadyWallCount < baselineSummary.PlacementReadyWallCount
+            && candidateSummary.EffectivePlacementWallCount >= baselineSummary.EffectivePlacementWallCount;
+        if (readyDropOffsetByRepresentation)
+        {
+            signals.Add(Info(
+                fixtureId,
+                "wall_placement.ready_walls_represented_offset",
+                "Candidate has fewer raw placement-ready walls, but represented wall coverage offsets the drop.",
+                baselineText,
+                candidateText));
+        }
+        else
+        {
+            AddDecreaseIsRegressionSignal(
+                fixtureId,
+                "wall_placement.ready_walls",
+                baselineSummary.PlacementReadyWallCount,
+                candidateSummary.PlacementReadyWallCount,
+                options.WallPlacementReadyWallRegressionMinimumDelta,
+                "Candidate has fewer placement-ready walls.",
+                "Candidate has more placement-ready walls.",
+                baselineText,
+                candidateText,
+                signals);
+        }
+
         AddIncreaseIsRegressionSignal(
             fixtureId,
             "wall_placement.review_walls",
@@ -1989,6 +2016,8 @@ public sealed record BenchmarkComparisonResult(
     {
         Add(deltas, "wallPlacement.totalWallCount", baseline?.TotalWallCount, candidate?.TotalWallCount);
         Add(deltas, "wallPlacement.placementReadyWallCount", baseline?.PlacementReadyWallCount, candidate?.PlacementReadyWallCount);
+        Add(deltas, "wallPlacement.representedWallCount", baseline?.RepresentedWallCount, candidate?.RepresentedWallCount);
+        Add(deltas, "wallPlacement.effectivePlacementWallCount", baseline?.EffectivePlacementWallCount, candidate?.EffectivePlacementWallCount);
         Add(deltas, "wallPlacement.placementReviewWallCount", baseline?.PlacementReviewWallCount, candidate?.PlacementReviewWallCount);
         Add(deltas, "wallPlacement.rejectedNoiseWallCount", baseline?.RejectedNoiseWallCount, candidate?.RejectedNoiseWallCount);
         Add(deltas, "wallPlacement.acceptedWallCount", baseline?.AcceptedWallCount, candidate?.AcceptedWallCount);
@@ -2777,7 +2806,7 @@ public sealed record BenchmarkComparisonResult(
         $"{readiness.Grade}, score {Format(readiness.Score)}, geometry {Ready(readiness.ReadyForGeometryImport)}, metric {Ready(readiness.ReadyForMetricImport)}, routing {Ready(readiness.ReadyForRoutingImport)}, review {Ready(readiness.RequiresReview)}";
 
     private static string WallPlacementSummaryText(BenchmarkWallPlacementSummary summary) =>
-        $"ready {summary.PlacementReadyWallCount}, review {summary.PlacementReviewWallCount}, rejected {summary.RejectedNoiseWallCount}, structural {summary.StructuralComponentCount}, isolated {summary.IsolatedFragmentComponentCount}, repairs {summary.RepairCandidateCount}, blocked repairs {summary.TopologyImportBlockedRepairCandidateCount}";
+        $"ready {summary.PlacementReadyWallCount}, represented {summary.RepresentedWallCount}, effective {summary.EffectivePlacementWallCount}, review {summary.PlacementReviewWallCount}, rejected {summary.RejectedNoiseWallCount}, structural {summary.StructuralComponentCount}, isolated {summary.IsolatedFragmentComponentCount}, repairs {summary.RepairCandidateCount}, blocked repairs {summary.TopologyImportBlockedRepairCandidateCount}";
 
     private static string Ready(bool value) => value ? "ready" : "not ready";
 

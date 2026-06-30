@@ -65,7 +65,9 @@ public static class BenchmarkComparisonMarkdownReport
     {
         var priorityNames = new HashSet<string>(
             [
+                "wallPlacement.effectivePlacementWallCount",
                 "wallPlacement.placementReadyWallCount",
+                "wallPlacement.representedWallCount",
                 "wallPlacement.placementReviewWallCount",
                 "wallPlacement.isolatedFragmentComponentCount",
                 "wallPlacement.topologyImportBlockedRepairCandidateCount",

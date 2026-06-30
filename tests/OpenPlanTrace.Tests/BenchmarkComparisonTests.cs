@@ -1393,6 +1393,66 @@ public sealed class BenchmarkComparisonTests
     }
 
     [Fact]
+    public void Compare_DoesNotRegressReadyWallsWhenRepresentedCoverageOffsetsDrop()
+    {
+        var baseline = BenchmarkRunResult.Create(
+            "baseline",
+            new[]
+            {
+                Case(
+                    "span-consolidation",
+                    passed: true,
+                    failedAssertions: 0,
+                    wallPlacement: WallPlacement(
+                        readyWalls: 55,
+                        representedWalls: 37))
+            });
+        var candidate = BenchmarkRunResult.Create(
+            "candidate",
+            new[]
+            {
+                Case(
+                    "span-consolidation",
+                    passed: true,
+                    failedAssertions: 0,
+                    wallPlacement: WallPlacement(
+                        readyWalls: 54,
+                        representedWalls: 38))
+            });
+
+        var comparison = BenchmarkComparisonResult.Compare(
+            baseline,
+            candidate,
+            new BenchmarkComparisonOptions
+            {
+                WallPlacementReadyWallRegressionMinimumDelta = 1
+            });
+
+        Assert.True(comparison.Passed);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.FixtureId == "span-consolidation"
+            && signal.Code == "wall_placement.ready_walls"
+            && signal.Severity == BenchmarkComparisonSignalSeverity.Regression);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.FixtureId == "span-consolidation"
+            && signal.Code == "wall_placement.effective_ready_walls"
+            && signal.Severity == BenchmarkComparisonSignalSeverity.Regression);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.FixtureId == "span-consolidation"
+            && signal.Code == "wall_placement.ready_walls_represented_offset"
+            && signal.Severity == BenchmarkComparisonSignalSeverity.Info);
+
+        var spanCase = comparison.Cases.Single(item => item.FixtureId == "span-consolidation");
+        Assert.Equal(-1, Assert.Single(spanCase.CountDeltas, delta => delta.Name == "wallPlacement.placementReadyWallCount").Delta);
+        Assert.Equal(1, Assert.Single(spanCase.CountDeltas, delta => delta.Name == "wallPlacement.representedWallCount").Delta);
+        Assert.Equal(0, Assert.Single(spanCase.CountDeltas, delta => delta.Name == "wallPlacement.effectivePlacementWallCount").Delta);
+
+        var markdown = BenchmarkComparisonMarkdownReport.Create(comparison);
+        Assert.Contains("wallPlacement.representedWallCount", markdown);
+        Assert.Contains("wallPlacement.effectivePlacementWallCount", markdown);
+    }
+
+    [Fact]
     public void Compare_DetectsDetectorMetricRegressionAndImprovementSignals()
     {
         var baseline = BenchmarkRunResult.Create(
@@ -2036,6 +2096,7 @@ public sealed class BenchmarkComparisonTests
 
     private static BenchmarkWallPlacementSummary WallPlacement(
         int readyWalls,
+        int representedWalls = 0,
         int reviewWalls = 0,
         int rejectedNoiseWalls = 0,
         int acceptedWalls = 0,
@@ -2053,7 +2114,7 @@ public sealed class BenchmarkComparisonTests
         int endpointOverrunRepairs = 0,
         int highSeverityRepairs = 0)
     {
-        var totalWalls = Math.Max(readyWalls + reviewWalls + rejectedNoiseWalls, readyWalls);
+        var totalWalls = Math.Max(readyWalls + representedWalls + reviewWalls + rejectedNoiseWalls, readyWalls);
         var acceptedCount = acceptedWalls == 0 ? readyWalls : acceptedWalls;
         var reviewDecisionCount = reviewDecisionWalls == 0 ? reviewWalls : reviewDecisionWalls;
         var rejectedCount = rejectedWalls == 0 ? rejectedNoiseWalls : rejectedWalls;
@@ -2064,6 +2125,7 @@ public sealed class BenchmarkComparisonTests
         return new BenchmarkWallPlacementSummary(
             totalWalls,
             readyWalls,
+            representedWalls,
             reviewWalls,
             rejectedNoiseWalls,
             acceptedCount,

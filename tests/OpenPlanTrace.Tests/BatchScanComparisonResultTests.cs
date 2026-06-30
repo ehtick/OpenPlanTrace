@@ -147,6 +147,66 @@ public sealed class BatchScanComparisonResultTests
     }
 
     [Fact]
+    public void Compare_DoesNotFlagReadyRegressionWhenRepresentedWallsOffsetDrop()
+    {
+        var baseline = CreateRun(
+            "baseline",
+            CreateItem(
+                wallPlacementReady: 55,
+                wallPlacementRepresented: 37,
+                wallPlacementOmitted: 92,
+                omissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["duplicate_clean_topology_span"] = 30,
+                    ["wall_evidence_review_required"] = 8
+                }));
+        var candidate = CreateRun(
+            "candidate",
+            CreateItem(
+                wallPlacementReady: 54,
+                wallPlacementRepresented: 38,
+                wallPlacementOmitted: 93,
+                omissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["duplicate_clean_topology_span"] = 31,
+                    ["wall_evidence_review_required"] = 8
+                }));
+
+        var comparison = BatchScanComparisonResult.Compare(baseline, candidate);
+
+        Assert.True(comparison.Passed);
+        Assert.Equal(0, comparison.RegressionCount);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.Code == "wall_placement.ready_represented_offset"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Info);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.Code == "wall_placement.omitted_represented_offset"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Info);
+        Assert.Contains(comparison.Signals, signal =>
+            signal.Code == "wall_placement.omission.duplicate_clean_topology_span_represented_increased"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Info);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.Code == "wall_placement.ready_decreased"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.Code == "wall_placement.omitted_increased"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
+        Assert.DoesNotContain(comparison.Signals, signal =>
+            signal.Code == "wall_placement.omission.duplicate_clean_topology_span_increased"
+            && signal.Severity == BatchScanComparisonSignalSeverity.Regression);
+
+        var item = Assert.Single(comparison.Items);
+        Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementReady" && delta.Delta == -1);
+        Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementRepresented" && delta.Delta == 1);
+        Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementEffective" && delta.Delta == 0);
+        Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementOmitted" && delta.Delta == 1);
+
+        var markdown = BatchScanComparisonMarkdownReport.Create(comparison);
+        Assert.Contains("wall_placement.ready_represented_offset", markdown);
+        Assert.Contains("wall_placement.omitted_represented_offset", markdown);
+    }
+
+    [Fact]
     public void MarkdownReport_IncludesEvidenceColumnAndArtifactAvailability()
     {
         var baseline = CreateRun(

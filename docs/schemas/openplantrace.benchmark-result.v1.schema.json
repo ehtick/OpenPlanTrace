@@ -677,6 +677,8 @@
       "required": [
         "totalWallCount",
         "placementReadyWallCount",
+        "representedWallCount",
+        "effectivePlacementWallCount",
         "placementReviewWallCount",
         "rejectedNoiseWallCount",
         "acceptedWallCount",
@@ -697,6 +699,8 @@
       "properties": {
         "totalWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "placementReadyWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "representedWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "effectivePlacementWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "placementReviewWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "rejectedNoiseWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "acceptedWallCount": { "$ref": "#/$defs/nonNegativeInteger" },

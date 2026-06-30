@@ -3,6 +3,7 @@ namespace OpenPlanTrace;
 public sealed record BenchmarkWallPlacementSummary(
     int TotalWallCount,
     int PlacementReadyWallCount,
+    int RepresentedWallCount,
     int PlacementReviewWallCount,
     int RejectedNoiseWallCount,
     int AcceptedWallCount,
@@ -20,10 +21,14 @@ public sealed record BenchmarkWallPlacementSummary(
     int EndpointOverrunRepairCandidateCount,
     int HighSeverityRepairCandidateCount)
 {
+    public int EffectivePlacementWallCount =>
+        PlacementReadyWallCount + RepresentedWallCount;
+
     public static BenchmarkWallPlacementSummary Empty { get; } =
         new(
             TotalWallCount: 0,
             PlacementReadyWallCount: 0,
+            RepresentedWallCount: 0,
             PlacementReviewWallCount: 0,
             RejectedNoiseWallCount: 0,
             AcceptedWallCount: 0,
@@ -50,10 +55,12 @@ public sealed record BenchmarkWallPlacementSummary(
         var repairCandidates = result.WallGraph.RepairCandidates;
         var mainStructuralComponents = components.Count(component => component.Kind == WallGraphComponentKind.MainStructural);
         var secondaryStructuralComponents = components.Count(component => component.Kind == WallGraphComponentKind.SecondaryStructural);
+        var representedWallCount = assessments.Count(IsRepresentedWall);
 
         return new BenchmarkWallPlacementSummary(
             result.Walls.Count,
             assessments.Count(assessment => assessment.PlacementReady),
+            representedWallCount,
             assessments.Count(assessment => assessment.RequiresReview),
             assessments.Count(assessment => assessment.RejectedAsNoise),
             assessments.Count(assessment => assessment.Decision == WallEvidenceDecision.Accept),
@@ -71,4 +78,13 @@ public sealed record BenchmarkWallPlacementSummary(
             repairCandidates.Count(candidate => candidate.Kind == WallGraphRepairCandidateKind.EndpointOverrun),
             repairCandidates.Count(candidate => candidate.Severity == WallGraphRepairSeverity.High));
     }
+
+    private static bool IsRepresentedWall(WallEvidenceWallAssessment assessment) =>
+        assessment.Evidence.Any(IsRepresentedEvidence)
+        || assessment.ScoreBreakdown.PositiveEvidence.Any(IsRepresentedEvidence)
+        || assessment.ScoreBreakdown.NegativeEvidence.Any(IsRepresentedEvidence);
+
+    private static bool IsRepresentedEvidence(string evidence) =>
+        evidence.Contains("already represented", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("represented by clean topology span", StringComparison.OrdinalIgnoreCase);
 }

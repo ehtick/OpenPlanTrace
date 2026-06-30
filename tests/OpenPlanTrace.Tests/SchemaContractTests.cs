@@ -1628,6 +1628,8 @@ public sealed class SchemaContractTests
             "wallPlacementSummary",
             "totalWallCount",
             "placementReadyWallCount",
+            "representedWallCount",
+            "effectivePlacementWallCount",
             "placementReviewWallCount",
             "rejectedNoiseWallCount",
             "structuralComponentCount",
