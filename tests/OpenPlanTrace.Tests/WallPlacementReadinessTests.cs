@@ -1590,6 +1590,61 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsMainStructuralDenseTwoSidedRoomFragmentWithSmallHealedGap()
+    {
+        var wall = Wall("wall:main-dense-room-fragment-gap", Confidence.High) with
+        {
+            WallType = WallType.Interior,
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            SourcePrimitiveIds = Enumerable.Range(1, 55)
+                .Select(index => $"dense-fragment-source-{index}")
+                .ToArray(),
+            FragmentEvidence = new WallFragmentEvidence(
+                FragmentCount: 55,
+                TotalHealedGap: 2.069,
+                MaxHealedGap: 2.069,
+                DuplicatePrimitiveCount: 2,
+                GapRatio: 0.012,
+                RequiresGeometryReview: false,
+                Evidence: Array.Empty<string>()),
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "run merged 55 fragments",
+                "run healed 2.069 drawing units of gaps; max gap 2.069",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type refined interior: detected room evidence on both sides",
+                "wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (55 fragments, gap ratio 0.012); keep for topology but block exact placement until reviewed"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Decision = WallEvidenceDecision.Review
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence,
+            [
+                WallPlacementContextGuards.FragmentMergedInteriorWithoutRoomBoundarySupportReason,
+                WallPlacementContextGuards.MainStructuralInteriorWithoutSemanticSupportReason
+            ]);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+    }
+
+    [Fact]
     public void Evaluate_BlocksCoveredEntryBoundaryWithoutShellSupport()
     {
         var wall = Wall("wall:covered-entry-boundary", Confidence.High) with

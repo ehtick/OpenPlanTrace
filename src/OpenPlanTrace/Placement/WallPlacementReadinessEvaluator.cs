@@ -134,6 +134,11 @@ public static class WallPlacementReadinessEvaluator
                 wall,
                 component,
                 evidenceAssessment);
+        var trustedDenseTwoSidedRoomFragmentMergedInterior =
+            WallPlacementContextGuards.IsTrustedDenseTwoSidedRoomFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                evidenceAssessment);
 
         if (component is not null)
         {
@@ -162,7 +167,8 @@ public static class WallPlacementReadinessEvaluator
                 trustedMainStructuralExteriorWallBody,
                 trustedLongIsolatedExteriorShellWallBody,
                 trustedTwoSidedFragmentMergedRoomBoundary,
-                trustedLongOneEndpointFragmentMergedInterior);
+                trustedLongOneEndpointFragmentMergedInterior,
+                trustedDenseTwoSidedRoomFragmentMergedInterior);
         }
 
         var reviewReasonList = reviewReasons?
@@ -174,7 +180,8 @@ public static class WallPlacementReadinessEvaluator
                 trustedLongIsolatedExteriorShellWallBody,
                 trustedTwoSidedFragmentMergedRoomBoundary,
                 trustedOneEndpointNoisyMainStructuralInterior,
-                trustedLongOneEndpointFragmentMergedInterior))
+                trustedLongOneEndpointFragmentMergedInterior,
+                trustedDenseTwoSidedRoomFragmentMergedInterior))
             .ToArray()
             ?? Array.Empty<string>();
         if (reviewReasonList.Length > 0)
@@ -251,7 +258,8 @@ public static class WallPlacementReadinessEvaluator
                 || trustedLongIsolatedExteriorShellWallBody
                 || trustedTwoSidedFragmentMergedRoomBoundary
                 || trustedRecoveredRoomBoundaryObjectLikeWall
-                || trustedLongOneEndpointFragmentMergedInterior);
+                || trustedLongOneEndpointFragmentMergedInterior
+                || trustedDenseTwoSidedRoomFragmentMergedInterior);
         var readyForMetricPlacement =
             readyForCoordinatePlacement
             && calibration.HasReliableMeasurementScale;
@@ -270,6 +278,7 @@ public static class WallPlacementReadinessEvaluator
             || (!trustedTwoSidedFragmentMergedRoomBoundary
                 && !trustedRecoveredRoomBoundaryObjectLikeWall
                 && !trustedLongOneEndpointFragmentMergedInterior
+                && !trustedDenseTwoSidedRoomFragmentMergedInterior
                 && !trustedMainStructuralExteriorWallBody
                 && !trustedLongIsolatedExteriorShellWallBody
                 && !trustedExteriorShellRepairSupportedWall
@@ -278,6 +287,7 @@ public static class WallPlacementReadinessEvaluator
             || (!trustedTwoSidedFragmentMergedRoomBoundary
                 && !trustedRecoveredRoomBoundaryObjectLikeWall
                 && !trustedLongOneEndpointFragmentMergedInterior
+                && !trustedDenseTwoSidedRoomFragmentMergedInterior
                 && !trustedMainStructuralExteriorWallBody
                 && !trustedLongIsolatedExteriorShellWallBody
                 && !trustedExteriorShellRepairSupportedWall
@@ -338,14 +348,16 @@ public static class WallPlacementReadinessEvaluator
         bool trustedMainStructuralExteriorWallBody,
         bool trustedLongIsolatedExteriorShellWallBody,
         bool trustedTwoSidedFragmentMergedRoomBoundary,
-        bool trustedLongOneEndpointFragmentMergedInterior)
+        bool trustedLongOneEndpointFragmentMergedInterior,
+        bool trustedDenseTwoSidedRoomFragmentMergedInterior)
     {
         if (!evidenceAssessment.PlacementReady
             && !trustedExteriorShellRepairSupportedWall
             && !trustedMainStructuralExteriorWallBody
             && !trustedLongIsolatedExteriorShellWallBody
             && !trustedTwoSidedFragmentMergedRoomBoundary
-            && !trustedLongOneEndpointFragmentMergedInterior)
+            && !trustedLongOneEndpointFragmentMergedInterior
+            && !trustedDenseTwoSidedRoomFragmentMergedInterior)
         {
             reasons.Add($"wall evidence not placement-ready ({evidenceAssessment.Category})");
         }
@@ -355,7 +367,8 @@ public static class WallPlacementReadinessEvaluator
             && !trustedMainStructuralExteriorWallBody
             && !trustedLongIsolatedExteriorShellWallBody
             && !trustedTwoSidedFragmentMergedRoomBoundary
-            && !trustedLongOneEndpointFragmentMergedInterior)
+            && !trustedLongOneEndpointFragmentMergedInterior
+            && !trustedDenseTwoSidedRoomFragmentMergedInterior)
         {
             reasons.Add($"wall evidence requires review ({evidenceAssessment.Category})");
         }
@@ -1360,7 +1373,8 @@ public static class WallPlacementReadinessEvaluator
         bool trustedLongIsolatedExteriorShellWallBody,
         bool trustedTwoSidedFragmentMergedRoomBoundary,
         bool trustedOneEndpointNoisyMainStructuralInterior,
-        bool trustedLongOneEndpointFragmentMergedInterior)
+        bool trustedLongOneEndpointFragmentMergedInterior,
+        bool trustedDenseTwoSidedRoomFragmentMergedInterior)
     {
         if ((trustedExteriorShellRepairSupportedWall
                 || trustedMainStructuralExteriorWallBody
@@ -1391,7 +1405,17 @@ public static class WallPlacementReadinessEvaluator
             return true;
         }
 
-        return (trustedOneEndpointNoisyMainStructuralInterior || trustedLongOneEndpointFragmentMergedInterior)
+        if (trustedDenseTwoSidedRoomFragmentMergedInterior
+            && reason.Contains(
+                WallPlacementContextGuards.FragmentMergedInteriorWithoutRoomBoundarySupportReason,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return (trustedOneEndpointNoisyMainStructuralInterior
+                || trustedLongOneEndpointFragmentMergedInterior
+                || trustedDenseTwoSidedRoomFragmentMergedInterior)
             && reason.Contains(
                 WallPlacementContextGuards.MainStructuralInteriorWithoutSemanticSupportReason,
                 StringComparison.OrdinalIgnoreCase);

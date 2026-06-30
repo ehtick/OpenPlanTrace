@@ -6125,6 +6125,68 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversDenseTwoSidedMainStructuralFragmentWithSmallHealedGap()
+    {
+        var result = CreateSourceBackedFragmentFallbackWallResult(
+            componentKind: WallGraphComponentKind.MainStructural,
+            placementReady: false,
+            requiresReview: true,
+            decision: WallEvidenceDecision.Review,
+            wallLength: 169.584,
+            wallEvidence:
+            [
+                "merged collinear wall fragments",
+                "run merged 55 fragments",
+                "run healed 2.069 drawing units of gaps; max gap 2.069",
+                "fragment geometry: 55 fragment(s)",
+                "fragment geometry healed gap ratio 0.012",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type refined interior: detected room evidence on both sides",
+                "wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (55 fragments, gap ratio 0.012); keep for topology but block exact placement until reviewed"
+            ],
+            fragmentEvidence: new WallFragmentEvidence(
+                FragmentCount: 55,
+                TotalHealedGap: 2.069,
+                MaxHealedGap: 2.069,
+                DuplicatePrimitiveCount: 2,
+                GapRatio: 0.012,
+                RequiresGeometryReview: false,
+                Evidence:
+                [
+                    "fragment geometry: 55 fragment(s)",
+                    "fragment geometry healed gap ratio 0.012",
+                    "fragment geometry healed 2.069 drawing units; max gap 2.069"
+                ]));
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fragment-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.DoesNotContain(
+            wall.GetProperty("reliability").GetProperty("reasons").EnumerateArray(),
+            reason => reason.GetString()?.Contains("only one trusted structural endpoint", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("dense two-sided room-backed fragment wall", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(169.584, topologySpan.GetProperty("drawingLength").GetDouble(), precision: 3);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversLongSecondaryStructuralFragmentInsideExteriorEnvelope()
     {
         var result = CreateSourceBackedFragmentFallbackWallResult(
@@ -6541,6 +6603,52 @@ public sealed class ExportTests
         var summary = document.RootElement.GetProperty("summary");
         Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
         Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_BridgesExteriorGraphRunIntoTrustedSourceBackedFallbackContinuation()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            includeNearbyGraphSpan: true,
+            wallLength: 120,
+            wallType: WallType.Exterior,
+            nearbyGraphWallType: WallType.Exterior,
+            nearbyGraphAxisOffset: 0,
+            nearbyGraphStartX: 20,
+            nearbyGraphEndX: 70,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "wall evidence: strong double-edge wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "source-backed fallback accepted because global exterior-shell repair confirmed the fragmented exterior wall run",
+                "pair score 0.93"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+
+        var spans = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .SelectMany(wall => wall.GetProperty("topologySpans").EnumerateArray())
+            .ToArray();
+
+        var span = Assert.Single(spans);
+        var centerLine = span.GetProperty("centerLine");
+        Assert.Equal(20, centerLine.GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(200, centerLine.GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(120, centerLine.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(120, centerLine.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            span.GetProperty("sourcePrimitiveIds").EnumerateArray(),
+            sourceId => sourceId.GetString() == "source-backed-fallback-wall");
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
     }
 
     [Fact]
