@@ -63,6 +63,9 @@ internal static class WallTopologySpanVisibility
     private const double MinRepresentedBodyAxisRecenterPairOverlapRatio = 0.88;
     private const double MinRepresentedBodyAxisRecenterSpanOverlapRatio = 0.88;
     private const double MinRepresentedBodyAxisRecenterLengthDrawingUnits = 36.0;
+    private const double MinDimensionLikeRepresentedBodyAxisRecenterLengthDrawingUnits = 120.0;
+    private const double MinDimensionLikeRepresentedBodyAxisRecenterPairScore = 0.86;
+    private const double MinDimensionLikeRepresentedBodyAxisRecenterPairOverlapRatio = 0.95;
     private const double MinRepresentedBodyAxisRecenterAxisShiftDrawingUnits = 0.75;
     private const double MaxRepresentedBodyAxisRecenterAxisDistanceDrawingUnits = 24.0;
     private const double MaxRepresentedBodyAxisRecenterCandidateLengthRatio = 1.75;
@@ -2446,10 +2449,18 @@ internal static class WallTopologySpanVisibility
         IsSourceBackedFallbackSpan(span)
         && ContainsEvidence(span.Evidence, "existing clean topology projected away from trusted");
 
+    private static bool IsBodyAxisRecenteredCleanPlacementSpan(WallGraphTopologySpan span) =>
+        ContainsEvidence(span.Evidence, "clean placement body-axis recenter");
+
     private static bool IsUnsafeCleanPlacementProjection(
         WallSegment wall,
         WallGraphTopologySpan span)
     {
+        if (IsBodyAxisRecenteredCleanPlacementSpan(span))
+        {
+            return false;
+        }
+
         var limit = CleanTopologyProjectionDriftLimit(wall, span);
         var maxProjectionDistance = MaxNullable(
             span.SourceWallStartProjectionDistanceDrawingUnits,
@@ -2802,7 +2813,8 @@ internal static class WallTopologySpanVisibility
             span.SourceWall,
             null,
             null,
-            span.Evidence);
+            span.Evidence,
+            blockDimensionEvidence: false);
     }
 
     private static bool IsPairedBodyAxisRecenterCandidate(
@@ -2824,11 +2836,20 @@ internal static class WallTopologySpanVisibility
 
         context.ComponentByWallId.TryGetValue(wall.Id, out var component);
         context.WallEvidenceAssessments.TryGetValue(wall.Id, out var assessment);
+        var allowsDimensionLikeEvidence = IsTrustedDimensionLikeRepresentedBodyAxisRecenterCandidate(
+            wall,
+            component,
+            assessment);
         if (component?.Kind == WallGraphComponentKind.ObjectLikeIsland
             || component?.ExcludedFromStructuralTopology == true
             || assessment?.RejectedAsNoise == true
             || assessment?.Decision == WallEvidenceDecision.Reject
-            || HasRepresentedBodyAxisRecenterBlockedEvidence(wall, component, assessment, Array.Empty<string>()))
+            || HasRepresentedBodyAxisRecenterBlockedEvidence(
+                wall,
+                component,
+                assessment,
+                Array.Empty<string>(),
+                blockDimensionEvidence: !allowsDimensionLikeEvidence))
         {
             return false;
         }
@@ -2843,7 +2864,59 @@ internal static class WallTopologySpanVisibility
             assessment,
             reviewReasons);
         return readiness.ReadyForCoordinatePlacement
-            || assessment is { PlacementReady: true, RequiresReview: false, Decision: WallEvidenceDecision.Accept };
+            || assessment is { PlacementReady: true, RequiresReview: false, Decision: WallEvidenceDecision.Accept }
+            || allowsDimensionLikeEvidence;
+    }
+
+    private static bool IsTrustedDimensionLikeRepresentedBodyAxisRecenterCandidate(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment)
+    {
+        if (wall.WallType == WallType.Unknown
+            || wall.DrawingLength < MinDimensionLikeRepresentedBodyAxisRecenterLengthDrawingUnits
+            || wall.PairEvidence is not { } pair
+            || pair.Score < MinDimensionLikeRepresentedBodyAxisRecenterPairScore
+            || pair.OverlapRatio < MinDimensionLikeRepresentedBodyAxisRecenterPairOverlapRatio
+            || pair.FaceSeparation <= 0
+            || pair.FaceSeparation > MaxRepresentedBodyAxisRecenterAxisDistanceDrawingUnits
+            || component?.Kind == WallGraphComponentKind.ObjectLikeIsland
+            || component?.ExcludedFromStructuralTopology == true
+            || assessment?.RejectedAsNoise == true
+            || assessment?.Decision == WallEvidenceDecision.Reject)
+        {
+            return false;
+        }
+
+        var allEvidence = wall.Evidence
+            .Concat(wall.FragmentEvidence?.Evidence ?? Array.Empty<string>())
+            .Concat(component?.Evidence ?? Array.Empty<string>())
+            .Concat(assessment?.Evidence ?? Array.Empty<string>())
+            .ToArray();
+        return ContainsAnyEvidence(
+                allEvidence,
+                "dimension",
+                "dimension-like",
+                "classified Dimension")
+            && !ContainsAnyEvidence(
+                allEvidence,
+                "covered-area",
+                "covered entry",
+                "covered-entry",
+                "door leaf",
+                "door swing",
+                "fixture detail",
+                "object/fixture",
+                "opening detail",
+                "outdoor",
+                "overbygd",
+                "railing",
+                "repeated short detail",
+                "stair",
+                "surface pattern",
+                "terrace detail",
+                "witness/extension",
+                "non-wall");
     }
 
     private static bool TryFindPairedBodyAxisRecenterHost(
@@ -2956,7 +3029,8 @@ internal static class WallTopologySpanVisibility
         WallSegment wall,
         WallGraphComponent? component,
         WallEvidenceWallAssessment? assessment,
-        IReadOnlyList<string> spanEvidence)
+        IReadOnlyList<string> spanEvidence,
+        bool blockDimensionEvidence)
     {
         var allEvidence = wall.Evidence
             .Concat(wall.FragmentEvidence?.Evidence ?? Array.Empty<string>())
@@ -2964,12 +3038,11 @@ internal static class WallTopologySpanVisibility
             .Concat(assessment?.Evidence ?? Array.Empty<string>())
             .Concat(spanEvidence)
             .ToArray();
-        return ContainsAnyEvidence(
-            allEvidence,
+        var blockers = new List<string>
+        {
             "covered-area",
             "covered entry",
             "covered-entry",
-            "dimension",
             "door leaf",
             "door swing",
             "fixture detail",
@@ -2983,7 +3056,14 @@ internal static class WallTopologySpanVisibility
             "surface pattern",
             "terrace detail",
             "witness/extension",
-            "non-wall");
+            "non-wall"
+        };
+        if (blockDimensionEvidence)
+        {
+            blockers.Add("dimension");
+        }
+
+        return ContainsAnyEvidence(allEvidence, blockers.ToArray());
     }
 
     private static IReadOnlyList<WallGraphTopologySpan> SnapExteriorFragmentsToDominantPlacementAxis(

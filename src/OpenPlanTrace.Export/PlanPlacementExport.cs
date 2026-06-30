@@ -2223,7 +2223,8 @@ public sealed record PlacementWallOmissionExport(
         var evidence = new List<string>();
         foreach (var span in topologySpans)
         {
-            if (IsTrustedSourceBackedFallbackSpan(span))
+            if (IsTrustedSourceBackedFallbackSpan(span)
+                || IsBodyAxisRecenteredCleanPlacementSpan(span))
             {
                 continue;
             }
@@ -2265,6 +2266,9 @@ public sealed record PlacementWallOmissionExport(
         WallTopologySpanVisibility.IsSourceBackedFallbackTopologySpan(span)
         && span.Evidence.Any(item =>
             item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsBodyAxisRecenteredCleanPlacementSpan(WallGraphTopologySpan span) =>
+        ContainsEvidence(span.Evidence, "clean placement body-axis recenter");
 
     private static bool IsTrustedRoomBoundaryOpeningSplitProjectionDrift(
         WallSegment wall,

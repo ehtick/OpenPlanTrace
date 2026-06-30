@@ -7953,6 +7953,7 @@ public sealed class ExportTests
         Assert.Contains(
             span.GetProperty("evidence").EnumerateArray(),
             item => item.GetString()?.Contains("clean placement body-axis recenter", StringComparison.Ordinal) == true);
+        Assert.Equal(JsonValueKind.Null, faceWall.GetProperty("placementOmission").ValueKind);
 
         var pairedWall = root
             .GetProperty("walls")
@@ -7963,6 +7964,38 @@ public sealed class ExportTests
             "duplicate_clean_topology_span",
             pairedWall.GetProperty("placementOmission").GetProperty("code").GetString());
         Assert.Equal(1, root.GetProperty("summary").GetProperty("representedWallCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_RecentersDimensionLikeRepresentedExteriorSpanOntoPairedWallBodyAxis()
+    {
+        var result = CreateRepresentedCleanSpanBodyAxisResult(dimensionLikeReviewEvidence: true);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var root = document.RootElement;
+        var faceWall = root
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "face-clean-wall");
+        var span = Assert.Single(faceWall.GetProperty("topologySpans").EnumerateArray());
+        var line = span.GetProperty("centerLine");
+
+        Assert.Equal(100, line.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(100, line.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            item => item.GetString()?.Contains("clean placement body-axis recenter", StringComparison.Ordinal) == true);
+
+        var pairedWall = root
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "paired-body-wall");
+        Assert.Empty(pairedWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "duplicate_clean_topology_span",
+            pairedWall.GetProperty("placementOmission").GetProperty("code").GetString());
     }
 
     [Fact]
@@ -15199,18 +15232,43 @@ public sealed class ExportTests
         };
     }
 
-    private static PlanScanResult CreateRepresentedCleanSpanBodyAxisResult()
+    private static PlanScanResult CreateRepresentedCleanSpanBodyAxisResult(bool dimensionLikeReviewEvidence = false)
     {
-        var faceWall = SyntheticWall("face-clean-wall", 80, 108, 240, 108) with
-        {
-            DetectionKind = WallDetectionKind.FragmentMerged,
-            WallType = WallType.Exterior,
-            Thickness = 16,
-            Evidence =
+        string[] faceEvidence = dimensionLikeReviewEvidence
+            ?
+            [
+                "fragment-merged exterior face line",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            ]
+            :
             [
                 "fragment-merged exterior face line",
                 "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            ];
+        string[] pairedEvidence = dimensionLikeReviewEvidence
+            ?
+            [
+                "parallel wall-face pair",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall evidence: strong double-edge wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
             ]
+            :
+            [
+                "parallel wall-face pair",
+                "wall evidence: strong double-edge wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            ];
+        var faceY = dimensionLikeReviewEvidence ? 113 : 108;
+        var faceWall = SyntheticWall("face-clean-wall", 80, faceY, 240, faceY) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Exterior,
+            Thickness = dimensionLikeReviewEvidence ? 4 : 16,
+            Evidence = faceEvidence
         };
         var pairedWall = SyntheticWall("paired-body-wall", 80, 100, 240, 100) with
         {
@@ -15227,17 +15285,12 @@ public sealed class ExportTests
                 SecondFaceFragmentCount: 2,
                 FirstFaceSourcePrimitiveIds: ["paired-body-face-a"],
                 SecondFaceSourcePrimitiveIds: ["paired-body-face-b"]),
-            Evidence =
-            [
-                "parallel wall-face pair",
-                "wall evidence: strong double-edge wall body",
-                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
-            ]
+            Evidence = pairedEvidence
         };
         var nodes = new[]
         {
-            SyntheticNode("face-clean-node-a", 80, 108, WallNodeKind.Endpoint),
-            SyntheticNode("face-clean-node-b", 240, 108, WallNodeKind.Endpoint)
+            SyntheticNode("face-clean-node-a", 80, faceY, WallNodeKind.Endpoint),
+            SyntheticNode("face-clean-node-b", 240, faceY, WallNodeKind.Endpoint)
         };
         var edge = new WallEdge("face-clean-edge", 1, nodes[0].Id, nodes[1].Id, faceWall.Id, Confidence.High);
         var component = new WallGraphComponent(
@@ -15272,15 +15325,15 @@ public sealed class ExportTests
                 pairedWall.Id,
                 pairedWall.PageNumber,
                 pairedWall.Bounds,
-                WallEvidenceCategory.StrongWallBody,
+                dimensionLikeReviewEvidence ? WallEvidenceCategory.MediumWallBody : WallEvidenceCategory.StrongWallBody,
                 Confidence.High,
-                PlacementReady: true,
-                RequiresReview: false,
+                PlacementReady: !dimensionLikeReviewEvidence,
+                RequiresReview: dimensionLikeReviewEvidence,
                 RejectedAsNoise: false,
                 pairedWall.SourcePrimitiveIds,
                 pairedWall.Evidence)
             {
-                Decision = WallEvidenceDecision.Accept
+                Decision = dimensionLikeReviewEvidence ? WallEvidenceDecision.Review : WallEvidenceDecision.Accept
             }
         };
         var now = DateTimeOffset.UtcNow;
