@@ -1589,6 +1589,11 @@ internal static class WallEvidenceExportHelpers
                 wall,
                 component,
                 evidenceAssessment);
+        var trustedRoomBoundaryIsolatedExteriorWall =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedExteriorWall(
+                wall,
+                component,
+                evidenceAssessment);
         var trustedRecoveredRoomBoundaryObjectLikeWall =
             WallPlacementReadinessEvaluator.IsTrustedRecoveredRoomBoundaryObjectLikeWall(
                 wall,
@@ -1605,7 +1610,8 @@ internal static class WallEvidenceExportHelpers
             || trustedExteriorShellRepairSupportedWall
             || trustedMainStructuralExteriorWallBody
             || trustedLongIsolatedExteriorShellWallBody
-            || trustedRoomBoundaryIsolatedFragment;
+            || trustedRoomBoundaryIsolatedFragment
+            || trustedRoomBoundaryIsolatedExteriorWall;
         var trustedStructuralTopologyOverride =
             trustedIsolatedFragment
             || trustedRecoveredRoomBoundaryObjectLikeWall

@@ -237,6 +237,57 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsGeometricRoomConfirmedIsolatedExteriorShellBelowNormalThreshold()
+    {
+        var wall = Wall("wall:geometric-isolated-exterior-shell", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(147.4, 100)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 89), new PlanPoint(147.4, 89)),
+                new PlanLineSegment(new PlanPoint(100, 111), new PlanPoint(147.4, 111)),
+                FaceSeparation: 22,
+                OverlapRatio: 1,
+                Score: 0.663,
+                FirstFaceFragmentCount: 16,
+                SecondFaceFragmentCount: 105,
+                FirstFaceSourcePrimitiveIds: ["geometric-exterior-face-a"],
+                SecondFaceSourcePrimitiveIds: ["geometric-exterior-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: medium double-edge exterior wall body",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment",
+                $"wall evidence: {WallPlacementReadinessEvaluator.RoomConfirmedIsolatedExteriorPromotionEvidence} because multiple indoor rooms referenced this exterior shell segment"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview);
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_BlocksRoomConfirmedIsolatedExteriorShellSegmentWithCoveredOutdoorEvidence()
     {
         var wall = Wall("wall:covered-isolated-exterior-shell", Confidence.High) with

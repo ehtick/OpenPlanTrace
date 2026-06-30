@@ -69,6 +69,11 @@ public static class WallPlacementReadinessEvaluator
     private const double MaxTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits = 30.0;
     private const int MaxTrustedRoomConfirmedIsolatedExteriorPairFaceFragments = 96;
     private const int MaxTrustedRoomConfirmedIsolatedExteriorPairTotalFaceFragments = 180;
+    private const double MinTrustedGeometricRoomConfirmedIsolatedExteriorLengthDrawingUnits = 42.0;
+    private const double MinTrustedGeometricRoomConfirmedIsolatedExteriorPairScore = 0.66;
+    private const double MinTrustedGeometricRoomConfirmedIsolatedExteriorOverlapRatio = 0.98;
+    private const int MaxTrustedGeometricRoomConfirmedIsolatedExteriorPairFaceFragments = 112;
+    private const int MaxTrustedGeometricRoomConfirmedIsolatedExteriorPairTotalFaceFragments = 150;
     private const double MinTrustedTwoSidedFragmentMergedRoomBoundaryLengthDrawingUnits = 72.0;
     private const int MaxTrustedTwoSidedFragmentMergedRoomBoundaryFragments = 5;
     private const int MaxTrustedTwoSidedFragmentMergedRoomBoundaryDuplicateFragments = 2;
@@ -672,7 +677,7 @@ public static class WallPlacementReadinessEvaluator
             || wall.WallType != WallType.Exterior
             || wall.DetectionKind != WallDetectionKind.ParallelLinePair
             || wall.PairEvidence is not { } pair
-            || wall.DrawingLength < MinTrustedRoomConfirmedIsolatedExteriorLengthDrawingUnits
+            || wall.DrawingLength < MinTrustedGeometricRoomConfirmedIsolatedExteriorLengthDrawingUnits
             || wall.Confidence.Value < 0.78
             || !evidenceAssessment.PlacementReady
             || evidenceAssessment.RequiresReview
@@ -685,24 +690,38 @@ public static class WallPlacementReadinessEvaluator
             return false;
         }
 
-        var maxFaceFragments = Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount);
-        var totalFaceFragments = pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount;
-        if (pair.Score < MinTrustedRoomConfirmedIsolatedExteriorPairScore
-            || pair.OverlapRatio < MinTrustedRoomConfirmedIsolatedExteriorOverlapRatio
-            || pair.FaceSeparation < MinTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits
-            || pair.FaceSeparation > MaxTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits
-            || maxFaceFragments > MaxTrustedRoomConfirmedIsolatedExteriorPairFaceFragments
-            || totalFaceFragments > MaxTrustedRoomConfirmedIsolatedExteriorPairTotalFaceFragments)
-        {
-            return false;
-        }
-
         var evidence = wall.Evidence
             .Concat(evidenceAssessment.Evidence)
             .Concat(evidenceAssessment.ScoreBreakdown.PositiveEvidence)
             .Concat(evidenceAssessment.ScoreBreakdown.NegativeEvidence)
             .Concat(component.Evidence)
             .ToArray();
+        var maxFaceFragments = Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount);
+        var totalFaceFragments = pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount;
+        var hasNormalRoomConfirmedShellProof =
+            wall.DrawingLength >= MinTrustedRoomConfirmedIsolatedExteriorLengthDrawingUnits
+            && pair.Score >= MinTrustedRoomConfirmedIsolatedExteriorPairScore
+            && pair.OverlapRatio >= MinTrustedRoomConfirmedIsolatedExteriorOverlapRatio
+            && pair.FaceSeparation >= MinTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits
+            && pair.FaceSeparation <= MaxTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits
+            && maxFaceFragments <= MaxTrustedRoomConfirmedIsolatedExteriorPairFaceFragments
+            && totalFaceFragments <= MaxTrustedRoomConfirmedIsolatedExteriorPairTotalFaceFragments;
+        var hasGeometricExteriorBoundaryProof =
+            EvidenceContainsAny(
+                evidence,
+                "geometric room boundary support",
+                "reliable room-boundary alignment")
+            && pair.Score >= MinTrustedGeometricRoomConfirmedIsolatedExteriorPairScore
+            && pair.OverlapRatio >= MinTrustedGeometricRoomConfirmedIsolatedExteriorOverlapRatio
+            && pair.FaceSeparation >= MinTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits
+            && pair.FaceSeparation <= MaxTrustedRoomConfirmedIsolatedExteriorFaceSeparationDrawingUnits
+            && maxFaceFragments <= MaxTrustedGeometricRoomConfirmedIsolatedExteriorPairFaceFragments
+            && totalFaceFragments <= MaxTrustedGeometricRoomConfirmedIsolatedExteriorPairTotalFaceFragments;
+        if (!hasNormalRoomConfirmedShellProof && !hasGeometricExteriorBoundaryProof)
+        {
+            return false;
+        }
+
         if (!EvidenceContains(evidence, RoomConfirmedIsolatedExteriorPromotionEvidence)
             || !EvidenceContainsAny(
                 evidence,

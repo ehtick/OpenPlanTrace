@@ -1044,6 +1044,11 @@ public static class PlanOverlaySvgRenderer
                 span.SourceWall,
                 component,
                 evidenceAssessment);
+        var trustedRoomBoundaryIsolatedExteriorWall =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedExteriorWall(
+                span.SourceWall,
+                component,
+                evidenceAssessment);
         var trustedRecoveredRoomBoundaryObjectLikeWall =
             WallPlacementReadinessEvaluator.IsTrustedRecoveredRoomBoundaryObjectLikeWall(
                 span.SourceWall,
@@ -1064,6 +1069,7 @@ public static class PlanOverlaySvgRenderer
         }
         else if (!trustedExteriorShellContinuityFragment
             && !trustedRoomBoundaryIsolatedFragment
+            && !trustedRoomBoundaryIsolatedExteriorWall
             && !trustedRecoveredRoomBoundaryObjectLikeWall
             && !trustedObjectLikeLongCleanFragmentInterior
             && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment))
@@ -1123,6 +1129,11 @@ public static class PlanOverlaySvgRenderer
                 footprint.SourceWall,
                 component,
                 evidenceAssessment);
+        var trustedRoomBoundaryIsolatedExteriorWall =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedExteriorWall(
+                footprint.SourceWall,
+                component,
+                evidenceAssessment);
         var trustedRecoveredRoomBoundaryObjectLikeWall =
             WallPlacementReadinessEvaluator.IsTrustedRecoveredRoomBoundaryObjectLikeWall(
                 footprint.SourceWall,
@@ -1139,6 +1150,7 @@ public static class PlanOverlaySvgRenderer
                 && !trustedObjectLikeLongCleanFragmentInterior)
             || (!trustedExteriorShellContinuityFragment
                 && !trustedRoomBoundaryIsolatedFragment
+                && !trustedRoomBoundaryIsolatedExteriorWall
                 && !trustedRecoveredRoomBoundaryObjectLikeWall
                 && !trustedObjectLikeLongCleanFragmentInterior
                 && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment)))

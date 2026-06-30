@@ -1481,6 +1481,82 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_PromotesGeometricIsolatedExteriorShellSegmentBelowNormalThreshold()
+    {
+        var wall = new WallSegment(
+            "wall-geometric-isolated-exterior-shell",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(147.4, 100)),
+            7,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            SourcePrimitiveIds = Enumerable.Range(1, 121)
+                .Select(index => $"geometric-exterior-shell-fragment-{index}")
+                .ToArray(),
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 89), new PlanPoint(147.4, 89)),
+                new PlanLineSegment(new PlanPoint(100, 111), new PlanPoint(147.4, 111)),
+                FaceSeparation: 22,
+                OverlapRatio: 1,
+                Score: 0.663,
+                FirstFaceFragmentCount: 16,
+                SecondFaceFragmentCount: 105,
+                FirstFaceSourcePrimitiveIds: ["geometric-exterior-shell-face-a"],
+                SecondFaceSourcePrimitiveIds: ["geometric-exterior-shell-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "pair score 0,663",
+                "overlap ratio 1",
+                "first face merged 16 fragments",
+                "second face merged 105 fragments",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: medium double-edge exterior wall body",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+            ]
+        };
+        var context = CreateContext("geometric-isolated-exterior-shell");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room(
+            "room-geometric-exterior",
+            RoomUseKind.Office,
+            new PlanRect(100, 100, 48, 42),
+            new[]
+            {
+                new PlanPoint(100, 100),
+                new PlanPoint(148, 100),
+                new PlanPoint(148, 142),
+                new PlanPoint(100, 142)
+            },
+            new[] { wall.Id, "synthetic-room-edge" }));
+        context.WallGraph = IsolatedGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains(WallPlacementReadinessEvaluator.RoomConfirmedIsolatedExteriorPromotionEvidence, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_DoesNotPromoteCoveredOutdoorIsolatedExteriorShellSegment()
     {
         var wall = new WallSegment(
@@ -2373,6 +2449,55 @@ public sealed class WallTypeRefinementTests
             context.Diagnostics.Build().Messages,
             diagnostic => diagnostic.Code == "walls.architectural_type_refined"
                 && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsDimensionLikeDenseLocalWallWithStructuralEndpointProof()
+    {
+        var wall = ShortUnlayeredInteriorWall("wall-dimension-like-structural-endpoint-supported", 100, 100, 154.8, 100) with
+        {
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 21,974 drawing units",
+                "pair score 0,84",
+                "overlap ratio 1",
+                "first face merged 12 fragments",
+                "second face merged 31 fragments",
+                "first face collapsed 18 duplicate or near-duplicate wall line primitive(s)",
+                "second face collapsed 10 duplicate or near-duplicate wall line primitive(s)",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence: strong double-edge wall body"
+            ]
+        };
+        var context = CreateContext("dimension-like-dense-local-structural-endpoint-protection");
+        var neighbors = AxisDenseDetailNeighborWalls().ToArray();
+        context.Walls.Add(wall);
+        context.Walls.AddRange(neighbors);
+        context.WallGraph = SupportedEndpointGraphFor(wall, WallGraphComponentKind.MainStructural);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(retained.PlacementReady);
+        Assert.False(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("dense local detail/stair-like linework", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "0");
     }
 
     [Fact]

@@ -7,6 +7,10 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private const string StageName = "wall-type-refinement";
     private const double MinTrustedDimensionLikeDenseRoomBoundaryPairScore = 0.80;
     private const double MinSecondaryTrustedDimensionLikeDenseRoomBoundaryLength = 32.0;
+    private const double MinTrustedDenseStructuralEndpointWallLength = 42.0;
+    private const double MinTrustedDenseStructuralEndpointPairScore = 0.80;
+    private const double MinTrustedDenseStructuralEndpointPairOverlap = 0.98;
+    private const int MinTrustedDenseStructuralEndpointCount = 2;
     private const double MinMainStructuralOneEndpointDenseRoomBoundaryLength = 42.0;
     private const double MaxMainStructuralOneEndpointDenseRoomBoundaryLength = 96.0;
     private const double MinMainStructuralOneEndpointDenseRoomBoundaryPairScore = 0.94;
@@ -27,6 +31,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private const int MinTrustedFilledDenseSideRoomHits = 4;
     private const int MinTrustedFilledDenseSideRoomEndpoints = 3;
     private const double MinTrustedFilledDenseSideRoomPairScore = 0.88;
+    private const double MinTrustedGeometricIsolatedExteriorLength = 42.0;
+    private const double MinTrustedGeometricIsolatedExteriorPairScore = 0.66;
+    private const double MinTrustedGeometricIsolatedExteriorOverlap = 0.98;
+    private const int MaxTrustedGeometricIsolatedExteriorFaceFragments = 112;
+    private const int MaxTrustedGeometricIsolatedExteriorTotalFaceFragments = 150;
 
     public string Name => StageName;
 
@@ -1392,6 +1401,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             roomReferenceCount,
             hasOutdoorRoomReference,
             sideEvidence,
+            hasGeometricRoomBoundarySupport,
             options);
         if ((!IsStructuralWallComponent(component)
             && !isRoomConfirmableIsolatedComponent
@@ -1530,6 +1540,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int roomReferenceCount,
         bool hasOutdoorRoomReference,
         RoomSideEvidence sideEvidence,
+        bool hasGeometricRoomBoundarySupport,
         ScannerOptions options)
     {
         if (component is null
@@ -1538,7 +1549,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             || wall.WallType != WallType.Exterior
             || wall.DetectionKind != WallDetectionKind.ParallelLinePair
             || wall.PairEvidence is not { } pair
-            || wall.DrawingLength < Math.Max(48.0, options.MinWallLength * 2.0)
+            || wall.DrawingLength < MinTrustedGeometricIsolatedExteriorLength
             || wall.Confidence.Value < 0.78
             || assessment.RejectedAsNoise
             || assessment.Decision == WallEvidenceDecision.Reject
@@ -1550,24 +1561,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return false;
         }
 
-        var roomSideHits = sideEvidence.PositiveRoomHits + sideEvidence.NegativeRoomHits;
-        if (roomReferenceCount < 3 && roomSideHits < 6)
-        {
-            return false;
-        }
-
         var maxFaceFragments = Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount);
         var totalFaceFragments = pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount;
-        if (pair.Score < 0.70
-            || pair.OverlapRatio < 0.95
-            || pair.FaceSeparation < 1.5
-            || pair.FaceSeparation > Math.Max(30.0, options.DefaultWallThickness * 6.0)
-            || maxFaceFragments > 96
-            || totalFaceFragments > 180)
-        {
-            return false;
-        }
-
         var evidence = assessment.Evidence
             .Concat(wall.Evidence)
             .Concat(assessment.ScoreBreakdown.PositiveEvidence)
@@ -1578,7 +1573,35 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return false;
         }
 
+        var hasGeometricExteriorBoundaryProof =
+            hasGeometricRoomBoundarySupport
+            && pair.Score >= MinTrustedGeometricIsolatedExteriorPairScore
+            && pair.OverlapRatio >= MinTrustedGeometricIsolatedExteriorOverlap
+            && pair.FaceSeparation >= 1.5
+            && pair.FaceSeparation <= Math.Max(30.0, options.DefaultWallThickness * 6.0)
+            && maxFaceFragments <= MaxTrustedGeometricIsolatedExteriorFaceFragments
+            && totalFaceFragments <= MaxTrustedGeometricIsolatedExteriorTotalFaceFragments;
+        var roomSideHits = sideEvidence.PositiveRoomHits + sideEvidence.NegativeRoomHits;
+        if (roomReferenceCount < 3 && roomSideHits < 6 && !hasGeometricExteriorBoundaryProof)
+        {
+            return false;
+        }
+
+        var hasNormalRoomConfirmedShellProof =
+            wall.DrawingLength >= Math.Max(48.0, options.MinWallLength * 2.0)
+            && pair.Score >= 0.70
+            && pair.OverlapRatio >= 0.95
+            && pair.FaceSeparation >= 1.5
+            && pair.FaceSeparation <= Math.Max(30.0, options.DefaultWallThickness * 6.0)
+            && maxFaceFragments <= 96
+            && totalFaceFragments <= 180;
+        if (!hasNormalRoomConfirmedShellProof && !hasGeometricExteriorBoundaryProof)
+        {
+            return false;
+        }
+
         if (IsDimensionLikeWeakLayerEvidence(evidence)
+            && !hasGeometricExteriorBoundaryProof
             && (roomReferenceCount < 3 || pair.OverlapRatio < 0.98 || pair.Score < 0.70))
         {
             return false;
@@ -2505,9 +2528,19 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && wall.DrawingLength <= MaxMainStructuralOneEndpointDenseRoomBoundaryLength
             && faceFragments.MaxFaceFragmentCount <= MaxMainStructuralOneEndpointDenseRoomBoundaryFaceFragments
             && faceFragments.TotalFaceFragmentCount <= MaxMainStructuralOneEndpointDenseRoomBoundaryTotalFaceFragments;
+        var hasStructuralEndpointProof =
+            component.Kind is WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural
+            && offAxisNearbyCount == 0
+            && supportedTopologyEndpointCount >= MinTrustedDenseStructuralEndpointCount
+            && pairScore >= MinTrustedDenseStructuralEndpointPairScore
+            && pairOverlap >= MinTrustedDenseStructuralEndpointPairOverlap
+            && wall.DrawingLength >= MinTrustedDenseStructuralEndpointWallLength
+            && wall.DrawingLength <= 72.0
+            && evidence.Any(item => item.Contains("supported wall evidence inside exterior envelope", StringComparison.OrdinalIgnoreCase));
         if (!hasGeometricRoomBoundaryProof
             && !hasStrongSideEndpointProof
-            && !hasMainStructuralOneEndpointSideProof)
+            && !hasMainStructuralOneEndpointSideProof
+            && !hasStructuralEndpointProof)
         {
             return false;
         }

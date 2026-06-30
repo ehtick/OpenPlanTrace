@@ -206,8 +206,14 @@ internal static class WallBodyFootprintBuilder
 
         componentByWallId.TryGetValue(wall.Id, out var component);
         assessmentByWallId.TryGetValue(wall.Id, out var assessment);
-        if (component?.ExcludedFromStructuralTopology == true
-            || component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment
+        var trustedRoomBoundaryIsolatedExteriorWall =
+            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedExteriorWall(
+                wall,
+                component,
+                assessment);
+        if ((component?.ExcludedFromStructuralTopology == true && !trustedRoomBoundaryIsolatedExteriorWall)
+            || (component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment
+                && !trustedRoomBoundaryIsolatedExteriorWall)
             || assessment is null
             || !assessment.PlacementReady
             || assessment.RequiresReview
