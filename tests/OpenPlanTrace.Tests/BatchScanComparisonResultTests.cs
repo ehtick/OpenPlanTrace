@@ -83,6 +83,70 @@ public sealed class BatchScanComparisonResultTests
     }
 
     [Fact]
+    public void Compare_FlagsImportReadinessAndWallPlacementImprovements()
+    {
+        var baseline = CreateRun(
+            "baseline",
+            CreateItem(
+                wallPlacementReady: 45,
+                wallPlacementReview: 18,
+                wallPlacementOmitted: 88,
+                omissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["wall_evidence_review_required"] = 8
+                },
+                importReadiness: ImportReadiness(
+                    score: 0.742,
+                    coordinateRatio: 0.672,
+                    coordinateReady: 78,
+                    coordinateTracked: 116,
+                    metricRatio: 0.672,
+                    metricReady: 78,
+                    metricTracked: 116)));
+        var candidate = CreateRun(
+            "candidate",
+            CreateItem(
+                wallPlacementReady: 46,
+                wallPlacementReview: 17,
+                wallPlacementOmitted: 87,
+                omissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                {
+                    ["wall_evidence_review_required"] = 7
+                },
+                importReadiness: ImportReadiness(
+                    score: 0.746,
+                    coordinateRatio: 0.681,
+                    coordinateReady: 79,
+                    coordinateTracked: 116,
+                    metricRatio: 0.681,
+                    metricReady: 79,
+                    metricTracked: 116)));
+
+        var comparison = BatchScanComparisonResult.Compare(baseline, candidate);
+
+        Assert.True(comparison.Passed);
+        Assert.Equal(7, comparison.ImprovementCount);
+
+        var signalCodes = comparison.Signals.Select(signal => signal.Code).ToArray();
+        Assert.Contains("import_readiness.score_improved", signalCodes);
+        Assert.Contains("import_readiness.coordinate_ratio_improved", signalCodes);
+        Assert.Contains("import_readiness.metric_ratio_improved", signalCodes);
+        Assert.Contains("wall_placement.ready_increased", signalCodes);
+        Assert.Contains("wall_placement.review_reduced", signalCodes);
+        Assert.Contains("wall_placement.omitted_reduced", signalCodes);
+        Assert.Contains("wall_placement.omission.wall_evidence_review_required_reduced", signalCodes);
+
+        var item = Assert.Single(comparison.Items);
+        Assert.Contains(item.Deltas, delta => delta.Name == "importReadinessScore" && Math.Round(delta.Delta!.Value, 3) == 0.004);
+        Assert.Contains(item.Deltas, delta => delta.Name == "wallPlacementReady" && delta.Delta == 1);
+
+        var markdown = BatchScanComparisonMarkdownReport.Create(comparison);
+        Assert.Contains("import_readiness.score_improved", markdown);
+        Assert.Contains("wallPlacementReady +1", markdown);
+        Assert.Contains("importReadinessScore +0.004", markdown);
+    }
+
+    [Fact]
     public void MarkdownReport_IncludesEvidenceColumnAndArtifactAvailability()
     {
         var baseline = CreateRun(
@@ -205,7 +269,13 @@ public sealed class BatchScanComparisonResultTests
         string? geoJsonPath = null,
         string? placementJsonPath = null,
         string? overlayDirectory = null,
-        BatchImportReadinessSummary? importReadiness = null) =>
+        BatchImportReadinessSummary? importReadiness = null,
+        int wallPlacementReady = 18,
+        int wallPlacementReview = 9,
+        int wallPlacementOmitted = 21,
+        int wallPlacementSuppressed = 2,
+        int wallPlacementRepresented = 4,
+        IReadOnlyDictionary<string, int>? omissionCounts = null) =>
         new(
             ItemNumber: 1,
             InputPath: @"C:\plans\light.pdf",
@@ -257,12 +327,12 @@ public sealed class BatchScanComparisonResultTests
                 MaxDetectionCoverage: 0.83,
                 IssueCodes: new[] { "visual.overlay_coverage_high" }),
             WallPlacement: new BatchWallPlacementSummary(
-                PlacementReadyWallCount: 18,
-                PlacementOmittedWallCount: 21,
-                RepresentedWallCount: 4,
-                PlacementSuppressedWallCount: 2,
-                PlacementReviewWallCount: 9,
-                OmissionCounts: new Dictionary<string, int>(StringComparer.Ordinal)
+                PlacementReadyWallCount: wallPlacementReady,
+                PlacementOmittedWallCount: wallPlacementOmitted,
+                RepresentedWallCount: wallPlacementRepresented,
+                PlacementSuppressedWallCount: wallPlacementSuppressed,
+                PlacementReviewWallCount: wallPlacementReview,
+                OmissionCounts: omissionCounts ?? new Dictionary<string, int>(StringComparer.Ordinal)
                 {
                     ["wall_evidence_review_required"] = 7,
                     ["fragmented_short_parallel_pair_review_required"] = 3
@@ -285,4 +355,33 @@ public sealed class BatchScanComparisonResultTests
                 Evidence: new[] { "structural import coordinate readiness ratio 0.559 (66/118 structural import entities)" }),
             ErrorMessage: null,
             SourceCapability: null);
+
+    private static BatchImportReadinessSummary ImportReadiness(
+        double score,
+        double coordinateRatio,
+        int coordinateReady,
+        int coordinateTracked,
+        double metricRatio,
+        int metricReady,
+        int metricTracked) =>
+        new(
+            Grade: "Blocked",
+            Score: score,
+            ReadyForGeometryImport: false,
+            ReadyForMetricImport: false,
+            ReadyForRoutingImport: false,
+            RequiresReview: true,
+            CoordinateReadyRatio: coordinateRatio,
+            CoordinateReadyEntityCount: coordinateReady,
+            CoordinateTrackedEntityCount: coordinateTracked,
+            MetricReadyRatio: metricRatio,
+            MetricReadyEntityCount: metricReady,
+            MetricTrackedEntityCount: metricTracked,
+            BlockingIssueCodes: new[] { "placement.import.low_coordinate_ready_ratio" },
+            ReviewIssueCodes: new[] { "placement.wall_evidence.requires_review" },
+            Evidence: new[]
+            {
+                $"structural import coordinate readiness ratio {coordinateRatio.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} ({coordinateReady.ToString(System.Globalization.CultureInfo.InvariantCulture)}/{coordinateTracked.ToString(System.Globalization.CultureInfo.InvariantCulture)} structural import entities)",
+                $"structural import metric readiness ratio {metricRatio.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} ({metricReady.ToString(System.Globalization.CultureInfo.InvariantCulture)}/{metricTracked.ToString(System.Globalization.CultureInfo.InvariantCulture)} structural import entities)"
+            });
 }

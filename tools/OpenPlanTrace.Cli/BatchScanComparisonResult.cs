@@ -240,6 +240,8 @@ internal sealed record BatchScanComparisonResult(
         AddQualitySignals(displayKey, baseline, candidate, options, itemSignals);
         AddDiagnosticSignals(displayKey, baseline, candidate, options, itemSignals);
         AddVisualSignals(displayKey, baseline, candidate, options, itemSignals);
+        AddImportReadinessSignals(displayKey, baseline, candidate, options, itemSignals);
+        AddWallPlacementSignals(displayKey, baseline, candidate, options, itemSignals);
         AddDurationSignals(displayKey, baseline, candidate, options, itemSignals);
         AddZeroedDetectorSignals(displayKey, baseline, candidate, itemSignals);
         AddCountDriftSignals(displayKey, baseline, candidate, itemSignals);
@@ -467,6 +469,303 @@ internal sealed record BatchScanComparisonResult(
         }
     }
 
+    private static void AddImportReadinessSignals(
+        string key,
+        BatchScanItemResult baseline,
+        BatchScanItemResult candidate,
+        BatchScanComparisonOptions options,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        if (!string.Equals(baseline.ImportReadiness.Grade, candidate.ImportReadiness.Grade, StringComparison.OrdinalIgnoreCase))
+        {
+            var baselineRank = ImportReadinessGradeRank(baseline.ImportReadiness.Grade);
+            var candidateRank = ImportReadinessGradeRank(candidate.ImportReadiness.Grade);
+            if (candidateRank < baselineRank)
+            {
+                signals.Add(Regression(
+                    key,
+                    "import_readiness.grade_regressed",
+                    "Candidate import-readiness grade is worse than the baseline.",
+                    baseline.ImportReadiness.Grade,
+                    candidate.ImportReadiness.Grade));
+            }
+            else if (candidateRank > baselineRank)
+            {
+                signals.Add(Improvement(
+                    key,
+                    "import_readiness.grade_improved",
+                    "Candidate import-readiness grade improved.",
+                    baseline.ImportReadiness.Grade,
+                    candidate.ImportReadiness.Grade));
+            }
+            else
+            {
+                signals.Add(Info(
+                    key,
+                    "import_readiness.grade_changed",
+                    "Candidate import-readiness grade label changed.",
+                    baseline.ImportReadiness.Grade,
+                    candidate.ImportReadiness.Grade));
+            }
+        }
+
+        AddScoreSignal(
+            key,
+            "import_readiness.score",
+            "import-readiness score",
+            baseline.ImportReadiness.Score,
+            candidate.ImportReadiness.Score,
+            options.ImportReadinessScoreChangeThreshold,
+            signals);
+        AddOptionalScoreSignal(
+            key,
+            "import_readiness.coordinate_ratio",
+            "coordinate-ready ratio",
+            baseline.ImportReadiness.CoordinateReadyRatio,
+            candidate.ImportReadiness.CoordinateReadyRatio,
+            options.ImportReadinessScoreChangeThreshold,
+            signals);
+        AddOptionalScoreSignal(
+            key,
+            "import_readiness.metric_ratio",
+            "metric-ready ratio",
+            baseline.ImportReadiness.MetricReadyRatio,
+            candidate.ImportReadiness.MetricReadyRatio,
+            options.ImportReadinessScoreChangeThreshold,
+            signals);
+
+        AddReadinessBoolSignal(
+            key,
+            "geometry",
+            baseline.ImportReadiness.ReadyForGeometryImport,
+            candidate.ImportReadiness.ReadyForGeometryImport,
+            signals);
+        AddReadinessBoolSignal(
+            key,
+            "metric",
+            baseline.ImportReadiness.ReadyForMetricImport,
+            candidate.ImportReadiness.ReadyForMetricImport,
+            signals);
+        AddReadinessBoolSignal(
+            key,
+            "routing",
+            baseline.ImportReadiness.ReadyForRoutingImport,
+            candidate.ImportReadiness.ReadyForRoutingImport,
+            signals);
+
+        if (!baseline.ImportReadiness.RequiresReview && candidate.ImportReadiness.RequiresReview)
+        {
+            signals.Add(Regression(
+                key,
+                "import_readiness.review_required",
+                "Candidate import-readiness now requires review.",
+                "false",
+                "true"));
+        }
+        else if (baseline.ImportReadiness.RequiresReview && !candidate.ImportReadiness.RequiresReview)
+        {
+            signals.Add(Improvement(
+                key,
+                "import_readiness.review_cleared",
+                "Candidate import-readiness no longer requires review.",
+                "true",
+                "false"));
+        }
+    }
+
+    private static void AddWallPlacementSignals(
+        string key,
+        BatchScanItemResult baseline,
+        BatchScanItemResult candidate,
+        BatchScanComparisonOptions options,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        AddCountMoreIsBetterSignal(
+            key,
+            "wall_placement.ready",
+            "placement-ready wall count",
+            baseline.WallPlacement.PlacementReadyWallCount,
+            candidate.WallPlacement.PlacementReadyWallCount,
+            options.WallPlacementCountChangeThreshold,
+            signals);
+        AddCountLessIsBetterSignal(
+            key,
+            "wall_placement.review",
+            "review wall count",
+            baseline.WallPlacement.PlacementReviewWallCount,
+            candidate.WallPlacement.PlacementReviewWallCount,
+            options.WallPlacementCountChangeThreshold,
+            signals);
+        AddCountLessIsBetterSignal(
+            key,
+            "wall_placement.omitted",
+            "omitted wall candidate count",
+            baseline.WallPlacement.PlacementOmittedWallCount,
+            candidate.WallPlacement.PlacementOmittedWallCount,
+            options.WallPlacementCountChangeThreshold,
+            signals);
+
+        foreach (var reason in baseline.WallPlacement.OmissionCounts.Keys
+                     .Concat(candidate.WallPlacement.OmissionCounts.Keys)
+                     .Distinct(StringComparer.Ordinal)
+                     .Order(StringComparer.Ordinal))
+        {
+            var baselineCount = baseline.WallPlacement.OmissionCounts.TryGetValue(reason, out var baselineReasonCount)
+                ? baselineReasonCount
+                : 0;
+            var candidateCount = candidate.WallPlacement.OmissionCounts.TryGetValue(reason, out var candidateReasonCount)
+                ? candidateReasonCount
+                : 0;
+            AddCountLessIsBetterSignal(
+                key,
+                $"wall_placement.omission.{reason}",
+                $"omitted wall candidates for {reason}",
+                baselineCount,
+                candidateCount,
+                options.WallPlacementOmissionReasonChangeThreshold,
+                signals);
+        }
+    }
+
+    private static void AddScoreSignal(
+        string key,
+        string codePrefix,
+        string label,
+        double baseline,
+        double candidate,
+        double threshold,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        var delta = candidate - baseline;
+        if (delta <= -threshold)
+        {
+            signals.Add(Regression(
+                key,
+                $"{codePrefix}_regressed",
+                $"Candidate {label} decreased.",
+                FormatRatio(baseline),
+                FormatRatio(candidate)));
+        }
+        else if (delta >= threshold)
+        {
+            signals.Add(Improvement(
+                key,
+                $"{codePrefix}_improved",
+                $"Candidate {label} improved.",
+                FormatRatio(baseline),
+                FormatRatio(candidate)));
+        }
+    }
+
+    private static void AddOptionalScoreSignal(
+        string key,
+        string codePrefix,
+        string label,
+        double? baseline,
+        double? candidate,
+        double threshold,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        if (baseline is null || candidate is null)
+        {
+            return;
+        }
+
+        AddScoreSignal(key, codePrefix, label, baseline.Value, candidate.Value, threshold, signals);
+    }
+
+    private static void AddReadinessBoolSignal(
+        string key,
+        string readinessKind,
+        bool baseline,
+        bool candidate,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        if (baseline == candidate)
+        {
+            return;
+        }
+
+        if (candidate)
+        {
+            signals.Add(Improvement(
+                key,
+                $"import_readiness.{readinessKind}_ready",
+                $"Candidate is now ready for {readinessKind} import.",
+                "false",
+                "true"));
+        }
+        else
+        {
+            signals.Add(Regression(
+                key,
+                $"import_readiness.{readinessKind}_not_ready",
+                $"Candidate is no longer ready for {readinessKind} import.",
+                "true",
+                "false"));
+        }
+    }
+
+    private static void AddCountMoreIsBetterSignal(
+        string key,
+        string codePrefix,
+        string label,
+        int baseline,
+        int candidate,
+        int threshold,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        var delta = candidate - baseline;
+        if (delta >= threshold)
+        {
+            signals.Add(Improvement(
+                key,
+                $"{codePrefix}_increased",
+                $"Candidate {label} increased.",
+                baseline.ToString(CultureInfo.InvariantCulture),
+                candidate.ToString(CultureInfo.InvariantCulture)));
+        }
+        else if (-delta >= threshold)
+        {
+            signals.Add(Regression(
+                key,
+                $"{codePrefix}_decreased",
+                $"Candidate {label} decreased.",
+                baseline.ToString(CultureInfo.InvariantCulture),
+                candidate.ToString(CultureInfo.InvariantCulture)));
+        }
+    }
+
+    private static void AddCountLessIsBetterSignal(
+        string key,
+        string codePrefix,
+        string label,
+        int baseline,
+        int candidate,
+        int threshold,
+        ICollection<BatchScanComparisonSignal> signals)
+    {
+        var delta = candidate - baseline;
+        if (-delta >= threshold)
+        {
+            signals.Add(Improvement(
+                key,
+                $"{codePrefix}_reduced",
+                $"Candidate {label} decreased.",
+                baseline.ToString(CultureInfo.InvariantCulture),
+                candidate.ToString(CultureInfo.InvariantCulture)));
+        }
+        else if (delta >= threshold)
+        {
+            signals.Add(Regression(
+                key,
+                $"{codePrefix}_increased",
+                $"Candidate {label} increased.",
+                baseline.ToString(CultureInfo.InvariantCulture),
+                candidate.ToString(CultureInfo.InvariantCulture)));
+        }
+    }
+
     private static void AddDurationSignals(
         string key,
         BatchScanItemResult baseline,
@@ -602,6 +901,14 @@ internal sealed record BatchScanComparisonResult(
             CountDelta("visualWarningIssues", baseline.VisualSnapshot.WarningIssueCount, candidate.VisualSnapshot.WarningIssueCount),
             CountDelta("visualErrorIssues", baseline.VisualSnapshot.ErrorIssueCount, candidate.VisualSnapshot.ErrorIssueCount),
             NumberDelta("visualMaxDetectionCoverage", baseline.VisualSnapshot.MaxDetectionCoverage, candidate.VisualSnapshot.MaxDetectionCoverage, "ratio"),
+            CountDelta("wallPlacementReady", baseline.WallPlacement.PlacementReadyWallCount, candidate.WallPlacement.PlacementReadyWallCount),
+            CountDelta("wallPlacementReview", baseline.WallPlacement.PlacementReviewWallCount, candidate.WallPlacement.PlacementReviewWallCount),
+            CountDelta("wallPlacementOmitted", baseline.WallPlacement.PlacementOmittedWallCount, candidate.WallPlacement.PlacementOmittedWallCount),
+            CountDelta("wallPlacementSuppressed", baseline.WallPlacement.PlacementSuppressedWallCount, candidate.WallPlacement.PlacementSuppressedWallCount),
+            CountDelta("wallPlacementRepresented", baseline.WallPlacement.RepresentedWallCount, candidate.WallPlacement.RepresentedWallCount),
+            NumberDelta("importReadinessScore", baseline.ImportReadiness.Score, candidate.ImportReadiness.Score, "ratio"),
+            OptionalNumberDelta("importReadinessCoordinateRatio", baseline.ImportReadiness.CoordinateReadyRatio, candidate.ImportReadiness.CoordinateReadyRatio, "ratio"),
+            OptionalNumberDelta("importReadinessMetricRatio", baseline.ImportReadiness.MetricReadyRatio, candidate.ImportReadiness.MetricReadyRatio, "ratio"),
             NumberDelta("durationMilliseconds", baseline.DurationMilliseconds, candidate.DurationMilliseconds, "ms")
         };
 
@@ -614,6 +921,9 @@ internal sealed record BatchScanComparisonResult(
     private static BatchScanMetricDelta NumberDelta(string name, double baseline, double candidate, string unit) =>
         new(name, baseline, candidate, candidate - baseline, unit);
 
+    private static BatchScanMetricDelta OptionalNumberDelta(string name, double? baseline, double? candidate, string unit) =>
+        new(name, baseline, candidate, baseline is null || candidate is null ? null : candidate - baseline, unit);
+
     private static int StatusRank(BatchScanItemStatus status) =>
         status switch
         {
@@ -621,6 +931,16 @@ internal sealed record BatchScanComparisonResult(
             BatchScanItemStatus.CompletedWithErrors => 3,
             BatchScanItemStatus.Failed => 1,
             BatchScanItemStatus.Missing or BatchScanItemStatus.Unsupported => 0,
+            _ => 0
+        };
+
+    private static int ImportReadinessGradeRank(string? grade) =>
+        grade?.Trim() switch
+        {
+            "Strong" => 4,
+            "Usable" => 3,
+            "ReviewRequired" => 2,
+            "Blocked" => 1,
             _ => 0
         };
 
@@ -751,6 +1071,12 @@ internal sealed class BatchScanComparisonOptions
     public int DiagnosticErrorIncreaseThreshold { get; set; } = 1;
 
     public int VisualIssueIncreaseThreshold { get; set; } = 1;
+
+    public double ImportReadinessScoreChangeThreshold { get; set; } = 0.001;
+
+    public int WallPlacementCountChangeThreshold { get; set; } = 1;
+
+    public int WallPlacementOmissionReasonChangeThreshold { get; set; } = 1;
 }
 
 internal sealed class BatchCompareArguments
@@ -998,7 +1324,23 @@ internal static class BatchScanComparisonMarkdownReport
 
     private static string KeyDeltas(BatchScanItemComparison item)
     {
-        var keys = new[] { "walls", "rooms", "openings", "objects", "objectAggregates", "diagnosticErrors", "visualIssues", "qualityConfidence" };
+        var keys = new[]
+        {
+            "walls",
+            "rooms",
+            "openings",
+            "objects",
+            "objectAggregates",
+            "diagnosticErrors",
+            "visualIssues",
+            "qualityConfidence",
+            "wallPlacementReady",
+            "wallPlacementReview",
+            "wallPlacementOmitted",
+            "importReadinessScore",
+            "importReadinessCoordinateRatio",
+            "importReadinessMetricRatio"
+        };
         var selected = item.Deltas
             .Where(delta => keys.Contains(delta.Name, StringComparer.Ordinal))
             .Where(delta => delta.Delta is not null && Math.Abs(delta.Delta.Value) > 0.000001)
