@@ -754,6 +754,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedMainStructuralExteriorRecallWallBody =
+            WallPlacementReadinessEvaluator.IsTrustedMainStructuralExteriorRecallWallBody(
+                wall,
+                component,
+                assessment);
         var hasTrustedLongIsolatedExteriorShellWallBody =
             WallPlacementReadinessEvaluator.IsTrustedLongIsolatedExteriorShellWallBody(
                 wall,
@@ -889,6 +894,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
+                && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedGeometricRoomBoundaryPairPromotion
                 && !hasTrustedRoomReferencedPlacementReadyPair
@@ -909,6 +915,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
+                && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedRoomBoundaryIsolatedExteriorWall
                 && !hasTrustedGeometricRoomBoundaryPairPromotion
@@ -930,6 +937,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
+                && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedRoomBoundaryIsolatedExteriorWall
                 && !hasTrustedGeometricRoomBoundaryPairPromotion
@@ -959,6 +967,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
+                && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedRoomBoundaryIsolatedExteriorWall
                 && !hasTrustedGeometricRoomBoundaryPairPromotion
@@ -986,6 +995,7 @@ internal static class WallTopologySpanVisibility
             placementReviewReasons).ReadyForCoordinatePlacement
             && !trustedUnsafeExteriorCleanProjectionFallback
             && !hasTrustedMainStructuralExteriorWallBody
+            && !hasTrustedMainStructuralExteriorRecallWallBody
             && !hasTrustedLongIsolatedExteriorShellWallBody
             && !hasTrustedRoomBoundaryIsolatedExteriorWall
             && !trustedUnsafeInteriorCleanProjectionFallback
@@ -1021,6 +1031,7 @@ internal static class WallTopologySpanVisibility
             || hasTrustedLongSecondaryStructuralFragment
             || hasTrustedFilledSecondaryStructuralPair
             || hasTrustedMainStructuralExteriorWallBody
+            || hasTrustedMainStructuralExteriorRecallWallBody
             || hasTrustedLongIsolatedExteriorShellWallBody
             || hasTrustedRoomBoundaryIsolatedExteriorWall
             || hasTrustedGeometricRoomBoundaryPairPromotion
@@ -2285,6 +2296,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var trustedMainStructuralExteriorRecallWallBody =
+            WallPlacementReadinessEvaluator.IsTrustedMainStructuralExteriorRecallWallBody(
+                wall,
+                component,
+                assessment);
         var trustedUnsafeInteriorCleanProjectionFallback =
             IsTrustedInteriorSourceBackedFallbackForUnsafeCleanProjection(wall, context);
         var trustedInferredSharedRoomBoundary =
@@ -2369,6 +2385,10 @@ internal static class WallTopologySpanVisibility
         else if (trustedFilledSecondaryStructuralPair)
         {
             evidence.Add("source-backed fallback accepted because filled secondary structural wall body is strong, placement-ready, and inside the exterior envelope");
+        }
+        else if (trustedMainStructuralExteriorRecallWallBody)
+        {
+            evidence.Add("source-backed fallback accepted because long main-structural exterior wall recall recovered a fragmented paired wall body");
         }
         else if (trustedInferredSharedRoomBoundary)
         {

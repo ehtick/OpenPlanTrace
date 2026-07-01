@@ -2211,6 +2211,132 @@ public sealed class WallPlacementReadinessTests
         Assert.False(readiness.CoordinatePlacementBlocked);
     }
 
+    [Fact]
+    public void Evaluate_AllowsRecallSafeLongMainStructuralExteriorReviewPair()
+    {
+        var wall = Wall("wall:recall-safe-main-exterior-shell", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(250, 615), new PlanPoint(250, 700)),
+            WallType = WallType.Exterior,
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(239.25, 615), new PlanPoint(239.25, 700)),
+                new PlanLineSegment(new PlanPoint(260.75, 615), new PlanPoint(260.75, 700)),
+                FaceSeparation: 21.5,
+                OverlapRatio: 0.785,
+                Score: 0.553,
+                FirstFaceFragmentCount: 3,
+                SecondFaceFragmentCount: 299,
+                FirstFaceSourcePrimitiveIds: ["main-exterior-face-a"],
+                SecondFaceSourcePrimitiveIds: Enumerable.Range(1, 299)
+                    .Select(index => $"main-exterior-face-b-{index:000}")
+                    .ToArray()),
+            SourcePrimitiveIds = Enumerable.Range(1, 302)
+                .Select(index => $"main-exterior-source-{index:000}")
+                .ToArray(),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 21.495 drawing units",
+                "pair score 0.553",
+                "overlap ratio 0.785",
+                "second face merged 299 fragments",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Decision = WallEvidenceDecision.Review,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.56,
+                NegativeScore: 0.18,
+                DecisionScore: 0.38,
+                PairSupportScore: 0.26,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.18,
+                RecoverySupportScore: 0,
+                NoisePenalty: 0,
+                FragmentReviewPenalty: 0.18,
+                PositiveEvidence:
+                [
+                    "parallel wall-face pair",
+                    "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+                ],
+                NegativeEvidence: ["not placement-ready without review"])
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence,
+            ["wall evidence requires review before exact coordinate placement"]);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain(
+            "wall evidence requires review",
+            readiness.Reasons,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksRecallSafeLongMainStructuralExteriorWhenCoveredAreaEvidenceExists()
+    {
+        var wall = Wall("wall:covered-area-main-exterior-like-shell", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(250, 615), new PlanPoint(250, 700)),
+            WallType = WallType.Exterior,
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(239.25, 615), new PlanPoint(239.25, 700)),
+                new PlanLineSegment(new PlanPoint(260.75, 615), new PlanPoint(260.75, 700)),
+                FaceSeparation: 21.5,
+                OverlapRatio: 0.785,
+                Score: 0.553,
+                FirstFaceFragmentCount: 3,
+                SecondFaceFragmentCount: 299,
+                FirstFaceSourcePrimitiveIds: ["covered-area-face-a"],
+                SecondFaceSourcePrimitiveIds: ["covered-area-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "covered-area boundary review from outdoor covered entry"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Decision = WallEvidenceDecision.Review
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence,
+            ["wall evidence requires review before exact coordinate placement"]);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.Contains(
+            readiness.Reasons,
+            reason => reason.Contains("wall evidence requires review", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static WallSegment Wall(string id, Confidence confidence) =>
         new(
             id,
