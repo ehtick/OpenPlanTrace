@@ -5854,6 +5854,62 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversCleanIsolatedRoomBoundaryFragmentWhenGraphSpanIsMissing()
+    {
+        var result = CreateCleanIsolatedRoomBoundaryFragmentFallbackResult();
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("clean isolated room-boundary fragment", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("fragment wall body 5 fragment", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_DoesNotRecoverCleanIsolatedRoomBoundaryFragmentWhenDoorEvidenceExists()
+    {
+        var result = CreateCleanIsolatedRoomBoundaryFragmentFallbackResult(["door swing linework"]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal("isolated_fragment", wall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversInferredExteriorShellWhenSourceLineSupportIsStrong()
     {
         var result = CreateInferredExteriorShellFallbackResult();
@@ -16612,6 +16668,60 @@ public sealed class ExportTests
                 [assessment],
                 SourceCandidateWallCount: 1,
                 RecoveredCandidateWallCount: 1)
+        };
+    }
+
+    private static PlanScanResult CreateCleanIsolatedRoomBoundaryFragmentFallbackResult(
+        IReadOnlyList<string>? extraEvidence = null)
+    {
+        var evidence = new[]
+            {
+                "merged collinear wall fragments",
+                "run merged 5 fragments",
+                "run collapsed 2 duplicate or near-duplicate wall line primitive(s)",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "fragment geometry: 5 fragment(s)",
+                "fragment geometry healed gap ratio 0",
+                "fragment geometry collapsed 2 duplicate primitive(s)",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence: unlayered fragment-merged wall candidate has only one trusted structural endpoint (5 fragments, gap ratio 0); keep for topology but block exact placement until reviewed"
+            }
+            .Concat(extraEvidence ?? Array.Empty<string>())
+            .ToArray();
+        var result = CreateSourceBackedFallbackWallResult(
+            wallLength: 68,
+            wallType: WallType.Interior,
+            componentKind: WallGraphComponentKind.IsolatedFragment,
+            category: WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            evidence: evidence);
+        var sourceWall = result.Walls.Single(item => item.Id == "source-backed-fallback-wall");
+        var fragmentWall = sourceWall with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            PairEvidence = null,
+            Confidence = new Confidence(0.84),
+            FragmentEvidence = new WallFragmentEvidence(
+                FragmentCount: 5,
+                TotalHealedGap: 0,
+                MaxHealedGap: 0,
+                DuplicatePrimitiveCount: 2,
+                GapRatio: 0,
+                RequiresGeometryReview: false,
+                Evidence:
+                [
+                    "fragment geometry: 5 fragment(s)",
+                    "fragment geometry healed gap ratio 0",
+                    "fragment geometry collapsed 2 duplicate primitive(s)"
+                ]),
+            Evidence = evidence
+        };
+
+        return result with
+        {
+            Walls = [fragmentWall]
         };
     }
 

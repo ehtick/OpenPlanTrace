@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.08.027] - 2026-07-02
+
+- Improved clean isolated room-boundary fragment recovery.
+- Improved source-backed wall fallback evidence.
+- Small improvement to isolated fragment recovery tests.
+
 ## [0.08.026] - 2026-07-02
 
 - Improved short recovered room-boundary wall recovery.

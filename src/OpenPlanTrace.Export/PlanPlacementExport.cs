@@ -1592,6 +1592,12 @@ public sealed record PlacementWallOmissionExport(
                 component,
                 evidenceAssessment,
                 evidence);
+        var trustedCleanIsolatedRoomBoundaryFragmentWallBody =
+            WallPlacementContextGuards.IsTrustedCleanIsolatedRoomBoundaryFragmentWallBody(
+                wall,
+                component,
+                evidenceAssessment,
+                evidence);
 
         if (repairCandidates.Any(candidate => candidate.ImportImpact == WallGraphRepairImportImpact.TopologyImportBlocked))
         {
@@ -1688,7 +1694,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedRejectedMediumBoundaryFragmentWallBody
             && !trustedOpeningLinkedFilledInteriorWallBody
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
-            && !trustedShortRecoveredRoomBoundaryWallBody)
+            && !trustedShortRecoveredRoomBoundaryWallBody
+            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "structural_topology_excluded",
@@ -1709,6 +1716,7 @@ public sealed record PlacementWallOmissionExport(
         if (!trustedOpeningLinkedFilledInteriorWallBody
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
             && !trustedShortRecoveredRoomBoundaryWallBody
+            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody
             && IsSuppressedOpeningLinkedIsolatedFragment(component, wall, topologySpans, evidence))
         {
             return new PlacementWallOmissionClassification(
@@ -1721,7 +1729,8 @@ public sealed record PlacementWallOmissionExport(
         if (component?.Kind == WallGraphComponentKind.IsolatedFragment
             && !trustedOpeningLinkedFilledInteriorWallBody
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
-            && !trustedShortRecoveredRoomBoundaryWallBody)
+            && !trustedShortRecoveredRoomBoundaryWallBody
+            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "isolated_fragment",
@@ -2599,6 +2608,11 @@ public sealed record PlacementWallExport(
                 wall,
                 component,
                 evidenceAssessment)
+            && !WallPlacementContextGuards.IsTrustedCleanIsolatedRoomBoundaryFragmentWallBody(
+                wall,
+                component,
+                evidenceAssessment,
+                combinedReviewReasons)
             && !WallPlacementContextGuards.IsTrustedRejectedStrongBoundaryWallBody(
                 wall,
                 component,

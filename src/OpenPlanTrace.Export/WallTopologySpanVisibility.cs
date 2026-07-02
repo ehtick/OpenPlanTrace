@@ -943,6 +943,12 @@ internal static class WallTopologySpanVisibility
         var reviewReasons = context.ReviewReasonsByWallId.TryGetValue(wall.Id, out var foundReviewReasons)
             ? foundReviewReasons
             : Array.Empty<string>();
+        var hasTrustedCleanIsolatedRoomBoundaryFragment =
+            WallPlacementContextGuards.IsTrustedCleanIsolatedRoomBoundaryFragmentWallBody(
+                wall,
+                component,
+                assessment,
+                reviewReasons);
         var hasTopologySupportedFragmentedPairPromotion = IsTopologySupportedFragmentedPairPromotion(
             wall,
             component,
@@ -1060,7 +1066,8 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
-                && !hasTrustedShortRecoveredRoomBoundary)
+                && !hasTrustedShortRecoveredRoomBoundary
+                && !hasTrustedCleanIsolatedRoomBoundaryFragment)
             || assessment is null
             || (!hasTrustedTwoSidedFragmentMergedRoomBoundary
                 && !hasTrustedRecoveredRoomBoundaryObjectLikeWall
@@ -1091,6 +1098,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
+                && !hasTrustedCleanIsolatedRoomBoundaryFragment
                 && !assessment.PlacementReady)
             || (!hasTrustedTwoSidedFragmentMergedRoomBoundary
                 && !hasTrustedRecoveredRoomBoundaryObjectLikeWall
@@ -1121,6 +1129,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
+                && !hasTrustedCleanIsolatedRoomBoundaryFragment
                 && assessment.RequiresReview)
             || ((!hasTrustedRejectedStrongBoundaryWallBody
                     && !hasTrustedRejectedMediumBoundaryFragmentWallBody)
@@ -1160,7 +1169,8 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
-                && !hasTrustedShortRecoveredRoomBoundary))
+                && !hasTrustedShortRecoveredRoomBoundary
+                && !hasTrustedCleanIsolatedRoomBoundaryFragment))
         {
             return false;
         }
@@ -1198,7 +1208,8 @@ internal static class WallTopologySpanVisibility
             && !hasTrustedInferredExteriorShellFallback
             && !hasTrustedShortExteriorWallBody
             && !hasTrustedRoomBoundaryShortExteriorWallBody
-            && !hasTrustedShortRecoveredRoomBoundary)
+            && !hasTrustedShortRecoveredRoomBoundary
+            && !hasTrustedCleanIsolatedRoomBoundaryFragment)
         {
             return false;
         }
@@ -1238,7 +1249,8 @@ internal static class WallTopologySpanVisibility
             || hasTrustedInferredExteriorShellFallback
             || hasTrustedShortExteriorWallBody
             || hasTrustedRoomBoundaryShortExteriorWallBody
-            || hasTrustedShortRecoveredRoomBoundary;
+            || hasTrustedShortRecoveredRoomBoundary
+            || hasTrustedCleanIsolatedRoomBoundaryFragment;
     }
 
     private static bool IsTrustedInferredExteriorShellFallback(
@@ -2811,6 +2823,15 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var reviewReasons = context.ReviewReasonsByWallId.TryGetValue(wall.Id, out var foundReviewReasons)
+            ? foundReviewReasons
+            : Array.Empty<string>();
+        var trustedCleanIsolatedRoomBoundaryFragment =
+            WallPlacementContextGuards.IsTrustedCleanIsolatedRoomBoundaryFragmentWallBody(
+                wall,
+                component,
+                assessment,
+                reviewReasons);
         var trustedObjectLikeExteriorShellPair =
             WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
                 wall,
@@ -2923,6 +2944,8 @@ internal static class WallTopologySpanVisibility
                     ? "source-backed fallback accepted because dense two-sided room-backed fragment wall is main-structural and coordinate-safe"
                 : trustedLongOneEndpointFragmentMergedInterior
                     ? "source-backed fallback accepted because long one-end fragment-merged interior wall body is clean, structural, and coordinate-safe"
+                    : trustedCleanIsolatedRoomBoundaryFragment
+                    ? "source-backed fallback accepted because clean isolated room-boundary fragment has structural endpoint support"
                     : trustedOpeningLinkedFragmentMergedInterior
                     ? "source-backed fallback accepted because opening-linked fragment-merged interior wall has real wall support"
                     : trustedLongSecondaryStructuralFragment

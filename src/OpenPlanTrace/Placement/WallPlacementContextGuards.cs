@@ -65,6 +65,10 @@ public static class WallPlacementContextGuards
     private const double MinTrustedShortRecoveredRoomBoundaryLengthDrawingUnits = 12.0;
     private const double MaxTrustedShortRecoveredRoomBoundaryLengthDrawingUnits = 36.0;
     private const double MinTrustedShortRecoveredRoomBoundaryConfidence = 0.76;
+    private const double MinTrustedCleanIsolatedRoomBoundaryFragmentLengthDrawingUnits = 60.0;
+    private const double MinTrustedCleanIsolatedRoomBoundaryFragmentConfidence = 0.80;
+    private const int MaxTrustedCleanIsolatedRoomBoundaryFragmentCount = 8;
+    private const int MaxTrustedCleanIsolatedRoomBoundaryDuplicatePrimitives = 3;
 
     public const string SecondaryStructuralWithoutRoomBoundarySupportReason =
         "secondary structural wall component lacks room-boundary support";
@@ -107,6 +111,9 @@ public static class WallPlacementContextGuards
 
     public const string TrustedShortRecoveredRoomBoundaryEvidence =
         "short recovered wall has two-ended structural support and room evidence on both sides";
+
+    public const string TrustedCleanIsolatedRoomBoundaryFragmentEvidence =
+        "clean isolated fragment wall has structural endpoint and interior boundary support";
 
     public static bool IsTrustedRecoveredMainStructuralInteriorWallBody(
         WallSegment wall,
@@ -268,6 +275,97 @@ public static class WallPlacementContextGuards
             "door arc",
             "opening detail",
             "stair",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
+    public static bool IsTrustedCleanIsolatedRoomBoundaryFragmentWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component is null
+            || component.Kind != WallGraphComponentKind.IsolatedFragment
+            || component.ExcludedFromStructuralTopology
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.PairEvidence is not null
+            || wall.DrawingLength < MinTrustedCleanIsolatedRoomBoundaryFragmentLengthDrawingUnits
+            || wall.Confidence.Value < MinTrustedCleanIsolatedRoomBoundaryFragmentConfidence
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence
+            || assessment is null
+            || assessment.Confidence.Value < MinTrustedCleanIsolatedRoomBoundaryFragmentConfidence
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category != WallEvidenceCategory.MediumWallBody
+            || (!wall.CenterLine.IsHorizontal() && !wall.CenterLine.IsVertical()))
+        {
+            return false;
+        }
+
+        var uniqueSourcePrimitiveCount = Math.Max(0, wall.SourcePrimitiveIds.Count - fragmentEvidence.DuplicatePrimitiveCount);
+        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, uniqueSourcePrimitiveCount);
+        if (fragmentCount > MaxTrustedCleanIsolatedRoomBoundaryFragmentCount
+            || fragmentEvidence.DuplicatePrimitiveCount > MaxTrustedCleanIsolatedRoomBoundaryDuplicatePrimitives
+            || fragmentEvidence.GapRatio > 0.001
+            || fragmentEvidence.TotalHealedGap > 0.001
+            || fragmentEvidence.MaxHealedGap > 0.001)
+        {
+            return false;
+        }
+
+        var baseEvidence = WallEvidenceFor(wall, assessment)
+            .Concat(component.Evidence)
+            .Concat(fragmentEvidence.Evidence)
+            .ToArray();
+        var evidence = extraEvidence is null
+            ? baseEvidence
+            : baseEvidence.Concat(extraEvidence).ToArray();
+        var hasCleanFragmentEvidence =
+            EvidenceContains(evidence, "merged collinear wall fragments")
+            && EvidenceContains(evidence, "fragment geometry healed gap ratio 0")
+            && EvidenceContains(evidence, "supported wall evidence inside exterior envelope");
+        var hasBoundaryOrEndpointSupport =
+            EvidenceContains(evidence, "only one trusted structural endpoint")
+            || EvidenceContains(evidence, "one endpoint supported by structural context")
+            || EvidenceContains(evidence, "both endpoints supported by structural context")
+            || EvidenceContains(evidence, "detected room evidence on both sides")
+            || EvidenceContains(evidence, "geometric room boundary support")
+            || EvidenceContains(evidence, "shared by room adjacency boundary");
+        if (!hasCleanFragmentEvidence || !hasBoundaryOrEndpointSupport)
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor",
+            "terrace",
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "object/fixture",
+            "fixture detail",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening detail",
+            "stair",
+            "dimension annotation",
             "not trusted",
             "without shell support",
             "alone is not trusted");
