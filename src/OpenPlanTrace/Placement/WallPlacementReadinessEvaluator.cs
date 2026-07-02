@@ -56,6 +56,10 @@ public static class WallPlacementReadinessEvaluator
     private const double MinTrustedMainStructuralThinExteriorBridgePairScore = 0.80;
     private const double MinTrustedMainStructuralThinExteriorBridgeOverlapRatio = 0.95;
     private const int MaxTrustedMainStructuralThinExteriorBridgeFaceFragments = 72;
+    private const double MinTrustedSecondaryStructuralThinExteriorBridgeLengthDrawingUnits = 96.0;
+    private const double MinTrustedSecondaryStructuralThinExteriorBridgePairScore = 0.92;
+    private const double MinTrustedSecondaryStructuralThinExteriorBridgeOverlapRatio = 0.98;
+    private const int MaxTrustedSecondaryStructuralThinExteriorBridgeFaceFragments = 32;
     private const double MinTrustedExteriorShellContinuityLengthDrawingUnits = 80.0;
     private const double MinTrustedExteriorShellContinuityPairScore = 0.60;
     private const double MinTrustedExteriorShellContinuityOverlapRatio = 0.95;
@@ -1710,6 +1714,11 @@ public static class WallPlacementReadinessEvaluator
             return false;
         }
 
+        if (HasTrustedSecondaryStructuralThinExteriorBridgeEvidence(wall, component, evidenceAssessment, pair, evidence))
+        {
+            return false;
+        }
+
         if (IsTrustedRoomBoundaryIsolatedExteriorWall(wall, component, evidenceAssessment))
         {
             return false;
@@ -1807,6 +1816,57 @@ public static class WallPlacementReadinessEvaluator
                 evidence,
                 "supported endpoint overrun",
                 "exterior shell continuity"))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor",
+            "terrace",
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim linework",
+            "trim/detail",
+            "glazing",
+            "detail linework",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
+    private static bool HasTrustedSecondaryStructuralThinExteriorBridgeEvidence(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment evidenceAssessment,
+        WallPairEvidence pair,
+        IReadOnlyList<string> evidence)
+    {
+        if (component?.Kind != WallGraphComponentKind.SecondaryStructural
+            || component.ExcludedFromStructuralTopology
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedSecondaryStructuralThinExteriorBridgeLengthDrawingUnits
+            || pair.Score < MinTrustedSecondaryStructuralThinExteriorBridgePairScore
+            || pair.OverlapRatio < MinTrustedSecondaryStructuralThinExteriorBridgeOverlapRatio
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > MaxTrustedSecondaryStructuralThinExteriorBridgeFaceFragments
+            || evidenceAssessment.Category != WallEvidenceCategory.StrongWallBody)
+        {
+            return false;
+        }
+
+        if (!EvidenceContainsAny(
+                evidence,
+                "near detected floorplan/wall envelope",
+                "local outer boundary"))
+        {
+            return false;
+        }
+
+        if (!EvidenceContains(evidence, "supported endpoint overrun"))
         {
             return false;
         }

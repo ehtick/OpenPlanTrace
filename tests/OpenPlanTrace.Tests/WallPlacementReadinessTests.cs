@@ -1299,6 +1299,112 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsHighTrustSecondaryThinExteriorPairWithSupportedEndpointOverrun()
+    {
+        var wall = Wall("wall:secondary-thin-exterior-supported-endpoint", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(214, 100)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            Thickness = 2.84,
+            ThicknessMillimeters = 50,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 98.58), new PlanPoint(214, 98.58)),
+                new PlanLineSegment(new PlanPoint(100, 101.42), new PlanPoint(214, 101.42)),
+                FaceSeparation: 2.84,
+                OverlapRatio: 1,
+                Score: 0.953,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 11,
+                FirstFaceSourcePrimitiveIds: ["secondary-supported-face-a"],
+                SecondFaceSourcePrimitiveIds: ["secondary-supported-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "trimmed 2 supported endpoint overrun(s) from wall centerline"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.SecondaryStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.StrongWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain(
+            WallPlacementReadinessEvaluator.ThinExteriorFacePairWithoutShellSupportReason,
+            readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksHighTrustSecondaryThinExteriorEndpointBridgeWhenCoveredEntryEvidenceIsPresent()
+    {
+        var wall = Wall("wall:covered-secondary-thin-exterior-supported-endpoint", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(214, 100)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            Thickness = 2.84,
+            ThicknessMillimeters = 50,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 98.58), new PlanPoint(214, 98.58)),
+                new PlanLineSegment(new PlanPoint(100, 101.42), new PlanPoint(214, 101.42)),
+                FaceSeparation: 2.84,
+                OverlapRatio: 1,
+                Score: 0.953,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 11,
+                FirstFaceSourcePrimitiveIds: ["covered-secondary-supported-face-a"],
+                SecondFaceSourcePrimitiveIds: ["covered-secondary-supported-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer (unlayered) classified Unknown (0,35)",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "trimmed 2 supported endpoint overrun(s) from wall centerline",
+                "outdoor covered-area boundary near overbygd entry"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.SecondaryStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.StrongWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains(
+            WallPlacementReadinessEvaluator.ThinExteriorFacePairWithoutShellSupportReason,
+            readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_BlocksTrustedThinExteriorBridgeWhenCoveredEntryEvidenceIsPresent()
     {
         var wall = Wall("wall:covered-thin-exterior-bridge", Confidence.High) with
