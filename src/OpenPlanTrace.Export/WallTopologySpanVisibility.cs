@@ -357,6 +357,12 @@ internal static class WallTopologySpanVisibility
                 sourceWall,
                 component,
                 assessment);
+        var hasTrustedObjectLikeExteriorShellPair =
+            span.SourceWall is { } exteriorShellSourceWall
+            && WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                exteriorShellSourceWall,
+                component,
+                assessment);
         var hasTrustedMainStructuralExteriorWallBody =
             WallPlacementReadinessEvaluator.IsTrustedMainStructuralExteriorWallBody(
                 span.SourceWall,
@@ -368,7 +374,8 @@ internal static class WallTopologySpanVisibility
             && !hasTrustedRoomBoundaryIsolatedExteriorWall
             && !hasTrustedDimensionLikeExteriorPerimeterWallBody
             && !hasTrustedOpeningLinkedFilledInteriorWallBody
-            && !hasTrustedObjectLikeLongCleanFragmentInterior)
+            && !hasTrustedObjectLikeLongCleanFragmentInterior
+            && !hasTrustedObjectLikeExteriorShellPair)
         {
             return false;
         }
@@ -840,11 +847,17 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedObjectLikeExteriorShellPair =
+            WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                wall,
+                component,
+                assessment);
 
         if ((wall.CenterLine.Length < MinSourceBackedFallbackWallLengthDrawingUnits
                 && !hasTrustedRoomSupportedShortPairPromotion
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedObjectLikeLongCleanFragmentInterior
+                && !hasTrustedObjectLikeExteriorShellPair
                 && !trustedExteriorShellRepairSupportedWall
                 && !hasTrustedSourceBackedExteriorShellClosure
                 && !hasTrustedInferredExteriorShellFallback
@@ -852,7 +865,9 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
                 && !hasTrustedFilledSecondaryStructuralPair)
-            || (wall.WallType == WallType.Unknown && !hasTrustedLongIsolatedExteriorShellWallBody)
+            || (wall.WallType == WallType.Unknown
+                && !hasTrustedLongIsolatedExteriorShellWallBody
+                && !hasTrustedObjectLikeExteriorShellPair)
             || (wall.FragmentEvidence?.RequiresGeometryReview == true
                 && !trustedUnsafeExteriorCleanProjectionFallback
                 && !trustedUnsafeInteriorCleanProjectionFallback
@@ -957,6 +972,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongOneEndpointFragmentMergedInterior
                 && !hasTrustedDenseTwoSidedRoomFragmentMergedInterior
                 && !hasTrustedObjectLikeLongCleanFragmentInterior
+                && !hasTrustedObjectLikeExteriorShellPair
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
@@ -980,6 +996,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongOneEndpointFragmentMergedInterior
                 && !hasTrustedDenseTwoSidedRoomFragmentMergedInterior
                 && !hasTrustedObjectLikeLongCleanFragmentInterior
+                && !hasTrustedObjectLikeExteriorShellPair
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
@@ -1004,6 +1021,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongOneEndpointFragmentMergedInterior
                 && !hasTrustedDenseTwoSidedRoomFragmentMergedInterior
                 && !hasTrustedObjectLikeLongCleanFragmentInterior
+                && !hasTrustedObjectLikeExteriorShellPair
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
@@ -1036,6 +1054,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedLongOneEndpointFragmentMergedInterior
                 && !hasTrustedDenseTwoSidedRoomFragmentMergedInterior
                 && !hasTrustedObjectLikeLongCleanFragmentInterior
+                && !hasTrustedObjectLikeExteriorShellPair
                 && !hasTrustedLongSecondaryStructuralFragment
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedMainStructuralExteriorWallBody
@@ -1077,6 +1096,7 @@ internal static class WallTopologySpanVisibility
             && !trustedUnsafeInteriorCleanProjectionFallback
             && !hasTrustedDenseTwoSidedRoomFragmentMergedInterior
             && !hasTrustedObjectLikeLongCleanFragmentInterior
+            && !hasTrustedObjectLikeExteriorShellPair
             && !hasTrustedLongSecondaryStructuralFragment
             && !hasTrustedFilledSecondaryStructuralPair
             && !trustedExteriorShellRepairSupportedWall
@@ -1104,6 +1124,7 @@ internal static class WallTopologySpanVisibility
             || hasTrustedLongOneEndpointFragmentMergedInterior
             || hasTrustedDenseTwoSidedRoomFragmentMergedInterior
             || hasTrustedObjectLikeLongCleanFragmentInterior
+            || hasTrustedObjectLikeExteriorShellPair
             || hasTrustedLongSecondaryStructuralFragment
             || hasTrustedFilledSecondaryStructuralPair
             || hasTrustedMainStructuralExteriorWallBody
@@ -2551,6 +2572,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var trustedObjectLikeExteriorShellPair =
+            WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                wall,
+                component,
+                assessment);
         var trustedLongSecondaryStructuralFragment =
             IsTrustedLongSecondaryStructuralFragmentFallback(
                 wall,
@@ -2653,6 +2679,10 @@ internal static class WallTopologySpanVisibility
         else if (trustedShortExteriorWallBody)
         {
             evidence.Add("source-backed fallback accepted because short exterior wall-solid body is placement-ready and has trusted exterior boundary support");
+        }
+        else if (trustedObjectLikeExteriorShellPair)
+        {
+            evidence.Add("source-backed fallback accepted because protected object-like exterior shell pair has strong paired-face support");
         }
         else if (trustedRoomBoundaryShortExteriorWallBody)
         {
@@ -4477,7 +4507,6 @@ internal static class WallTopologySpanVisibility
             "door leaf",
             "door swing",
             "fixture detail",
-            "glazing",
             "object/fixture",
             "opening detail",
             "overbygd",

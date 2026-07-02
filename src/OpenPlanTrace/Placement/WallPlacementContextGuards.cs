@@ -82,6 +82,9 @@ public static class WallPlacementContextGuards
     public const string TrustedObjectLikeLongCleanFragmentInteriorEvidence =
         "protected long clean object-like fragment wall kept as structural interior candidate";
 
+    public const string TrustedObjectLikeExteriorShellPairEvidence =
+        "strong exterior paired wall body is supported by shell evidence";
+
     public const string TrustedDenseTwoSidedRoomFragmentMergedInteriorEvidence =
         "trusted dense two-sided room fragment-merged interior wall body";
 
@@ -414,6 +417,87 @@ public static class WallPlacementContextGuards
             "recovered duplicate wall body",
             "rejected as non-wall",
             "non-wall");
+    }
+
+    public static bool IsTrustedObjectLikeExteriorShellPairWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component is null
+            || component.Kind != WallGraphComponentKind.ObjectLikeIsland
+            || !component.ExcludedFromStructuralTopology
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedSecondaryExteriorShellLengthDrawingUnits
+            || wall.Confidence.Value < 0.74
+            || assessment is null
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category is not (WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.RecoveredWallBody)
+            || wall.PairEvidence is not { } pair)
+        {
+            return false;
+        }
+
+        var evidence = extraEvidence is null
+            ? WallEvidenceFor(wall, assessment).ToArray()
+            : WallEvidenceFor(wall, assessment).Concat(extraEvidence).ToArray();
+        var hasExteriorShellEvidence =
+            wall.WallType == WallType.Exterior
+            || EvidenceContainsAny(
+                evidence,
+                "wall type exterior",
+                "near detected floorplan/wall envelope",
+                "local outer boundary",
+                "exterior shell",
+                "global-room-envelope-edge",
+                "global-envelope-fragment-chain");
+        if (!hasExteriorShellEvidence
+            || !EvidenceContains(evidence, TrustedObjectLikeExteriorShellPairEvidence)
+            || pair.Score < MinTrustedSecondaryExteriorShellPairScore
+            || pair.OverlapRatio < 0.92
+            || pair.FaceSeparation < 4.0
+            || pair.FaceSeparation > 30.0
+            || MaxFaceFragmentCount(wall, assessment) > 96
+            || pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount > 160)
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "surface pattern",
+            "surface/detail",
+            "object/fixture",
+            "fixture detail",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening detail",
+            "stair",
+            "non-wall",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
     }
 
     public static bool IsTrustedDenseTwoSidedRoomFragmentMergedInteriorWallBody(

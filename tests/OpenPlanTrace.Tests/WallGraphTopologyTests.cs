@@ -1477,6 +1477,7 @@ public sealed class WallGraphTopologyTests
                 Wall("left", new PlanPoint(100, 100), new PlanPoint(100, 260))));
 
         var overrunWall = Assert.Single(result.Walls, wall => wall.SourcePrimitiveIds.Contains("top-long-overrun"));
+        var supportWall = Assert.Single(result.Walls, wall => wall.SourcePrimitiveIds.Contains("left"));
         var repairCandidate = Assert.Single(result.WallGraph.RepairCandidates);
 
         Assert.Equal(20, overrunWall.CenterLine.Start.X, precision: 1);
@@ -1491,6 +1492,8 @@ public sealed class WallGraphTopologyTests
         Assert.Equal(100, repairCandidate.SourcePoint.Y, precision: 1);
         Assert.Equal(100, repairCandidate.TargetPoint.X, precision: 1);
         Assert.Equal(100, repairCandidate.TargetPoint.Y, precision: 1);
+        Assert.Contains(overrunWall.Id, repairCandidate.WallIds);
+        Assert.DoesNotContain(supportWall.Id, repairCandidate.WallIds);
         Assert.Contains("top-long-overrun", repairCandidate.SourcePrimitiveIds);
         Assert.Contains("left", repairCandidate.SourcePrimitiveIds);
         Assert.Contains(
@@ -2178,6 +2181,108 @@ public sealed class WallGraphTopologyTests
             context.Diagnostics.Build().Messages,
             diagnostic => diagnostic.Code == "wall_evidence.object_like_components_reclassified"
                 && diagnostic.Properties["componentIds"].Contains(compactComponent.Id, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task WallGraphStage_ProtectsExteriorShellPairFromObjectLikeEvidenceReclassification()
+    {
+        var mainWalls = new[]
+        {
+            DetectedWall("main-top", new PlanPoint(100, 100), new PlanPoint(700, 100)) with { WallType = WallType.Exterior },
+            DetectedWall("main-right", new PlanPoint(700, 100), new PlanPoint(700, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-bottom", new PlanPoint(700, 500), new PlanPoint(100, 500)) with { WallType = WallType.Exterior },
+            DetectedWall("main-left", new PlanPoint(100, 500), new PlanPoint(100, 100)) with { WallType = WallType.Exterior }
+        };
+        var exteriorShell = StrongPairedWall(
+            "wall-object-like-exterior-shell-pair",
+            new PlanPoint(300, 180),
+            new PlanPoint(300, 260),
+            pairScore: 0.81) with
+        {
+            WallType = WallType.Exterior,
+            Thickness = 20,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(290, 180), new PlanPoint(290, 260)),
+                new PlanLineSegment(new PlanPoint(310, 180), new PlanPoint(310, 260)),
+                FaceSeparation: 20,
+                OverlapRatio: 1,
+                Score: 0.81,
+                FirstFaceFragmentCount: 8,
+                SecondFaceFragmentCount: 9,
+                FirstFaceSourcePrimitiveIds: ["wall-object-like-exterior-shell-pair-face-a"],
+                SecondFaceSourcePrimitiveIds: ["wall-object-like-exterior-shell-pair-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 20 drawing units",
+                "pair score 0.81",
+                "overlap ratio 1",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.80"
+            ]
+        };
+        var detailCompanion = StrongPairedWall(
+            "wall-object-like-exterior-shell-detail-companion",
+            new PlanPoint(300, 260),
+            new PlanPoint(360, 260),
+            pairScore: 0.67);
+        var context = new ScanContext(
+            Document("object-like-exterior-shell-pair-protection"),
+            new ScannerOptions());
+        context.Walls.AddRange(mainWalls.Append(exteriorShell).Append(detailCompanion));
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            mainWalls
+                .Select(wall => Assessment(wall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High))
+                .Concat(new[]
+                {
+                    Assessment(exteriorShell, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.80)) with
+                    {
+                        Evidence =
+                        [
+                            "parallel wall-face pair",
+                            "face separation 20 drawing units",
+                            "pair score 0.81",
+                            "overlap ratio 1",
+                            "layer (unlayered) classified Dimension (0.24)",
+                            "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                            "wall evidence: strong double-edge exterior shell wall body"
+                        ]
+                    },
+                    Assessment(detailCompanion, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91))
+                })
+                .ToArray());
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var objectLikeComponent = Assert.Single(
+            context.WallGraph.Components,
+            component => component.WallIds.Contains(exteriorShell.Id)
+                && component.WallIds.Contains(detailCompanion.Id));
+        var protectedAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == exteriorShell.Id);
+        var reclassifiedAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == detailCompanion.Id);
+
+        Assert.Equal(WallGraphComponentKind.ObjectLikeIsland, objectLikeComponent.Kind);
+        Assert.True(objectLikeComponent.ExcludedFromStructuralTopology);
+        Assert.Equal(WallEvidenceCategory.StrongWallBody, protectedAssessment.Category);
+        Assert.Equal(WallEvidenceDecision.Accept, protectedAssessment.Decision);
+        Assert.True(protectedAssessment.PlacementReady);
+        Assert.False(protectedAssessment.RejectedAsNoise);
+        Assert.Contains(
+            protectedAssessment.Evidence,
+            item => item.Contains("strong exterior paired wall body is supported by shell evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, reclassifiedAssessment.Category);
+        Assert.Equal(WallEvidenceDecision.Reject, reclassifiedAssessment.Decision);
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.object_like_room_boundary_fragments_protected"
+                && diagnostic.Properties["protectedWallCount"] == "1");
     }
 
     [Fact]

@@ -27,6 +27,9 @@ internal sealed class WallGraphStage : IPipelineStage
     private const string ObjectLikeLongCleanFragmentProtectionEvidence =
         "wall evidence: " + WallPlacementContextGuards.TrustedObjectLikeLongCleanFragmentInteriorEvidence;
 
+    private const string ObjectLikeExteriorShellPairProtectionEvidence =
+        "wall evidence: protected from object-like graph reclassification because " + WallPlacementContextGuards.TrustedObjectLikeExteriorShellPairEvidence;
+
     public string Name => "wall-graph";
 
     public ValueTask ExecuteAsync(ScanContext context, CancellationToken cancellationToken)
@@ -1530,6 +1533,12 @@ internal sealed class WallGraphStage : IPipelineStage
             return true;
         }
 
+        if (IsProtectedObjectLikeExteriorShellPairAssessment(wall, assessment))
+        {
+            protectionEvidence = new[] { ObjectLikeExteriorShellPairProtectionEvidence };
+            return true;
+        }
+
         if (IsProtectedObjectLikeLongCleanFragmentAssessment(wall, assessment))
         {
             protectionEvidence = new[] { ObjectLikeLongCleanFragmentProtectionEvidence };
@@ -1603,6 +1612,76 @@ internal sealed class WallGraphStage : IPipelineStage
             || item.Contains("dimension/annotation", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsProtectedObjectLikeExteriorShellPairAssessment(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment)
+    {
+        if (assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category is not (WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.RecoveredWallBody)
+            || !assessment.PlacementReady
+            || wall.WallType != WallType.Exterior
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is not { } pair
+            || wall.DrawingLength < 72.0
+            || wall.Confidence.Value < 0.74
+            || assessment.Confidence.Value < 0.72
+            || pair.Score < 0.78
+            || pair.OverlapRatio < 0.92
+            || pair.FaceSeparation < 4.0
+            || pair.FaceSeparation > 28.0
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > 96
+            || pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount > 160)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        if (!ContainsAnyEvidence(
+                evidence,
+                "wall type exterior",
+                "near detected floorplan/wall envelope",
+                "local outer boundary",
+                "exterior shell",
+                "global-room-envelope-edge",
+                "global-envelope-fragment-chain"))
+        {
+            return false;
+        }
+
+        return !ContainsAnyEvidence(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "terrace",
+            "railing",
+            "surface pattern",
+            "surface/detail",
+            "object/fixture",
+            "fixture detail",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening detail",
+            "stair",
+            "non-wall",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
     private static bool IsProtectedObjectLikeLongCleanFragmentAssessment(
         WallSegment wall,
         WallEvidenceWallAssessment assessment)
@@ -1665,6 +1744,11 @@ internal sealed class WallGraphStage : IPipelineStage
             || item.Contains("classified Dimension", StringComparison.OrdinalIgnoreCase)
             || item.Contains("dimension/annotation", StringComparison.OrdinalIgnoreCase));
     }
+
+    private static bool ContainsAnyEvidence(
+        IEnumerable<string> evidence,
+        params string[] needles) =>
+        evidence.Any(item => needles.Any(needle => item.Contains(needle, StringComparison.OrdinalIgnoreCase)));
 
     private static void RefineShortIsolatedGraphWallEvidence(
         ScanContext context,
@@ -4178,7 +4262,17 @@ internal sealed class WallGraphStage : IPipelineStage
         IReadOnlyDictionary<string, WallSegment> wallsById,
         ScannerOptions options)
     {
-        var sourcePrimitiveIds = wallIds
+        var sourceWallIds = wallIds
+            .Where(id => wallsById.ContainsKey(id))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var affectedWallIds = new[] { review.WallId }
+            .Where(id => !string.IsNullOrWhiteSpace(id) && wallsById.ContainsKey(id))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var sourcePrimitiveIds = sourceWallIds
             .SelectMany(id => wallsById[id].SourcePrimitiveIds)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.Ordinal)
@@ -4228,7 +4322,7 @@ internal sealed class WallGraphStage : IPipelineStage
             excessDistanceBeyondSafeTrim,
             new PlanLineSegment(review.Endpoint, review.JunctionPoint),
             PlanRect.FromPoints(review.Endpoint, review.JunctionPoint).Inflate(inflation),
-            wallIds,
+            affectedWallIds,
             sourcePrimitiveIds,
             Confidence.Medium,
             true,

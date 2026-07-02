@@ -1620,6 +1620,12 @@ internal static class WallEvidenceExportHelpers
                 wallSegment,
                 component,
                 evidenceAssessment);
+        var trustedObjectLikeExteriorShellPair =
+            wall is { } exteriorWallSegment
+            && WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                exteriorWallSegment,
+                component,
+                evidenceAssessment);
         var trustedIsolatedFragment =
             trustedExteriorShellContinuityFragment
             || trustedExteriorShellRepairSupportedWall
@@ -1633,11 +1639,13 @@ internal static class WallEvidenceExportHelpers
         var trustedStructuralTopologyOverride =
             trustedIsolatedFragment
             || trustedRecoveredRoomBoundaryObjectLikeWall
-            || trustedObjectLikeLongCleanFragmentInterior;
+            || trustedObjectLikeLongCleanFragmentInterior
+            || trustedObjectLikeExteriorShellPair;
 
         if (component?.Kind == WallGraphComponentKind.ObjectLikeIsland
             && !trustedRecoveredRoomBoundaryObjectLikeWall
-            && !trustedObjectLikeLongCleanFragmentInterior)
+            && !trustedObjectLikeLongCleanFragmentInterior
+            && !trustedObjectLikeExteriorShellPair)
         {
             reasons.Add("wall graph component is object-like detail, not placement wall geometry");
         }

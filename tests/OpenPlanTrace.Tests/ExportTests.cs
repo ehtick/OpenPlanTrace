@@ -805,6 +805,46 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_BridgesTrustedExteriorRunsAcrossGlazingContext()
+    {
+        var result = CreateCollinearGapPlacementRunResult(WallType.Exterior);
+        result = result with
+        {
+            Walls = result.Walls
+                .Select(wall => wall.Id == "collinear-gap-wall-b"
+                    ? wall with
+                    {
+                        Evidence = wall.Evidence
+                            .Append("glazing evidence from exterior window context")
+                            .ToArray()
+                    }
+                    : wall)
+                .ToArray()
+        };
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+
+        var spans = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .SelectMany(wall => wall.GetProperty("topologySpans").EnumerateArray())
+            .ToArray();
+
+        var span = Assert.Single(spans);
+        Assert.Equal(20, span.GetProperty("centerLine").GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(260, span.GetProperty("centerLine").GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("glazing evidence from exterior window context", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_DoesNotBridgeExteriorCleanPlacementRunsThroughDimensionOrDetailEvidence()
     {
         var result = CreateCollinearGapPlacementRunResult(WallType.Exterior);
@@ -1766,6 +1806,40 @@ public sealed class ExportTests
             summary
                 .GetProperty("wallPlacementOmissionCounts")
                 .TryGetProperty("object_like_linework", out _));
+    }
+
+    [Fact]
+    public void PlacementExporter_ExportsProtectedObjectLikeExteriorShellPairAsSourceBackedPlacementWall()
+    {
+        var result = CreateProtectedObjectLikeExteriorShellPairPlacementResult();
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "protected-object-like-exterior-shell-pair");
+
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.False(wall.GetProperty("excludedFromStructuralTopology").GetBoolean());
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        var span = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("protected object-like exterior shell pair", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.False(
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .TryGetProperty("object_like_linework", out _));
+        Assert.False(
+            summary
+                .GetProperty("wallPlacementOmissionCounts")
+                .TryGetProperty("no_clean_topology_spans", out _));
     }
 
     [Fact]
@@ -14875,6 +14949,122 @@ public sealed class ExportTests
                 {
                     SourceName = "protected-object-like-long-fragment.pdf",
                     SourcePath = @"C:\plans\protected-object-like-long-fragment.pdf",
+                    Properties = new Dictionary<string, string>
+                    {
+                        ["format"] = "pdf",
+                        ["loader"] = "synthetic",
+                        ["sourceKind"] = PlanSourceKind.Pdf.ToString(),
+                        ["effectiveSourceKind"] = PlanSourceKind.Pdf.ToString()
+                    }
+                }
+            },
+            PlanLayerAnalysis.Empty,
+            PlanCalibration.Empty,
+            MeasurementConsistencyReport.Empty,
+            Array.Empty<TitleBlockAnalysis>(),
+            Array.Empty<DimensionAnnotation>(),
+            Array.Empty<PlanAnnotationBlock>(),
+            Array.Empty<GridAxis>(),
+            Array.Empty<GridBaySpacing>(),
+            Array.Empty<SheetRegion>(),
+            Array.Empty<SurfacePatternCandidate>(),
+            [wall],
+            new WallGraph(Array.Empty<WallNode>(), Array.Empty<WallEdge>(), [component]),
+            Array.Empty<RoomRegion>(),
+            RoomAdjacencyGraph.Empty,
+            Array.Empty<OpeningCandidate>(),
+            Array.Empty<ObjectCandidate>(),
+            Array.Empty<ObjectCandidateGroup>(),
+            Array.Empty<ObjectAggregate>(),
+            new PipelineDiagnostics(
+                now,
+                now,
+                Array.Empty<PipelineStageReport>(),
+                Array.Empty<PlanDiagnostic>()))
+        {
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                [assessment],
+                1,
+            0)
+        };
+    }
+
+    private static PlanScanResult CreateProtectedObjectLikeExteriorShellPairPlacementResult()
+    {
+        var protectedEvidence = new[]
+        {
+            "parallel wall-face pair",
+            "face separation 20 drawing units",
+            "pair score 0.806",
+            "overlap ratio 1",
+            "layer (unlayered) classified Dimension (0.24)",
+            "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+            "wall evidence: strong double-edge wall body",
+            $"wall evidence: protected from object-like graph reclassification because {WallPlacementContextGuards.TrustedObjectLikeExteriorShellPairEvidence}"
+        };
+        var wall = SyntheticWall("protected-object-like-exterior-shell-pair", 120, 70, 120, 170) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Unknown,
+            Thickness = 20,
+            Confidence = new Confidence(0.77),
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(110, 70), new PlanPoint(110, 170)),
+                new PlanLineSegment(new PlanPoint(130, 70), new PlanPoint(130, 170)),
+                FaceSeparation: 20,
+                OverlapRatio: 1,
+                Score: 0.806,
+                FirstFaceFragmentCount: 15,
+                SecondFaceFragmentCount: 18,
+                FirstFaceSourcePrimitiveIds: ["protected-object-like-exterior-shell-pair-face-a"],
+                SecondFaceSourcePrimitiveIds: ["protected-object-like-exterior-shell-pair-face-b"]),
+            Evidence = protectedEvidence
+        };
+        var component = new WallGraphComponent(
+            "protected-object-like-exterior-shell-component",
+            1,
+            WallGraphComponentKind.ObjectLikeIsland,
+            wall.Bounds,
+            [wall.Id],
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            wall.SourcePrimitiveIds,
+            wall.DrawingLength,
+            Confidence.High,
+            ["synthetic object-like component that should be overridden by protected exterior shell pair evidence"],
+            ExcludedFromStructuralTopology: true);
+        var assessment = new WallEvidenceWallAssessment(
+            wall.Id,
+            wall.PageNumber,
+            wall.Bounds,
+            WallEvidenceCategory.StrongWallBody,
+            new Confidence(0.78),
+            PlacementReady: true,
+            RequiresReview: false,
+            RejectedAsNoise: false,
+            wall.SourcePrimitiveIds,
+            protectedEvidence)
+        {
+            Decision = WallEvidenceDecision.Accept
+        };
+        var now = DateTimeOffset.UtcNow;
+
+        return new PlanScanResult(
+            new PlanDocument(
+                "protected-object-like-exterior-shell-pair",
+                [
+                    new PlanPage(
+                        1,
+                        new PlanSize(260, 220),
+                        [WallLine(wall.Id, wall.CenterLine.Start, wall.CenterLine.End)])
+                ])
+            {
+                Metadata = new PlanMetadata
+                {
+                    SourceName = "protected-object-like-exterior-shell-pair.pdf",
+                    SourcePath = @"C:\plans\protected-object-like-exterior-shell-pair.pdf",
                     Properties = new Dictionary<string, string>
                     {
                         ["format"] = "pdf",
