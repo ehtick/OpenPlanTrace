@@ -9,7 +9,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private const double MinSecondaryTrustedDimensionLikeDenseRoomBoundaryLength = 32.0;
     private const double MinVeryShortSecondaryDenseRoomBoundaryLength = 24.0;
     private const double MaxVeryShortSecondaryDenseRoomBoundaryLength = 32.0;
-    private const double MinVeryShortSecondaryDenseRoomBoundaryPairScore = 0.87;
+    private const double MinVeryShortSecondaryDenseRoomBoundaryPairScore = 0.86;
     private const int MinVeryShortSecondaryDenseRoomBoundaryEndpointCount = 3;
     private const int MinVeryShortSecondaryDenseRoomBoundarySideRoomHits = 5;
     private const double MinTrustedDenseStructuralEndpointWallLength = 42.0;
@@ -2531,8 +2531,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && wall.DrawingLength >= MinVeryShortSecondaryDenseRoomBoundaryLength
             && wall.DrawingLength < MaxVeryShortSecondaryDenseRoomBoundaryLength
             && component.Kind == WallGraphComponentKind.SecondaryStructural
-            && evidence.Any(item =>
-                item.Contains("supported wall evidence inside exterior envelope", StringComparison.OrdinalIgnoreCase));
+            && HasVeryShortSecondaryDenseRoomBoundaryTrustEvidence(evidence, sideEvidence);
         var hasMainStructuralOneEndpointSideProof =
             component.Kind == WallGraphComponentKind.MainStructural
             && sideRoomHitCount >= MinMainStructuralOneEndpointDenseRoomBoundarySideRoomHits
@@ -2573,6 +2572,14 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
             || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase));
     }
+
+    private static bool HasVeryShortSecondaryDenseRoomBoundaryTrustEvidence(
+        IReadOnlyList<string> evidence,
+        RoomSideEvidence sideEvidence) =>
+        sideEvidence.HasRoomsOnBothSides
+        || evidence.Any(item =>
+            item.Contains("supported wall evidence inside exterior envelope", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("detected room evidence on both sides", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsTrustedFilledDenseSideRoomWall(
         WallSegment wall,

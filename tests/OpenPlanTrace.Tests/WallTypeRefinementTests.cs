@@ -2659,7 +2659,8 @@ public sealed class WallTypeRefinementTests
                 "second face collapsed 5 duplicate or near-duplicate wall line primitive(s)",
                 "layer (unlayered) classified Dimension (0,24)",
                 "layer evidence: contains dimension-like text",
-                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall type refined interior: detected room evidence on both sides overrides exterior envelope/local-boundary guess",
                 "wall evidence: strong double-edge wall body"
             ]
         };
@@ -2795,7 +2796,7 @@ public sealed class WallTypeRefinementTests
             [
                 "parallel wall-face pair",
                 "face separation 14.486 drawing units",
-                "pair score 0.903",
+                "pair score 0.865",
                 "overlap ratio 1",
                 "first face collapsed 5 duplicate or near-duplicate wall line primitive(s)",
                 "second face collapsed 5 duplicate or near-duplicate wall line primitive(s)",
