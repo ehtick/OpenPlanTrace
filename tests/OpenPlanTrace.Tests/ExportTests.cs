@@ -5278,6 +5278,59 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_DoesNotRecoverWeakDimensionLikeMainStructuralExteriorRecallPairWhenGraphSpanIsMissing()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.553,
+            pairOverlapRatio: 0.785,
+            faceSeparation: 21.5,
+            firstFaceFragmentCount: 3,
+            secondFaceFragmentCount: 299,
+            wallLength: 85.33,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.MainStructural,
+            category: WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "face separation 21.495 drawing units",
+                "pair score 0.553",
+                "overlap ratio 0.785",
+                "second face merged 299 fragments",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "wall_evidence_review_required",
+            wall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            wall.GetProperty("placementOmission").GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("dimension-like fragmented perimeter", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RecoversTrustedDimensionLikeExteriorPerimeterPairWhenGraphSpanIsMissing()
     {
         var result = CreateSourceBackedFallbackWallResult(

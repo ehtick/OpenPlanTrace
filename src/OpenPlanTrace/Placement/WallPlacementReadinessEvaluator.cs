@@ -1566,6 +1566,15 @@ public static class WallPlacementReadinessEvaluator
             return false;
         }
 
+        if (EvidenceContains(evidence, "dimension-like fragmented perimeter parallel-face candidate")
+            && (pair.Score < MinTrustedDimensionLikeExteriorPerimeterPairScore
+                || pair.OverlapRatio < MinTrustedDimensionLikeExteriorPerimeterOverlapRatio
+                || maxFaceFragments > MaxTrustedDimensionLikeExteriorPerimeterPairFaceFragments
+                || totalFaceFragments > MaxTrustedDimensionLikeExteriorPerimeterPairTotalFaceFragments))
+        {
+            return false;
+        }
+
         var hasExteriorShellContext =
             EvidenceContainsAny(
                 evidence,
