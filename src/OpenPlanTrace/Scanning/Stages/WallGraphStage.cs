@@ -11,6 +11,16 @@ internal sealed class WallGraphStage : IPipelineStage
     private const int MinContinuousDenseInteriorFragmentPromotionFragments = 24;
     private const int MaxContinuousDenseInteriorFragmentPromotionFragments = 180;
     private const int MaxContinuousDenseInteriorFragmentDuplicatePrimitives = 8;
+    private const double MinTrustedSurfacePatternCrossingWallLength = 80.0;
+    private const double MaxTrustedSurfacePatternCrossingWallOverlapRatio = 0.85;
+    private const double MinTrustedSurfacePatternCrossingPairScore = 0.75;
+    private const double MinTrustedSurfacePatternCrossingPairOverlapRatio = 0.90;
+    private const double MinTrustedSurfacePatternCrossingFaceSeparation = 2.0;
+    private const double MaxTrustedSurfacePatternCrossingFaceSeparation = 30.0;
+    private const int MaxTrustedSurfacePatternCrossingFaceFragments = 96;
+    private const int MaxTrustedSurfacePatternCrossingTotalFaceFragments = 180;
+    private const int MaxTrustedSurfacePatternCrossingSharedSourceCount = 12;
+    private const double MaxTrustedSurfacePatternCrossingSharedSourceRatio = 0.45;
     private const string ObjectLikeRoomBoundaryProtectionEvidence =
         "wall evidence: protected from object-like graph reclassification because a long clean fragment wall is confirmed by room-boundary support";
 
@@ -3505,6 +3515,7 @@ internal sealed class WallGraphStage : IPipelineStage
 
                 if (!ShouldReviewSurfacePatternWallOverlap(
                     wall,
+                    component,
                     pattern,
                     wallOverlapRatio,
                     patternOverlapRatio,
@@ -3568,11 +3579,17 @@ internal sealed class WallGraphStage : IPipelineStage
 
     private static bool ShouldReviewSurfacePatternWallOverlap(
         WallSegment wall,
+        WallGraphComponent? component,
         SurfacePatternCandidate pattern,
         double wallOverlapRatio,
         double patternOverlapRatio,
         int sharedSourcePrimitiveCount)
     {
+        if (IsTrustedStructuralWallCrossingSurfacePattern(wall, component, wallOverlapRatio, sharedSourcePrimitiveCount))
+        {
+            return false;
+        }
+
         if (sharedSourcePrimitiveCount >= 2)
         {
             return true;
@@ -3593,6 +3610,73 @@ internal sealed class WallGraphStage : IPipelineStage
         return wallOverlapRatio >= 0.50
             && patternOverlapRatio >= 0.015
             && wall.DrawingLength <= maximumLocalWallLength;
+    }
+
+    private static bool IsTrustedStructuralWallCrossingSurfacePattern(
+        WallSegment wall,
+        WallGraphComponent? component,
+        double wallOverlapRatio,
+        int sharedSourcePrimitiveCount)
+    {
+        if (component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind is not (WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural)
+            || wall.DrawingLength < MinTrustedSurfacePatternCrossingWallLength
+            || wallOverlapRatio >= MaxTrustedSurfacePatternCrossingWallOverlapRatio
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is not { } pair)
+        {
+            return false;
+        }
+
+        var wallSourcePrimitiveCount = Math.Max(
+            1,
+            wall.SourcePrimitiveIds.Distinct(StringComparer.Ordinal).Count());
+        var sharedSourceRatio = sharedSourcePrimitiveCount / (double)wallSourcePrimitiveCount;
+        if (sharedSourcePrimitiveCount > MaxTrustedSurfacePatternCrossingSharedSourceCount
+            || sharedSourceRatio > MaxTrustedSurfacePatternCrossingSharedSourceRatio)
+        {
+            return false;
+        }
+
+        if (pair.Score < MinTrustedSurfacePatternCrossingPairScore
+            || pair.OverlapRatio < MinTrustedSurfacePatternCrossingPairOverlapRatio
+            || pair.FaceSeparation < MinTrustedSurfacePatternCrossingFaceSeparation
+            || pair.FaceSeparation > MaxTrustedSurfacePatternCrossingFaceSeparation
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > MaxTrustedSurfacePatternCrossingFaceFragments
+            || pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount > MaxTrustedSurfacePatternCrossingTotalFaceFragments)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence.Concat(component.Evidence).ToArray();
+        var hasStrongWallBodyEvidence = evidence.Any(item =>
+            item.Contains("StrongWallBody / placement-ready", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("strong double-edge wall body", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("strong parallel-face wall pair", StringComparison.OrdinalIgnoreCase));
+        var hasStructuralContext = evidence.Any(item =>
+            item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("detected room evidence", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("supported wall evidence inside exterior envelope", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("wall type exterior", StringComparison.OrdinalIgnoreCase));
+        if (!hasStrongWallBodyEvidence || !hasStructuralContext)
+        {
+            return false;
+        }
+
+        return !evidence.Any(item =>
+            item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("hatch", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("fixture detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("object/fixture", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door/opening", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("canopy", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("railing", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string FormatRect(PlanRect rect) =>

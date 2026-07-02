@@ -8,6 +8,11 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.08.012] - 2026-07-02
+
+- Improved surface-pattern crossing wall readiness.
+- Small improvement to wall overlap review tests.
+
 ## [0.08.011] - 2026-07-02
 
 - Improved secondary thin exterior bridge readiness.

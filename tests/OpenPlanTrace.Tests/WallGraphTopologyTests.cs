@@ -1926,6 +1926,90 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_DoesNotQueueSurfacePatternOverlapForTrustedStructuralWallCrossingPattern()
+    {
+        var mainWalls = new[]
+        {
+            DetectedWall("main-top", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior },
+            DetectedWall("main-right", new PlanPoint(320, 100), new PlanPoint(320, 300)) with { WallType = WallType.Exterior },
+            DetectedWall("main-bottom", new PlanPoint(320, 300), new PlanPoint(100, 300)) with { WallType = WallType.Exterior },
+            DetectedWall("main-left", new PlanPoint(100, 300), new PlanPoint(100, 100)) with { WallType = WallType.Exterior }
+        };
+        var crossingWall = TrustedSurfacePatternCrossingWall(
+            "wall-trusted-crossing-pattern",
+            new PlanPoint(100, 180),
+            new PlanPoint(320, 180));
+        var context = new ScanContext(
+            Document("wall-surface-pattern-trusted-crossing"),
+            new ScannerOptions());
+        context.Walls.AddRange(mainWalls.Append(crossingWall));
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            mainWalls
+                .Select(wall => Assessment(wall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High))
+                .Append(Assessment(crossingWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91)))
+                .ToArray());
+        context.SurfacePatterns.Add(SurfacePattern(
+            "page:1:surface-pattern:trusted-crossing",
+            new PlanRect(130, 80, 170, 300),
+            new[] { "surface-pattern-source-a", "surface-pattern-source-b" }));
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var component = Assert.Single(context.WallGraph.Components, item => item.WallIds.Contains(crossingWall.Id));
+
+        Assert.False(component.ExcludedFromStructuralTopology);
+        Assert.True(component.Kind is WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.surface_pattern_wall_overlap.review"
+                && diagnostic.Properties["wallId"] == crossingWall.Id);
+    }
+
+    [Fact]
+    public async Task WallGraphStage_QueuesSurfacePatternOverlapWhenTrustedWallSharesPatternSource()
+    {
+        var mainWalls = new[]
+        {
+            DetectedWall("main-top", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior },
+            DetectedWall("main-right", new PlanPoint(320, 100), new PlanPoint(320, 300)) with { WallType = WallType.Exterior },
+            DetectedWall("main-bottom", new PlanPoint(320, 300), new PlanPoint(100, 300)) with { WallType = WallType.Exterior },
+            DetectedWall("main-left", new PlanPoint(100, 300), new PlanPoint(100, 100)) with { WallType = WallType.Exterior }
+        };
+        var crossingWall = TrustedSurfacePatternCrossingWall(
+            "wall-shared-pattern-source",
+            new PlanPoint(100, 180),
+            new PlanPoint(320, 180));
+        var context = new ScanContext(
+            Document("wall-surface-pattern-shared-source"),
+            new ScannerOptions());
+        context.Walls.AddRange(mainWalls.Append(crossingWall));
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            mainWalls
+                .Select(wall => Assessment(wall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High))
+                .Append(Assessment(crossingWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91)))
+                .ToArray());
+        context.SurfacePatterns.Add(SurfacePattern(
+            "page:1:surface-pattern:shared-crossing",
+            new PlanRect(130, 80, 170, 300),
+            crossingWall.SourcePrimitiveIds.Concat(new[] { "surface-pattern-source-b" }).ToArray()));
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var diagnostic = Assert.Single(
+            context.Diagnostics.Build().Messages,
+            item => item.Code == "wall_graph.surface_pattern_wall_overlap.review"
+                && item.Properties["wallId"] == crossingWall.Id);
+
+        Assert.Equal("3", diagnostic.Properties["sharedSourcePrimitiveCount"]);
+    }
+
+    [Fact]
     public async Task WallGraphStage_SplitsTrustedAnchoredPairedWallOutOfContaminatedDetailComponent()
     {
         var mainWalls = new[]
@@ -2689,6 +2773,69 @@ public sealed class WallGraphTopologyTests
                 "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.91"
             }
         };
+
+    private static WallSegment TrustedSurfacePatternCrossingWall(string id, PlanPoint start, PlanPoint end)
+    {
+        var horizontal = Math.Abs(end.X - start.X) >= Math.Abs(end.Y - start.Y);
+        var firstFace = horizontal
+            ? new PlanLineSegment(new PlanPoint(start.X, start.Y - 4), new PlanPoint(end.X, end.Y - 4))
+            : new PlanLineSegment(new PlanPoint(start.X - 4, start.Y), new PlanPoint(end.X - 4, end.Y));
+        var secondFace = horizontal
+            ? new PlanLineSegment(new PlanPoint(start.X, start.Y + 4), new PlanPoint(end.X, end.Y + 4))
+            : new PlanLineSegment(new PlanPoint(start.X + 4, start.Y), new PlanPoint(end.X + 4, end.Y));
+
+        return DetectedWall(id, start, end) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Thickness = 8,
+            Confidence = new Confidence(0.91),
+            SourcePrimitiveIds = new[] { id, $"{id}:face-a", $"{id}:face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 8,
+                OverlapRatio: 0.96,
+                Score: 0.79,
+                FirstFaceFragmentCount: 12,
+                SecondFaceFragmentCount: 14,
+                FirstFaceSourcePrimitiveIds: new[] { $"{id}:face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { $"{id}:face-b" }),
+            Evidence = new[]
+            {
+                "parallel wall-face pair",
+                "pair score 0.79",
+                "overlap ratio 0.96",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.91",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+            }
+        };
+    }
+
+    private static SurfacePatternCandidate SurfacePattern(
+        string id,
+        PlanRect bounds,
+        IReadOnlyList<string> sourcePrimitiveIds) =>
+        new(
+            id,
+            1,
+            SurfacePatternKind.DenseOrthogonalGrid,
+            SurfacePatternOrientation.Orthogonal,
+            bounds,
+            null,
+            24,
+            12,
+            12,
+            96,
+            12,
+            12,
+            12,
+            ExcludedFromWallDetection: true,
+            ExcludedFromStructuralTopology: true,
+            sourcePrimitiveIds,
+            Confidence.High,
+            RequiresReview: true,
+            new[] { "synthetic dense detail pattern" });
 
     private static WallSegment DetectedFragmentWall(string id, PlanPoint start, PlanPoint end) =>
         DetectedWall(id, start, end) with
