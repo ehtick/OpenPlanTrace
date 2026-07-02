@@ -15,6 +15,8 @@ internal static class WallTopologySpanVisibility
     private const double MaxCollinearExteriorRunBridgeGapDrawingUnits = 72.0;
     private const double MinCollinearExteriorRunBridgeLongNeighborLengthDrawingUnits = 48.0;
     private const double MaxCollinearExteriorRunBridgeGapToLongNeighborRatio = 0.45;
+    private const double MaxInferredExteriorShellContinuationBridgeGapDrawingUnits = 60.0;
+    private const double MaxInferredExteriorShellContinuationBridgeGapToLongNeighborRatio = 0.50;
     private const double MaxCollinearInteriorSourceRunBridgeGapDrawingUnits = 48.0;
     private const double MinCollinearInteriorSourceRunBridgeLongNeighborLengthDrawingUnits = 48.0;
     private const double MaxCollinearInteriorSourceRunBridgeGapToLongNeighborRatio = 0.45;
@@ -4678,13 +4680,17 @@ internal static class WallTopologySpanVisibility
         out double gap)
     {
         gap = AxisMin(second.CenterLine) - AxisMax(first.CenterLine);
+        var trustedInferredExteriorShellContinuation =
+            IsTrustedInferredExteriorShellContinuationBridgePair(first, second, gap);
         if (first.WallId == second.WallId
             || first.SourceWall?.WallType != WallType.Exterior
             || second.SourceWall?.WallType != WallType.Exterior
-            || !IsTrustedExteriorPlacementRunBridgeSpan(first)
-            || !IsTrustedExteriorPlacementRunBridgeSpan(second)
-            || HasCollinearExteriorBridgeBlockedEvidence(first)
-            || HasCollinearExteriorBridgeBlockedEvidence(second)
+            || (!trustedInferredExteriorShellContinuation
+                && (!IsTrustedExteriorPlacementRunBridgeSpan(first)
+                    || !IsTrustedExteriorPlacementRunBridgeSpan(second)))
+            || (!trustedInferredExteriorShellContinuation
+                && (HasCollinearExteriorBridgeBlockedEvidence(first)
+                    || HasCollinearExteriorBridgeBlockedEvidence(second)))
             || ResolveAxisOrientation(first.CenterLine) != ResolveAxisOrientation(second.CenterLine)
             || Math.Abs(AxisCoordinate(first) - AxisCoordinate(second))
                 > MaxCollinearExteriorRunBridgeAxisDistanceDrawingUnits
@@ -4703,7 +4709,8 @@ internal static class WallTopologySpanVisibility
             longerLength * MaxCollinearExteriorRunBridgeGapToLongNeighborRatio,
             MaxCleanRunJoinGapDrawingUnits,
             MaxCollinearExteriorRunBridgeGapDrawingUnits);
-        return gap <= adaptiveGapLimit;
+        return gap <= adaptiveGapLimit
+            || trustedInferredExteriorShellContinuation;
     }
 
     private static bool IsTrustedExteriorPlacementRunBridgeSpan(WallGraphTopologySpan span)
@@ -4794,6 +4801,90 @@ internal static class WallTopologySpanVisibility
             "exterior shell",
             "global-room-envelope-edge",
             "global-envelope-fragment-chain");
+    }
+
+    private static bool IsTrustedInferredExteriorShellContinuationBridgePair(
+        WallGraphTopologySpan first,
+        WallGraphTopologySpan second,
+        double gap)
+    {
+        if (gap <= 0.001)
+        {
+            return false;
+        }
+
+        var longerLength = Math.Max(first.DrawingLength, second.DrawingLength);
+        if (gap > MaxInferredExteriorShellContinuationBridgeGapDrawingUnits
+            || gap > longerLength * MaxInferredExteriorShellContinuationBridgeGapToLongNeighborRatio)
+        {
+            return false;
+        }
+
+        if (HasHardCollinearExteriorBridgeBlockedEvidence(first)
+            || HasHardCollinearExteriorBridgeBlockedEvidence(second))
+        {
+            return false;
+        }
+
+        var firstIsInferredShellContinuation = IsTrustedInferredExteriorShellContinuationBridgeSpan(first);
+        var secondIsInferredShellContinuation = IsTrustedInferredExteriorShellContinuationBridgeSpan(second);
+        if (firstIsInferredShellContinuation == secondIsInferredShellContinuation)
+        {
+            return false;
+        }
+
+        return firstIsInferredShellContinuation
+            ? IsTrustedExteriorPlacementRunBridgeSpan(second)
+            : IsTrustedExteriorPlacementRunBridgeSpan(first);
+    }
+
+    private static bool IsTrustedInferredExteriorShellContinuationBridgeSpan(WallGraphTopologySpan span)
+    {
+        if (!IsSourceBackedFallbackSpan(span)
+            || span.SourceWall is not { WallType: WallType.Exterior } wall)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(span.Evidence)
+            .ToArray();
+        return ContainsAnyEvidence(
+            evidence,
+            "inferred exterior shell wall",
+            "inferred exterior shell has strong room-boundary and source-line support",
+            "global exterior-shell repair confirmed the exterior wall run");
+    }
+
+    private static bool HasHardCollinearExteriorBridgeBlockedEvidence(WallGraphTopologySpan span)
+    {
+        var evidence = (span.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(span.Evidence)
+            .ToArray();
+
+        return ContainsAnyEvidence(
+            evidence,
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "door leaf",
+            "door swing",
+            "door arc",
+            "fixture detail",
+            "object/fixture",
+            "opening detail",
+            "overbygd",
+            "railing",
+            "repeated short detail",
+            "stair",
+            "surface pattern",
+            "surface/detail",
+            "terrace detail",
+            "trim/detail",
+            "wall-like linework near anchored opening",
+            "witness/extension",
+            "non-wall",
+            "dimension annotation");
     }
 
     private static bool HasCollinearExteriorBridgeBlockedEvidence(WallGraphTopologySpan span)

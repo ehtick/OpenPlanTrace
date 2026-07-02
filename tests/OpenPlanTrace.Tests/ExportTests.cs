@@ -7892,6 +7892,59 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_BridgesTrustedInferredExteriorShellContinuationAcrossModerateGap()
+    {
+        var result = CreateInferredExteriorShellContinuationBridgeResult();
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+
+        var spans = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .SelectMany(wall => wall.GetProperty("topologySpans").EnumerateArray())
+            .ToArray();
+
+        var span = Assert.Single(spans);
+        var centerLine = span.GetProperty("centerLine");
+        Assert.Equal(80, centerLine.GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(360, centerLine.GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(120, centerLine.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(120, centerLine.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            span.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("inferred exterior shell wall", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_DoesNotBridgeInferredExteriorShellContinuationThroughSurfaceDetail()
+    {
+        var result = CreateInferredExteriorShellContinuationBridgeResult(
+            ["wall overlaps non-structural surface/detail pattern"]);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+
+        var spans = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .SelectMany(wall => wall.GetProperty("topologySpans").EnumerateArray())
+            .ToArray();
+
+        Assert.Equal(2, spans.Length);
+        Assert.DoesNotContain(
+            spans.SelectMany(span => span.GetProperty("evidence").EnumerateArray()),
+            evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(2, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_BridgesRecallSafeLongExteriorFallbackIntoNeighborRun()
     {
         var result = CreateSourceBackedFallbackWallResult(
@@ -16570,6 +16623,122 @@ public sealed class ExportTests
                 Array.Empty<WallEvidenceBand>(),
                 assessments,
                 walls.Count,
+                0)
+        };
+    }
+
+    private static PlanScanResult CreateInferredExteriorShellContinuationBridgeResult(
+        IReadOnlyList<string>? nearbyExtraEvidence = null)
+    {
+        var inferredEvidence = new[]
+        {
+            "wall evidence: inferred exterior shell wall from indoor room boundary with outside on opposite side",
+            "wall evidence: exterior-shell inference room page:1:room:5, outside side top, overlap length 120, sample offset 12",
+            "wall evidence: exterior-shell inference source-line support coverage 1 from 5 primitive(s)",
+            "source-backed fallback accepted because global exterior-shell repair confirmed the exterior wall run"
+        };
+        var nearbyEvidence = new[]
+        {
+            "parallel wall-face pair",
+            "face separation 8 drawing units",
+            "pair score 0.951",
+            "overlap ratio 0.951",
+            "filled wall-solid primitive",
+            "wall evidence: filled closed vector wall body",
+            "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+            "layer (unlayered) classified Dimension (0.24)",
+            "layer evidence: contains dimension-like text"
+        }
+            .Concat(nearbyExtraEvidence ?? Array.Empty<string>())
+            .ToArray();
+        var result = CreateSourceBackedFallbackWallResult(
+            includeNearbyGraphSpan: true,
+            wallLength: 120,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.MainStructural,
+            category: WallEvidenceCategory.RecoveredWallBody,
+            evidence: inferredEvidence,
+            nearbyGraphWallType: WallType.Exterior,
+            nearbyGraphAxisOffset: 0,
+            nearbyGraphStartX: 255.6,
+            nearbyGraphEndX: 360,
+            placementReady: true,
+            requiresReview: false);
+        var sourceWall = result.Walls.Single(wall => wall.Id == "source-backed-fallback-wall");
+        var nearbyWall = result.Walls.Single(wall => wall.Id == "nearby-graph-wall");
+        var inferredWall = sourceWall with
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            PairEvidence = null,
+            Confidence = new Confidence(0.66),
+            SourcePrimitiveIds =
+            [
+                "inferred-shell-source-a",
+                "inferred-shell-source-b",
+                "inferred-shell-source-c",
+                "inferred-shell-source-d",
+                "inferred-shell-source-e"
+            ],
+            Evidence = inferredEvidence
+        };
+        var trustedNearbyWall = nearbyWall with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(255.6, 116), new PlanPoint(360, 116)),
+                new PlanLineSegment(new PlanPoint(255.6, 124), new PlanPoint(360, 124)),
+                FaceSeparation: 8,
+                OverlapRatio: 0.951,
+                Score: 0.951,
+                FirstFaceFragmentCount: 12,
+                SecondFaceFragmentCount: 8,
+                FirstFaceSourcePrimitiveIds: ["nearby-shell-face-a"],
+                SecondFaceSourcePrimitiveIds: ["nearby-shell-face-b"]),
+            SourcePrimitiveIds = ["nearby-shell-face-a", "nearby-shell-face-b"],
+            Evidence = nearbyEvidence
+        };
+        var assessments = result.WallEvidenceMap.WallAssessments
+            .Select(assessment => assessment.WallId == inferredWall.Id
+                ? new WallEvidenceWallAssessment(
+                    inferredWall.Id,
+                    inferredWall.PageNumber,
+                    inferredWall.Bounds,
+                    WallEvidenceCategory.RecoveredWallBody,
+                    new Confidence(0.66),
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    inferredWall.SourcePrimitiveIds,
+                    inferredEvidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                }
+                : assessment.WallId == trustedNearbyWall.Id
+                    ? new WallEvidenceWallAssessment(
+                        trustedNearbyWall.Id,
+                        trustedNearbyWall.PageNumber,
+                        trustedNearbyWall.Bounds,
+                        WallEvidenceCategory.StrongWallBody,
+                        Confidence.High,
+                        PlacementReady: true,
+                        RequiresReview: false,
+                        RejectedAsNoise: false,
+                        trustedNearbyWall.SourcePrimitiveIds,
+                        nearbyEvidence)
+                    {
+                        Decision = WallEvidenceDecision.Accept
+                    }
+                    : assessment)
+            .ToArray();
+
+        return result with
+        {
+            Walls = [inferredWall, trustedNearbyWall],
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                assessments,
+                2,
                 0)
         };
     }
