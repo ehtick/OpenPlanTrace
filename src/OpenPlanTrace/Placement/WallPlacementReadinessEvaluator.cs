@@ -1566,11 +1566,14 @@ public static class WallPlacementReadinessEvaluator
             return false;
         }
 
-        if (EvidenceContains(evidence, "dimension-like fragmented perimeter parallel-face candidate")
+        var hasDimensionLikeFragmentedPerimeterEvidence =
+            EvidenceContains(evidence, "dimension-like fragmented perimeter parallel-face candidate");
+        if (hasDimensionLikeFragmentedPerimeterEvidence
             && (pair.Score < MinTrustedDimensionLikeExteriorPerimeterPairScore
                 || pair.OverlapRatio < MinTrustedDimensionLikeExteriorPerimeterOverlapRatio
                 || maxFaceFragments > MaxTrustedDimensionLikeExteriorPerimeterPairFaceFragments
-                || totalFaceFragments > MaxTrustedDimensionLikeExteriorPerimeterPairTotalFaceFragments))
+                || totalFaceFragments > MaxTrustedDimensionLikeExteriorPerimeterPairTotalFaceFragments)
+            && !HasTrustedDimensionLikeMainStructuralExteriorRecallSupport(evidence))
         {
             return false;
         }
@@ -1614,6 +1617,19 @@ public static class WallPlacementReadinessEvaluator
             "stair",
             "non-wall");
     }
+
+    private static bool HasTrustedDimensionLikeMainStructuralExteriorRecallSupport(
+        IReadOnlyList<string> evidence) =>
+        EvidenceContains(evidence, "filled wall-solid primitive")
+        && EvidenceContains(evidence, "filled closed vector wall body")
+        && EvidenceContainsAny(
+            evidence,
+            "wall type exterior",
+            "near detected floorplan/wall envelope",
+            "local outer boundary",
+            "exterior shell",
+            "global-room-envelope-edge",
+            "global-envelope-fragment-chain");
 
     public static bool IsTrustedLongIsolatedExteriorShellWallBody(
         WallSegment? wall,

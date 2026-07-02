@@ -7394,6 +7394,75 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RecoversDimensionLikeRecallSafeLongExteriorFallbackWithFilledBody()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            pairScore: 0.553,
+            pairOverlapRatio: 0.785,
+            faceSeparation: 21.495,
+            firstFaceFragmentCount: 3,
+            secondFaceFragmentCount: 299,
+            wallLength: 85.334,
+            wallType: WallType.Exterior,
+            componentKind: WallGraphComponentKind.MainStructural,
+            category: WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "face separation 21.495 drawing units",
+                "pair score 0.553",
+                "overlap ratio 0.785",
+                "first face merged 3 fragments",
+                "second face merged 299 fragments",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
+            ]);
+        var sourceWall = result.Walls.Single(wall => wall.Id == "source-backed-fallback-wall");
+        var updatedWall = sourceWall with { Confidence = new Confidence(0.723) };
+        var assessments = result.WallEvidenceMap.WallAssessments
+            .Select(assessment => assessment.WallId == sourceWall.Id
+                ? assessment with { Confidence = new Confidence(0.723), Decision = WallEvidenceDecision.Review }
+                : assessment)
+            .ToArray();
+        result = result with
+        {
+            Walls = result.Walls
+                .Select(wall => wall.Id == sourceWall.Id ? updatedWall : wall)
+                .ToArray(),
+            WallEvidenceMap = new WallEvidenceMap(
+                result.WallEvidenceMap.Segments,
+                result.WallEvidenceMap.Bands,
+                assessments,
+                result.WallEvidenceMap.SourceCandidateWallCount,
+                result.WallEvidenceMap.RecoveredCandidateWallCount)
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+
+        var fallbackWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+        var fallbackSpan = Assert.Single(fallbackWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", fallbackSpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, fallbackWall.GetProperty("placementOmission").ValueKind);
+        Assert.True(fallbackWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            fallbackSpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("main-structural exterior wall recall", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("sourceBackedFallbackWallCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RepresentsShortContainedInteriorSourceBackedFallbackWithLongerSameTypeSpan()
     {
         var result = CreateSourceBackedFallbackWallResult(

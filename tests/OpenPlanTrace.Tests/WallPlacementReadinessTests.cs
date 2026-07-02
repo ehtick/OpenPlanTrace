@@ -2363,6 +2363,118 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsDimensionLikeLongMainStructuralExteriorRecallWhenFilledBodyIsOnEnvelope()
+    {
+        var wall = Wall("wall:dimension-like-main-exterior-recall", new Confidence(0.723)) with
+        {
+            WallType = WallType.Exterior,
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 89.25), new PlanPoint(185.33, 89.25)),
+                new PlanLineSegment(new PlanPoint(100, 110.75), new PlanPoint(185.33, 110.75)),
+                FaceSeparation: 21.495,
+                OverlapRatio: 0.785,
+                Score: 0.553,
+                FirstFaceFragmentCount: 3,
+                SecondFaceFragmentCount: 299,
+                FirstFaceSourcePrimitiveIds: ["exterior-recall-face-a"],
+                SecondFaceSourcePrimitiveIds: ["exterior-recall-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 21.495 drawing units",
+                "pair score 0.553",
+                "overlap ratio 0.785",
+                "first face merged 3 fragments",
+                "second face merged 299 fragments",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Confidence = new Confidence(0.723),
+            Decision = WallEvidenceDecision.Review
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall evidence not placement-ready (MediumWallBody)", readiness.Reasons);
+        Assert.DoesNotContain("wall evidence requires review (MediumWallBody)", readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksDimensionLikeLongMainStructuralExteriorRecallWithoutFilledBody()
+    {
+        var wall = Wall("wall:dimension-like-main-exterior-no-body", new Confidence(0.723)) with
+        {
+            WallType = WallType.Exterior,
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 89.25), new PlanPoint(185.33, 89.25)),
+                new PlanLineSegment(new PlanPoint(100, 110.75), new PlanPoint(185.33, 110.75)),
+                FaceSeparation: 21.495,
+                OverlapRatio: 0.785,
+                Score: 0.553,
+                FirstFaceFragmentCount: 3,
+                SecondFaceFragmentCount: 299,
+                FirstFaceSourcePrimitiveIds: ["dimension-line-face-a"],
+                SecondFaceSourcePrimitiveIds: ["dimension-line-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 21.495 drawing units",
+                "pair score 0.553",
+                "overlap ratio 0.785",
+                "first face merged 3 fragments",
+                "second face merged 299 fragments",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Confidence = new Confidence(0.723),
+            Decision = WallEvidenceDecision.Review
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.Contains("wall evidence not placement-ready (MediumWallBody)", readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_AllowsTrustedLongIsolatedExteriorShellWallBodyWithReviewEvidence()
     {
         var wall = Wall("wall:trusted-isolated-exterior-shell", Confidence.High) with
