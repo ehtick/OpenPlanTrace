@@ -1586,6 +1586,12 @@ public sealed record PlacementWallOmissionExport(
                 component,
                 evidenceAssessment,
                 evidence);
+        var trustedShortRecoveredRoomBoundaryWallBody =
+            WallPlacementContextGuards.IsTrustedShortRecoveredRoomBoundaryWallBody(
+                wall,
+                component,
+                evidenceAssessment,
+                evidence);
 
         if (repairCandidates.Any(candidate => candidate.ImportImpact == WallGraphRepairImportImpact.TopologyImportBlocked))
         {
@@ -1681,7 +1687,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedRejectedStrongBoundaryWallBody
             && !trustedRejectedMediumBoundaryFragmentWallBody
             && !trustedOpeningLinkedFilledInteriorWallBody
-            && !trustedOpeningLinkedFragmentMergedInteriorWallBody)
+            && !trustedOpeningLinkedFragmentMergedInteriorWallBody
+            && !trustedShortRecoveredRoomBoundaryWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "structural_topology_excluded",
@@ -1701,6 +1708,7 @@ public sealed record PlacementWallOmissionExport(
 
         if (!trustedOpeningLinkedFilledInteriorWallBody
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
+            && !trustedShortRecoveredRoomBoundaryWallBody
             && IsSuppressedOpeningLinkedIsolatedFragment(component, wall, topologySpans, evidence))
         {
             return new PlacementWallOmissionClassification(
@@ -1712,7 +1720,8 @@ public sealed record PlacementWallOmissionExport(
 
         if (component?.Kind == WallGraphComponentKind.IsolatedFragment
             && !trustedOpeningLinkedFilledInteriorWallBody
-            && !trustedOpeningLinkedFragmentMergedInteriorWallBody)
+            && !trustedOpeningLinkedFragmentMergedInteriorWallBody
+            && !trustedShortRecoveredRoomBoundaryWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "isolated_fragment",

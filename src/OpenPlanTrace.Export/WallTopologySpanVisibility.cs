@@ -153,9 +153,6 @@ internal static class WallTopologySpanVisibility
     private const double MinRoomSupportedShortPairFallbackPairScore = 0.88;
     private const double MinRoomSupportedShortPairFallbackOverlapRatio = 0.95;
     private const int MaxRoomSupportedShortPairFallbackFaceFragmentCount = 12;
-    private const double MinTrustedShortRecoveredRoomBoundaryLengthDrawingUnits = 12.0;
-    private const double MaxTrustedShortRecoveredRoomBoundaryLengthDrawingUnits = 36.0;
-    private const double MinTrustedShortRecoveredRoomBoundaryConfidence = 0.76;
     private const double MinTopologyBlockedFallbackPairScore = 0.80;
     private const double MinTopologyBlockedFallbackOverlapRatio = 0.95;
     private const int MaxTopologyBlockedFallbackFaceFragmentCount = 48;
@@ -1495,76 +1492,11 @@ internal static class WallTopologySpanVisibility
     private static bool IsTrustedShortRecoveredRoomBoundaryFallback(
         WallSegment wall,
         WallGraphComponent? component,
-        WallEvidenceWallAssessment? assessment)
-    {
-        if (assessment is null
-            || wall.WallType != WallType.Interior
-            || wall.DetectionKind != WallDetectionKind.SingleLine
-            || wall.DrawingLength < MinTrustedShortRecoveredRoomBoundaryLengthDrawingUnits
-            || wall.DrawingLength > MaxTrustedShortRecoveredRoomBoundaryLengthDrawingUnits
-            || wall.Confidence.Value < MinTrustedShortRecoveredRoomBoundaryConfidence
-            || assessment.Confidence.Value < MinTrustedShortRecoveredRoomBoundaryConfidence
-            || assessment.Category != WallEvidenceCategory.RecoveredWallBody
-            || !assessment.PlacementReady
-            || assessment.RequiresReview
-            || assessment.RejectedAsNoise
-            || assessment.Decision == WallEvidenceDecision.Reject
-            || ResolveDominantOrthogonalOrientation(wall.CenterLine) == PlacementRunOrientation.Unknown
-            || component?.ExcludedFromStructuralTopology == true
-            || component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment)
-        {
-            return false;
-        }
-
-        var evidence = wall.Evidence
-            .Concat(assessment.Evidence)
-            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
-            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
-            .Concat(component?.Evidence ?? Array.Empty<string>())
-            .ToArray();
-        if (!ContainsEvidence(evidence, "recovered by wall evidence map as short supported wall segment")
-            || !ContainsEvidence(evidence, "short recovery used two-ended structural support")
-            || !ContainsEvidence(evidence, "structural endpoint support count 2")
-            || !ContainsEvidence(evidence, "room-confirmed wall body promoted to placement-ready")
-            || !ContainsEvidence(evidence, "detected room evidence on both sides")
-            || !ContainsEvidence(evidence, "two-sided room evidence True"))
-        {
-            return false;
-        }
-
-        return !ContainsAnyEvidence(
-            evidence,
-            "layer (unlayered) classified Dimension",
-            "layer evidence: contains dimension-like text",
-            "dimension-like",
-            "classified Dimension",
-            "dimension annotation",
-            "outdoor",
-            "terrace",
-            "covered-area",
-            "covered entry",
-            "covered-entry",
-            "overbygd",
-            "canopy",
-            "railing",
-            "trim/detail",
-            "trim linework",
-            "glazing",
-            "detail linework",
-            "surface pattern",
-            "object/fixture",
-            "fixture detail",
-            "repeated short detail",
-            "door/opening",
-            "door swing",
-            "door leaf",
-            "door arc",
-            "opening detail",
-            "stair",
-            "not trusted",
-            "without shell support",
-            "alone is not trusted");
-    }
+        WallEvidenceWallAssessment? assessment) =>
+        WallPlacementContextGuards.IsTrustedShortRecoveredRoomBoundaryWallBody(
+            wall,
+            component,
+            assessment);
 
     private static bool IsTrustedSourceBackedExteriorShellClosureFallback(
         WallSegment wall,

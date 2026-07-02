@@ -62,6 +62,9 @@ public static class WallPlacementContextGuards
     private const double MinTrustedRecoveredMainStructuralInteriorFaceSeparationDrawingUnits = 2.0;
     private const double MaxTrustedRecoveredMainStructuralInteriorFaceSeparationDrawingUnits = 18.0;
     private const int MaxTrustedRecoveredMainStructuralInteriorFaceFragments = 72;
+    private const double MinTrustedShortRecoveredRoomBoundaryLengthDrawingUnits = 12.0;
+    private const double MaxTrustedShortRecoveredRoomBoundaryLengthDrawingUnits = 36.0;
+    private const double MinTrustedShortRecoveredRoomBoundaryConfidence = 0.76;
 
     public const string SecondaryStructuralWithoutRoomBoundarySupportReason =
         "secondary structural wall component lacks room-boundary support";
@@ -102,6 +105,9 @@ public static class WallPlacementContextGuards
     public const string TrustedRejectedMediumBoundaryFragmentWallBodyEvidence =
         "rejected object-like fragment wall restored because clean fragment geometry and two-end boundary evidence agree";
 
+    public const string TrustedShortRecoveredRoomBoundaryEvidence =
+        "short recovered wall has two-ended structural support and room evidence on both sides";
+
     public static bool IsTrustedRecoveredMainStructuralInteriorWallBody(
         WallSegment wall,
         WallGraphComponent? component,
@@ -137,9 +143,12 @@ public static class WallPlacementContextGuards
             return false;
         }
 
+        var baseEvidence = WallEvidenceFor(wall, assessment)
+            .Concat(component?.Evidence ?? Array.Empty<string>())
+            .ToArray();
         var evidence = extraEvidence is null
-            ? WallEvidenceFor(wall, assessment)
-            : WallEvidenceFor(wall, assessment).Concat(extraEvidence).ToArray();
+            ? baseEvidence
+            : baseEvidence.Concat(extraEvidence).ToArray();
         if (!EvidenceContainsAny(
                 evidence,
                 "recovered by wall evidence map",
@@ -182,6 +191,83 @@ public static class WallPlacementContextGuards
             "door leaf",
             "door arc",
             "tiny door-adjacent placement topology piece suppressed",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
+    public static bool IsTrustedShortRecoveredRoomBoundaryWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (assessment is null
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.SingleLine
+            || wall.DrawingLength < MinTrustedShortRecoveredRoomBoundaryLengthDrawingUnits
+            || wall.DrawingLength > MaxTrustedShortRecoveredRoomBoundaryLengthDrawingUnits
+            || wall.Confidence.Value < MinTrustedShortRecoveredRoomBoundaryConfidence
+            || assessment.Confidence.Value < MinTrustedShortRecoveredRoomBoundaryConfidence
+            || assessment.Category != WallEvidenceCategory.RecoveredWallBody
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || component?.ExcludedFromStructuralTopology == true
+            || component?.Kind == WallGraphComponentKind.ObjectLikeIsland
+            || (!wall.CenterLine.IsHorizontal() && !wall.CenterLine.IsVertical()))
+        {
+            return false;
+        }
+
+        var evidence = extraEvidence is null
+            ? WallEvidenceFor(wall, assessment)
+            : WallEvidenceFor(wall, assessment).Concat(extraEvidence).ToArray();
+        var hasTwoEndedRecovery =
+            EvidenceContains(evidence, "recovered by wall evidence map as short supported wall segment")
+            && EvidenceContains(evidence, "short recovery used two-ended structural support")
+            && EvidenceContains(evidence, "structural endpoint support count 2");
+        var hasRoomBoundarySupport =
+            EvidenceContains(evidence, "room-confirmed wall body promoted to placement-ready")
+            || EvidenceContains(evidence, "detected room evidence on both sides")
+            || EvidenceContains(evidence, "two-sided room evidence True")
+            || EvidenceContains(evidence, "geometric room boundary support")
+            || EvidenceContains(evidence, "shared by room adjacency boundary");
+        if (!hasTwoEndedRecovery || !hasRoomBoundarySupport)
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "layer (unlayered) classified Dimension",
+            "layer evidence: contains dimension-like text",
+            "dimension-like",
+            "classified Dimension",
+            "dimension annotation",
+            "outdoor",
+            "terrace",
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "object/fixture",
+            "fixture detail",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening detail",
+            "stair",
             "not trusted",
             "without shell support",
             "alone is not trusted");
