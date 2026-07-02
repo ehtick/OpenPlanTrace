@@ -199,6 +199,16 @@ public static class WallPlacementReadinessEvaluator
                 wall,
                 component,
                 evidenceAssessment);
+        var trustedRejectedStrongBoundaryWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedStrongBoundaryWallBody(
+                wall,
+                component,
+                evidenceAssessment);
+        var trustedRejectedMediumBoundaryFragmentWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedMediumBoundaryFragmentWallBody(
+                wall,
+                component,
+                evidenceAssessment);
         var trustedDenseTwoSidedRoomFragmentMergedInterior =
             WallPlacementContextGuards.IsTrustedDenseTwoSidedRoomFragmentMergedInteriorWallBody(
                 wall,
@@ -219,6 +229,8 @@ public static class WallPlacementReadinessEvaluator
                 trustedOpeningLinkedFilledInteriorWallBody,
                 trustedObjectLikeLongCleanFragmentInterior,
                 trustedObjectLikeExteriorShellPair,
+                trustedRejectedStrongBoundaryWallBody,
+                trustedRejectedMediumBoundaryFragmentWallBody,
                 trustedRecoveredRoomBoundaryObjectLikeWall);
         }
 
@@ -243,6 +255,8 @@ public static class WallPlacementReadinessEvaluator
                 trustedTwoSidedFragmentMergedRoomBoundary,
                 trustedLongOneEndpointFragmentMergedInterior,
                 trustedObjectLikeLongCleanFragmentInterior,
+                trustedRejectedStrongBoundaryWallBody,
+                trustedRejectedMediumBoundaryFragmentWallBody,
                 trustedDenseTwoSidedRoomFragmentMergedInterior);
         }
 
@@ -281,6 +295,8 @@ public static class WallPlacementReadinessEvaluator
             trustedOpeningLinkedFilledInteriorWallBody,
             trustedObjectLikeLongCleanFragmentInterior,
             trustedObjectLikeExteriorShellPair,
+            trustedRejectedStrongBoundaryWallBody,
+            trustedRejectedMediumBoundaryFragmentWallBody,
             trustedRecoveredRoomBoundaryObjectLikeWall);
         var coordinatePlacementBlockedByReviewReason = reviewReasonList.Any(IsCoordinateBlockingReviewReason);
         var coordinatePlacementBlockedByRecoveredExteriorEvidence =
@@ -350,6 +366,8 @@ public static class WallPlacementReadinessEvaluator
                 || trustedRecoveredRoomBoundaryObjectLikeWall
                 || trustedLongOneEndpointFragmentMergedInterior
                 || trustedObjectLikeLongCleanFragmentInterior
+                || trustedRejectedStrongBoundaryWallBody
+                || trustedRejectedMediumBoundaryFragmentWallBody
                 || trustedDenseTwoSidedRoomFragmentMergedInterior);
         var readyForMetricPlacement =
             readyForCoordinatePlacement
@@ -378,8 +396,12 @@ public static class WallPlacementReadinessEvaluator
                 && !trustedOpeningLinkedFilledInteriorWallBody
                 && !trustedExteriorShellRepairSupportedWall
                 && !trustedObjectLikeLongCleanFragmentInterior
+                && !trustedRejectedStrongBoundaryWallBody
+                && !trustedRejectedMediumBoundaryFragmentWallBody
                 && evidenceAssessment?.RequiresReview == true)
-            || evidenceAssessment?.RejectedAsNoise == true
+            || (!trustedRejectedStrongBoundaryWallBody
+                && !trustedRejectedMediumBoundaryFragmentWallBody
+                && evidenceAssessment?.RejectedAsNoise == true)
             || (!trustedTwoSidedFragmentMergedRoomBoundary
                 && !trustedRecoveredRoomBoundaryObjectLikeWall
                 && !trustedLongOneEndpointFragmentMergedInterior
@@ -392,6 +414,8 @@ public static class WallPlacementReadinessEvaluator
                 && !trustedOpeningLinkedFilledInteriorWallBody
                 && !trustedExteriorShellRepairSupportedWall
                 && !trustedObjectLikeLongCleanFragmentInterior
+                && !trustedRejectedStrongBoundaryWallBody
+                && !trustedRejectedMediumBoundaryFragmentWallBody
                 && evidenceAssessment?.PlacementReady == false),
             wall.Confidence,
             coordinatePlacementBlocked
@@ -417,6 +441,8 @@ public static class WallPlacementReadinessEvaluator
         bool trustedOpeningLinkedFilledInteriorWallBody,
         bool trustedObjectLikeLongCleanFragmentInterior,
         bool trustedObjectLikeExteriorShellPair,
+        bool trustedRejectedStrongBoundaryWallBody,
+        bool trustedRejectedMediumBoundaryFragmentWallBody,
         bool trustedRecoveredRoomBoundaryObjectLikeWall)
     {
         if (component.ExcludedFromStructuralTopology)
@@ -427,6 +453,8 @@ public static class WallPlacementReadinessEvaluator
                 && !trustedOpeningLinkedFilledInteriorWallBody
                 && !trustedObjectLikeLongCleanFragmentInterior
                 && !trustedObjectLikeExteriorShellPair
+                && !trustedRejectedStrongBoundaryWallBody
+                && !trustedRejectedMediumBoundaryFragmentWallBody
                 && !trustedLongIsolatedExteriorShellWallBody
                 && !trustedExteriorShellRepairSupportedWall)
             {
@@ -442,6 +470,8 @@ public static class WallPlacementReadinessEvaluator
                 && !trustedOpeningLinkedFilledInteriorWallBody
                 && !trustedObjectLikeLongCleanFragmentInterior
                 && !trustedObjectLikeExteriorShellPair
+                && !trustedRejectedStrongBoundaryWallBody
+                && !trustedRejectedMediumBoundaryFragmentWallBody
                 && !trustedExteriorShellRepairSupportedWall)
             {
                 reasons.Add("wall belongs to compact object-like linework component");
@@ -473,6 +503,8 @@ public static class WallPlacementReadinessEvaluator
         bool trustedTwoSidedFragmentMergedRoomBoundary,
         bool trustedLongOneEndpointFragmentMergedInterior,
         bool trustedObjectLikeLongCleanFragmentInterior,
+        bool trustedRejectedStrongBoundaryWallBody,
+        bool trustedRejectedMediumBoundaryFragmentWallBody,
         bool trustedDenseTwoSidedRoomFragmentMergedInterior)
     {
         if (!evidenceAssessment.PlacementReady
@@ -486,6 +518,8 @@ public static class WallPlacementReadinessEvaluator
             && !trustedTwoSidedFragmentMergedRoomBoundary
             && !trustedLongOneEndpointFragmentMergedInterior
             && !trustedObjectLikeLongCleanFragmentInterior
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody
             && !trustedDenseTwoSidedRoomFragmentMergedInterior)
         {
             reasons.Add($"wall evidence not placement-ready ({evidenceAssessment.Category})");
@@ -502,12 +536,16 @@ public static class WallPlacementReadinessEvaluator
             && !trustedTwoSidedFragmentMergedRoomBoundary
             && !trustedLongOneEndpointFragmentMergedInterior
             && !trustedObjectLikeLongCleanFragmentInterior
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody
             && !trustedDenseTwoSidedRoomFragmentMergedInterior)
         {
             reasons.Add($"wall evidence requires review ({evidenceAssessment.Category})");
         }
 
-        if (evidenceAssessment.RejectedAsNoise)
+        if (evidenceAssessment.RejectedAsNoise
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody)
         {
             reasons.Add($"wall evidence rejected as non-wall/noise ({evidenceAssessment.Category})");
         }
@@ -524,9 +562,11 @@ public static class WallPlacementReadinessEvaluator
         bool trustedOpeningLinkedFilledInteriorWallBody,
         bool trustedObjectLikeLongCleanFragmentInterior,
         bool trustedObjectLikeExteriorShellPair,
+        bool trustedRejectedStrongBoundaryWallBody,
+        bool trustedRejectedMediumBoundaryFragmentWallBody,
         bool trustedRecoveredRoomBoundaryObjectLikeWall) =>
-        component?.ExcludedFromStructuralTopology == true && !trustedRecoveredRoomBoundaryObjectLikeWall && !trustedRoomBoundaryIsolatedExteriorWall && !trustedDimensionLikeExteriorPerimeterWallBody && !trustedOpeningLinkedFilledInteriorWallBody && !trustedObjectLikeLongCleanFragmentInterior && !trustedObjectLikeExteriorShellPair && !trustedExteriorShellRepairSupportedWall && !trustedLongIsolatedExteriorShellWallBody
-        || component?.Kind == WallGraphComponentKind.ObjectLikeIsland && !trustedRecoveredRoomBoundaryObjectLikeWall && !trustedRoomBoundaryIsolatedExteriorWall && !trustedDimensionLikeExteriorPerimeterWallBody && !trustedOpeningLinkedFilledInteriorWallBody && !trustedObjectLikeLongCleanFragmentInterior && !trustedObjectLikeExteriorShellPair && !trustedExteriorShellRepairSupportedWall
+        component?.ExcludedFromStructuralTopology == true && !trustedRecoveredRoomBoundaryObjectLikeWall && !trustedRoomBoundaryIsolatedExteriorWall && !trustedDimensionLikeExteriorPerimeterWallBody && !trustedOpeningLinkedFilledInteriorWallBody && !trustedObjectLikeLongCleanFragmentInterior && !trustedObjectLikeExteriorShellPair && !trustedRejectedStrongBoundaryWallBody && !trustedRejectedMediumBoundaryFragmentWallBody && !trustedExteriorShellRepairSupportedWall && !trustedLongIsolatedExteriorShellWallBody
+        || component?.Kind == WallGraphComponentKind.ObjectLikeIsland && !trustedRecoveredRoomBoundaryObjectLikeWall && !trustedRoomBoundaryIsolatedExteriorWall && !trustedDimensionLikeExteriorPerimeterWallBody && !trustedOpeningLinkedFilledInteriorWallBody && !trustedObjectLikeLongCleanFragmentInterior && !trustedObjectLikeExteriorShellPair && !trustedRejectedStrongBoundaryWallBody && !trustedRejectedMediumBoundaryFragmentWallBody && !trustedExteriorShellRepairSupportedWall
         || (component?.Kind == WallGraphComponentKind.IsolatedFragment
             && !trustedExteriorShellContinuityFragment
             && !trustedExteriorShellRepairSupportedWall

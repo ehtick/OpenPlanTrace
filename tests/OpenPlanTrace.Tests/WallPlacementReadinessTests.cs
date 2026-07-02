@@ -127,6 +127,294 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsRejectedStrongBoundaryObjectLikeWallBody()
+    {
+        var wall = Wall("wall:rejected-strong-boundary-body", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 140), new PlanPoint(148, 140)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 139.25), new PlanPoint(148, 139.25)),
+                new PlanLineSegment(new PlanPoint(100, 140.75), new PlanPoint(148, 140.75)),
+                FaceSeparation: 1.5,
+                OverlapRatio: 1,
+                Score: 0.94,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: ["rejected-strong-face-a"],
+                SecondFaceSourcePrimitiveIds: ["rejected-strong-face-b"]),
+            Evidence =
+            [
+                "filled wall-solid primitive",
+                "parallel wall-face pair",
+                "wall evidence: filled closed vector wall body",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.90",
+                "wall evidence: strong double-edge wall body",
+                "wall evidence: continuity-supported short paired wall body; 1 collinear structural continuation wall(s)",
+                "wall evidence: reclassified as object/fixture detail because graph component page:1:wall-component:9 is ObjectLikeIsland"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.ObjectLikeIsland,
+            excludedFromStructuralTopology: true,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.ObjectOrFixtureDetail, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            RejectedAsNoise = true,
+            Decision = WallEvidenceDecision.Reject
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall component excluded from structural topology", readiness.Reasons);
+        Assert.DoesNotContain("wall belongs to compact object-like linework component", readiness.Reasons);
+        Assert.DoesNotContain("wall evidence rejected as non-wall/noise", readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_AllowsRealStyleTextOnlyRejectedStrongBoundaryObjectLikeWallBody()
+    {
+        var wall = Wall("wall:real-style-rejected-strong-boundary-body", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(609.45, 424.76), new PlanPoint(657.49, 424.76)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Unknown,
+            PairEvidence = null,
+            Evidence =
+            [
+                "filled wall-solid primitive",
+                "parallel wall-face pair",
+                "face separation 1,393 drawing units",
+                "pair score 0,94",
+                "overlap ratio 1",
+                "filled wall-solid bounds 48,034 x 1,393 drawing units",
+                "wall evidence: filled closed vector wall body",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.90",
+                "wall evidence assessment: ObjectOrFixtureDetail / rejected / graph component page:1:wall-component:13",
+                "wall evidence: strong double-edge wall body",
+                "wall evidence: reclassified as object/fixture detail because graph component page:1:wall-component:13 is ObjectLikeIsland",
+                "wall evidence: component excluded from structural topology as compact object-like linework"
+            ]
+        };
+        var component = new WallGraphComponent(
+            "page:1:wall-component:13",
+            1,
+            WallGraphComponentKind.ObjectLikeIsland,
+            new PlanRect(607.45, 380.55, 50.73, 45.13),
+            [wall.Id],
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            [wall.Id],
+            89.17,
+            Confidence.Medium,
+            [
+                "compact disconnected component; review as possible object, stair/detail, or symbol linework",
+                "excluded from structural room/opening topology solving"
+            ],
+            true);
+        var evidence = Evidence(wall, WallEvidenceCategory.ObjectOrFixtureDetail, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            RejectedAsNoise = true,
+            Decision = WallEvidenceDecision.Reject,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.7,
+                NegativeScore: 0.75,
+                DecisionScore: -0.05,
+                PairSupportScore: 0.5,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.2,
+                RecoverySupportScore: 0,
+                NoisePenalty: 0.75,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence:
+                [
+                    "strong parallel-face wall pair",
+                    "both endpoints supported by structural context"
+                ],
+                NegativeEvidence:
+                [
+                    "explicit non-wall evidence: ObjectOrFixtureDetail",
+                    "wall graph component page:1:wall-component:13 is ObjectLikeIsland and excluded from structural topology"
+                ])
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall component excluded from structural topology", readiness.Reasons);
+        Assert.DoesNotContain("wall belongs to compact object-like linework component", readiness.Reasons);
+        Assert.DoesNotContain("wall evidence rejected as non-wall/noise", readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_AllowsRejectedMediumBoundaryObjectLikeFragmentWallBody()
+    {
+        var wall = Wall("wall:rejected-medium-boundary-fragment", new Confidence(0.84)) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(375, 192), new PlanPoint(449, 192)),
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Unknown,
+            FragmentEvidence = new WallFragmentEvidence(
+                FragmentCount: 55,
+                TotalHealedGap: 0,
+                MaxHealedGap: 0,
+                DuplicatePrimitiveCount: 7,
+                GapRatio: 0,
+                RequiresGeometryReview: false,
+                Evidence:
+                [
+                    "fragment geometry: 55 fragment(s)",
+                    "fragment geometry healed gap ratio 0",
+                    "fragment geometry collapsed 7 duplicate primitive(s)"
+                ]),
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "run merged 55 fragments",
+                "run collapsed 7 duplicate or near-duplicate wall line primitive(s)",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.84",
+                "wall evidence assessment: ObjectOrFixtureDetail / rejected / graph component page:1:wall-component:5",
+                "wall evidence: medium wall body from wall-like layer, length, or structural context",
+                "wall evidence: reclassified as object/fixture detail because graph component page:1:wall-component:5 is ObjectLikeIsland",
+                "wall evidence: component excluded from structural topology as compact object-like linework"
+            ]
+        };
+        var component = new WallGraphComponent(
+            "page:1:wall-component:5",
+            1,
+            WallGraphComponentKind.ObjectLikeIsland,
+            new PlanRect(370, 188, 80, 8),
+            [wall.Id],
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            [wall.Id],
+            74.4,
+            Confidence.Medium,
+            [
+                "compact disconnected component; review as possible object, stair/detail, or symbol linework",
+                "excluded from structural room/opening topology solving"
+            ],
+            true);
+        var evidence = Evidence(wall, WallEvidenceCategory.ObjectOrFixtureDetail, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            Confidence = new Confidence(0.84),
+            RejectedAsNoise = true,
+            Decision = WallEvidenceDecision.Reject,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.62,
+                NegativeScore: 0.75,
+                DecisionScore: -0.13,
+                PairSupportScore: 0,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.2,
+                RecoverySupportScore: 0.42,
+                NoisePenalty: 0.75,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence:
+                [
+                    "medium wall-body geometry",
+                    "both endpoints supported by structural context"
+                ],
+                NegativeEvidence:
+                [
+                    "explicit non-wall evidence: ObjectOrFixtureDetail",
+                    "wall graph component page:1:wall-component:5 is ObjectLikeIsland and excluded from structural topology"
+                ])
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview, string.Join("; ", readiness.Reasons));
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain("wall component excluded from structural topology", readiness.Reasons);
+        Assert.DoesNotContain("wall belongs to compact object-like linework component", readiness.Reasons);
+        Assert.DoesNotContain("wall evidence rejected as non-wall/noise", readiness.Reasons);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksRejectedStrongBoundaryObjectLikeWallBodyWhenCoveredEvidenceExists()
+    {
+        var wall = Wall("wall:covered-rejected-strong-boundary-body", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 140), new PlanPoint(148, 140)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 137), new PlanPoint(148, 137)),
+                new PlanLineSegment(new PlanPoint(100, 143), new PlanPoint(148, 143)),
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.94,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: ["covered-rejected-face-a"],
+                SecondFaceSourcePrimitiveIds: ["covered-rejected-face-b"]),
+            Evidence =
+            [
+                "filled wall-solid primitive",
+                "parallel wall-face pair",
+                "wall evidence: filled closed vector wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.90",
+                "wall evidence: strong double-edge wall body",
+                "wall evidence: continuity-supported short paired wall body; 1 collinear structural continuation wall(s)",
+                "wall evidence: outdoor covered-area boundary near 'overbygd' is review-only"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.ObjectLikeIsland,
+            excludedFromStructuralTopology: true,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.ObjectOrFixtureDetail, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            RejectedAsNoise = true,
+            Decision = WallEvidenceDecision.Reject
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains("wall component excluded from structural topology", readiness.Reasons);
+        Assert.Contains("wall evidence rejected as non-wall/noise (ObjectOrFixtureDetail)", readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_BlocksIsolatedFragmentFromCoordinatePlacement()
     {
         var wall = Wall("wall:isolated-fragment", Confidence.High);

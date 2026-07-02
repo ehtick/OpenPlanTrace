@@ -1525,6 +1525,10 @@ public sealed record PlacementWallOmissionExport(
             excludedFromStructuralTopology,
             repairCandidates,
             combinedEvidence);
+        if (classification is null)
+        {
+            return null;
+        }
 
         return new PlacementWallOmissionExport(
             classification.Code,
@@ -1536,7 +1540,7 @@ public sealed record PlacementWallOmissionExport(
             combinedEvidence);
     }
 
-    private static PlacementWallOmissionClassification Classify(
+    private static PlacementWallOmissionClassification? Classify(
         WallEvidenceWallAssessment? evidenceAssessment,
         WallGraphComponent? component,
         WallSegment wall,
@@ -1558,6 +1562,16 @@ public sealed record PlacementWallOmissionExport(
                 evidenceAssessment);
         var trustedObjectLikeExteriorShellPair =
             WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                wall,
+                component,
+                evidenceAssessment);
+        var trustedRejectedStrongBoundaryWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedStrongBoundaryWallBody(
+                wall,
+                component,
+                evidenceAssessment);
+        var trustedRejectedMediumBoundaryFragmentWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedMediumBoundaryFragmentWallBody(
                 wall,
                 component,
                 evidenceAssessment);
@@ -1619,17 +1633,23 @@ public sealed record PlacementWallOmissionExport(
         if (evidenceAssessment?.RejectedAsNoise == true
             || evidenceAssessment?.Decision == WallEvidenceDecision.Reject)
         {
-            return new PlacementWallOmissionClassification(
-                "rejected_wall_evidence",
-                "RejectedWallEvidence",
-                "Wall is omitted from clean placement topology because wall evidence rejected it as noise or non-wall geometry.",
-                "Do not import this wall unless a reviewer explicitly corrects the classification.");
+            if (!trustedRejectedStrongBoundaryWallBody
+                && !trustedRejectedMediumBoundaryFragmentWallBody)
+            {
+                return new PlacementWallOmissionClassification(
+                    "rejected_wall_evidence",
+                    "RejectedWallEvidence",
+                    "Wall is omitted from clean placement topology because wall evidence rejected it as noise or non-wall geometry.",
+                    "Do not import this wall unless a reviewer explicitly corrects the classification.");
+            }
         }
 
         if (component?.Kind == WallGraphComponentKind.ObjectLikeIsland
             && !trustedRecoveredRoomBoundaryObjectLikeWall
             && !trustedObjectLikeLongCleanFragmentInterior
-            && !trustedObjectLikeExteriorShellPair)
+            && !trustedObjectLikeExteriorShellPair
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "object_like_linework",
@@ -1652,6 +1672,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedRecoveredRoomBoundaryObjectLikeWall
             && !trustedObjectLikeLongCleanFragmentInterior
             && !trustedObjectLikeExteriorShellPair
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody
             && !trustedOpeningLinkedFilledInteriorWallBody)
         {
             return new PlacementWallOmissionClassification(
@@ -1853,7 +1875,9 @@ public sealed record PlacementWallOmissionExport(
         if (evidenceAssessment is not null
             && (!evidenceAssessment.PlacementReady
                 || evidenceAssessment.RequiresReview
-                || evidenceAssessment.Decision == WallEvidenceDecision.Review))
+                || evidenceAssessment.Decision == WallEvidenceDecision.Review)
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "wall_evidence_review_required",
@@ -1872,7 +1896,9 @@ public sealed record PlacementWallOmissionExport(
                 "Review the source PDF before importing this short wall; promote it only if it is a true wall return or partition.");
         }
 
-        if (topologySpans.Count == 0)
+        if (topologySpans.Count == 0
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "no_clean_topology_spans",
@@ -1881,13 +1907,21 @@ public sealed record PlacementWallOmissionExport(
                 "Use the raw wall only for QA, or repair the wall graph before importing exact placement.");
         }
 
-        if (reliability.RequiresReview)
+        if (reliability.RequiresReview
+            && !trustedRejectedStrongBoundaryWallBody
+            && !trustedRejectedMediumBoundaryFragmentWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "coordinate_review_required",
                 "CoordinateReview",
                 "Wall is omitted from clean placement topology because coordinate placement requires review.",
                 "Resolve the review reasons before importing this wall as placement-ready geometry.");
+        }
+
+        if (trustedRejectedStrongBoundaryWallBody
+            || trustedRejectedMediumBoundaryFragmentWallBody)
+        {
+            return null;
         }
 
         return new PlacementWallOmissionClassification(
@@ -2540,6 +2574,14 @@ public sealed record PlacementWallExport(
                 component,
                 evidenceAssessment)
             && !WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                wall,
+                component,
+                evidenceAssessment)
+            && !WallPlacementContextGuards.IsTrustedRejectedStrongBoundaryWallBody(
+                wall,
+                component,
+                evidenceAssessment)
+            && !WallPlacementContextGuards.IsTrustedRejectedMediumBoundaryFragmentWallBody(
                 wall,
                 component,
                 evidenceAssessment);
