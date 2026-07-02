@@ -3283,6 +3283,72 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementJsonExporter_DowngradesEndpointGapIssueWhenHostWallIsDuplicateCleanTopology()
+    {
+        var result = CreateContainedDuplicatePlacementRunResult();
+        result = result with
+        {
+            Diagnostics = result.Diagnostics with
+            {
+                Messages =
+                [
+                    .. result.Diagnostics.Messages,
+                    new PlanDiagnostic(
+                        "wall_graph.endpoint_gap.review",
+                        DiagnosticSeverity.Warning,
+                        "wall-graph",
+                        "A wall graph endpoint nearly touches another wall endpoint or host wall but was not safely snapped.")
+                    {
+                        Scope = DiagnosticScope.Detection,
+                        PageNumber = 1,
+                        Region = new PlanRect(140, 96, 100, 16),
+                        Confidence = Confidence.Medium,
+                        SourcePrimitiveIds = ["duplicate-long-wall", "duplicate-contained-wall"],
+                        Properties = new Dictionary<string, string>
+                        {
+                            ["gapKind"] = "EndpointToWall",
+                            ["gapDistance"] = "14.3",
+                            ["nodeId"] = "duplicate-long-node-a",
+                            ["hostWallId"] = "duplicate-contained-wall",
+                            ["wallIds"] = "duplicate-long-wall,duplicate-contained-wall"
+                        }
+                    }
+                ]
+            }
+        };
+
+        using var parsed = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(result));
+        var root = parsed.RootElement;
+        var duplicateHost = root
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+        var issues = root.GetProperty("issues").EnumerateArray().ToArray();
+        var nonBlockingGap = Assert.Single(issues, issue =>
+            issue.GetProperty("code").GetString() == "placement.info.wall_graph_endpoint_gap_nonblocking");
+
+        Assert.Equal(
+            "duplicate_clean_topology_span",
+            duplicateHost.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.Contains(
+            duplicateHost.GetProperty("placementOmission").GetProperty("linkedWallIds").EnumerateArray(),
+            id => id.GetString() == "duplicate-long-wall");
+        Assert.Equal("Info", nonBlockingGap.GetProperty("severity").GetString());
+        Assert.Equal(
+            "NonBlockingOmittedEndpoint",
+            nonBlockingGap.GetProperty("properties").GetProperty("placementImportImpact").GetString());
+        Assert.DoesNotContain(
+            issues,
+            issue => issue.GetProperty("code").GetString() == "placement.review.wall_graph_endpoint_gap");
+        Assert.DoesNotContain(
+            "placement.wall_graph.endpoint_gaps.require_review",
+            JsonStrings(root
+                .GetProperty("summary")
+                .GetProperty("importReadiness")
+                .GetProperty("reviewIssueCodes")));
+    }
+
+    [Fact]
     public async Task VisualSnapshotExporter_WritesPerPageLayerBoundsAndIssues()
     {
         var result = await CreateScanResultAsync();

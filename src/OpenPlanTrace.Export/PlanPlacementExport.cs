@@ -2197,9 +2197,17 @@ public sealed record PlacementWallOmissionExport(
             return true;
         }
 
-        return (value.StartsWith("wall-", StringComparison.OrdinalIgnoreCase)
+        if ((value.StartsWith("wall-", StringComparison.OrdinalIgnoreCase)
                 || value.StartsWith("wall_", StringComparison.OrdinalIgnoreCase))
-            && value.Any(char.IsDigit);
+            && value.Any(char.IsDigit))
+        {
+            return true;
+        }
+
+        return (value.EndsWith("-wall", StringComparison.OrdinalIgnoreCase)
+                && value.Count(character => character == '-') >= 2)
+            || (value.EndsWith("_wall", StringComparison.OrdinalIgnoreCase)
+                && value.Count(character => character == '_') >= 2);
     }
 
     private static bool ContainsEvidence(IReadOnlyList<string> evidence, string text) =>
@@ -9514,6 +9522,11 @@ public sealed record PlacementIssueExport(
             && diagnostic.Properties.TryGetValue("hostWallId", out var hostWallId)
             && !string.IsNullOrWhiteSpace(hostWallId))
         {
+            if (EndpointGapHostWallIsRepresentedByCleanLinkedWall(hostWallId, placementWallsById))
+            {
+                return false;
+            }
+
             var endpointWallIds = wallIds
                 .Where(id => !string.Equals(id, hostWallId, StringComparison.Ordinal))
                 .ToArray();
@@ -9524,6 +9537,24 @@ public sealed record PlacementIssueExport(
         }
 
         return wallIds.Any(id => IsCleanPlacementWallForEndpointGap(id, placementWallsById));
+    }
+
+    private static bool EndpointGapHostWallIsRepresentedByCleanLinkedWall(
+        string hostWallId,
+        IReadOnlyDictionary<string, PlacementWallExport> placementWallsById)
+    {
+        if (!placementWallsById.TryGetValue(hostWallId, out var hostWall)
+            || hostWall.PlacementOmission is null
+            || !string.Equals(
+                hostWall.PlacementOmission.Code,
+                "duplicate_clean_topology_span",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return hostWall.PlacementOmission.LinkedWallIds
+            .Any(linkedWallId => IsCleanPlacementWallForEndpointGap(linkedWallId, placementWallsById));
     }
 
     private static bool IsCleanPlacementWallForEndpointGap(
