@@ -1575,6 +1575,11 @@ public sealed record PlacementWallOmissionExport(
                 wall,
                 component,
                 evidenceAssessment);
+        var trustedRejectedObjectLikeBoundaryRecallWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
+                wall,
+                component,
+                evidenceAssessment);
         var trustedOpeningLinkedFilledInteriorWallBody =
             WallPlacementReadinessEvaluator.IsTrustedOpeningLinkedFilledInteriorWallBody(
                 wall,
@@ -1652,7 +1657,8 @@ public sealed record PlacementWallOmissionExport(
             || evidenceAssessment?.Decision == WallEvidenceDecision.Reject)
         {
             if (!trustedRejectedStrongBoundaryWallBody
-                && !trustedRejectedMediumBoundaryFragmentWallBody)
+                && !trustedRejectedMediumBoundaryFragmentWallBody
+                && !trustedRejectedObjectLikeBoundaryRecallWallBody)
             {
                 return new PlacementWallOmissionClassification(
                     "rejected_wall_evidence",
@@ -1667,7 +1673,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedObjectLikeLongCleanFragmentInterior
             && !trustedObjectLikeExteriorShellPair
             && !trustedRejectedStrongBoundaryWallBody
-            && !trustedRejectedMediumBoundaryFragmentWallBody)
+            && !trustedRejectedMediumBoundaryFragmentWallBody
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "object_like_linework",
@@ -1904,7 +1911,8 @@ public sealed record PlacementWallOmissionExport(
                 || evidenceAssessment.RequiresReview
                 || evidenceAssessment.Decision == WallEvidenceDecision.Review)
             && !trustedRejectedStrongBoundaryWallBody
-            && !trustedRejectedMediumBoundaryFragmentWallBody)
+            && !trustedRejectedMediumBoundaryFragmentWallBody
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "wall_evidence_review_required",
@@ -1925,7 +1933,8 @@ public sealed record PlacementWallOmissionExport(
 
         if (topologySpans.Count == 0
             && !trustedRejectedStrongBoundaryWallBody
-            && !trustedRejectedMediumBoundaryFragmentWallBody)
+            && !trustedRejectedMediumBoundaryFragmentWallBody
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "no_clean_topology_spans",
@@ -1936,7 +1945,8 @@ public sealed record PlacementWallOmissionExport(
 
         if (reliability.RequiresReview
             && !trustedRejectedStrongBoundaryWallBody
-            && !trustedRejectedMediumBoundaryFragmentWallBody)
+            && !trustedRejectedMediumBoundaryFragmentWallBody
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "coordinate_review_required",
@@ -1946,7 +1956,8 @@ public sealed record PlacementWallOmissionExport(
         }
 
         if (trustedRejectedStrongBoundaryWallBody
-            || trustedRejectedMediumBoundaryFragmentWallBody)
+            || trustedRejectedMediumBoundaryFragmentWallBody
+            || trustedRejectedObjectLikeBoundaryRecallWallBody)
         {
             return null;
         }
@@ -2618,6 +2629,10 @@ public sealed record PlacementWallExport(
                 component,
                 evidenceAssessment)
             && !WallPlacementContextGuards.IsTrustedRejectedMediumBoundaryFragmentWallBody(
+                wall,
+                component,
+                evidenceAssessment)
+            && !WallPlacementContextGuards.IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
                 wall,
                 component,
                 evidenceAssessment);
@@ -3603,6 +3618,9 @@ public sealed record PlacementWallGraphExport(
     private const double MaxInlinePlacementGraphOpeningCutoutGapDrawingUnits = 96.0;
     private const double MaxInlinePlacementGraphExteriorShellMergeGapDrawingUnits = 144.0;
     private const double MaxInlinePlacementGraphMergeThicknessDeltaDrawingUnits = 4.0;
+    private const double MaxShortEndpointGapPlacementGraphContinuationDrawingUnits = 12.0;
+    private const double MaxShortEndpointGapPlacementGraphAxisDistanceDrawingUnits = 4.5;
+    private const double MinShortEndpointGapPlacementGraphContinuationLengthDrawingUnits = 24.0;
     private const double MinOverlappingStructuralPlacementGraphMergeLengthDrawingUnits = 12.0;
     private const double MinOverlappingStructuralPlacementGraphMergeOverlapRatio = 0.2;
     private const double MaxContainedPlacementGraphEdgeAxisDistanceDrawingUnits = 1.5;
@@ -3804,6 +3822,20 @@ public sealed record PlacementWallGraphExport(
         edges = protectedTopologyRestoration.Edges;
         var postProtectedTopologyRestorationNodeNormalization = NormalizePlacementGraphNodeReferencesFromGeometry(edges);
         edges = postProtectedTopologyRestorationNodeNormalization.Edges;
+        var postProtectedTopologyRestorationCompactionPreEdgeCount = edges.Length;
+        edges = CollapseInlineCollinearPlacementGraphEdges(edges);
+        var postProtectedTopologyRestorationCollapsedEdgeCount =
+            Math.Max(0, postProtectedTopologyRestorationCompactionPreEdgeCount - edges.Length);
+        var postProtectedTopologyRestorationShortGapPreEdgeCount = edges.Length;
+        edges = CollapseShortEndpointGapPlacementGraphContinuations(edges);
+        var postProtectedTopologyRestorationShortGapCollapsedEdgeCount =
+            Math.Max(0, postProtectedTopologyRestorationShortGapPreEdgeCount - edges.Length);
+        edges = SuppressContainedPlacementGraphEdges(
+            edges,
+            out var postProtectedTopologyRestorationSuppressedContainedEdgeCount);
+        var postProtectedTopologyRestorationCompactionNodeNormalization =
+            NormalizePlacementGraphNodeReferencesFromGeometry(edges);
+        edges = postProtectedTopologyRestorationCompactionNodeNormalization.Edges;
         var residualEndpointOnHostSummary = SummarizeResidualPlacementGraphEndpointOnHostEdges(edges);
         var finalCompactedEdgeCount = Math.Max(0, finalCompactionPreEdgeCount - finalPostCompactionEdgeCount);
         var alignedEndpointCount = preNormalizationNodeCoordinateAlignment.AlignedEndpointCount
@@ -3879,6 +3911,9 @@ public sealed record PlacementWallGraphExport(
             $"placement wall graph split {postBridgeResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-bridge residual cleanup",
             $"placement wall graph restored {protectedTopologyRestoration.RestoredEdgeCount} protected bridged topology edge(s) missing from final graph coverage",
             $"placement wall graph split {postProtectedTopologyRestorationNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after protected topology restoration",
+            $"placement wall graph post-restoration compacted {postProtectedTopologyRestorationCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postProtectedTopologyRestorationSuppressedContainedEdgeCount} contained duplicate edge(s)",
+            $"placement wall graph post-restoration short-gap compacted {postProtectedTopologyRestorationShortGapCollapsedEdgeCount} tiny structural continuation gap(s)",
+            $"placement wall graph split {postProtectedTopologyRestorationCompactionNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-restoration compaction",
             "placement wall graph residual endpoint-on-host-wall candidates after cleanup: "
             + $"{residualEndpointOnHostSummary.CandidateEndpointCount} total, "
             + $"{residualEndpointOnHostSummary.CoincidentCandidateEndpointCount} coincident, "
@@ -4144,6 +4179,222 @@ public sealed record PlacementWallGraphExport(
             .ThenBy(edge => edge.Bounds?.X ?? double.MaxValue)
             .ThenBy(edge => edge.Id, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static PlacementWallGraphEdgeExport[] CollapseShortEndpointGapPlacementGraphContinuations(
+        IReadOnlyList<PlacementWallGraphEdgeExport> edges)
+    {
+        if (edges.Count <= 1)
+        {
+            return edges.ToArray();
+        }
+
+        var current = edges.ToArray();
+        var changed = false;
+        for (var iteration = 0; iteration < edges.Count; iteration++)
+        {
+            var spans = current
+                .Select((edge, index) => TryCreatePlacementGraphMergeSpan(index, edge))
+                .Where(span => span is not null)
+                .Select(span => span!)
+                .ToArray();
+            if (spans.Length <= 1)
+            {
+                break;
+            }
+
+            var candidates = FindShortEndpointGapPlacementGraphContinuationCandidates(spans);
+            if (candidates.Count == 0)
+            {
+                break;
+            }
+
+            var usedIndexes = new HashSet<int>();
+            var merged = new List<PlacementWallGraphEdgeExport>();
+            foreach (var candidate in candidates)
+            {
+                if (usedIndexes.Contains(candidate.First.Index)
+                    || usedIndexes.Contains(candidate.Second.Index))
+                {
+                    continue;
+                }
+
+                merged.Add(MergeShortEndpointGapPlacementGraphContinuations(candidate));
+                usedIndexes.Add(candidate.First.Index);
+                usedIndexes.Add(candidate.Second.Index);
+            }
+
+            if (merged.Count == 0)
+            {
+                break;
+            }
+
+            current = current
+                .Where((_, index) => !usedIndexes.Contains(index))
+                .Concat(merged)
+                .OrderBy(edge => edge.PageNumber)
+                .ThenBy(edge => edge.Bounds?.Y ?? double.MaxValue)
+                .ThenBy(edge => edge.Bounds?.X ?? double.MaxValue)
+                .ThenBy(edge => edge.Id, StringComparer.Ordinal)
+                .ToArray();
+            changed = true;
+        }
+
+        return changed ? current : edges.ToArray();
+    }
+
+    private static IReadOnlyList<PlacementGraphShortEndpointGapContinuationCandidate>
+        FindShortEndpointGapPlacementGraphContinuationCandidates(IReadOnlyList<PlacementGraphMergeSpan> spans)
+    {
+        var candidates = new List<PlacementGraphShortEndpointGapContinuationCandidate>();
+        foreach (var first in spans)
+        {
+            foreach (var second in spans)
+            {
+                if (first.Index >= second.Index
+                    || first.Edge.PageNumber != second.Edge.PageNumber
+                    || first.Orientation != second.Orientation)
+                {
+                    continue;
+                }
+
+                var orderedFirst = first.Start <= second.Start ? first : second;
+                var orderedSecond = ReferenceEquals(orderedFirst, first) ? second : first;
+                if (!CanMergeShortEndpointGapPlacementGraphContinuations(
+                        orderedFirst,
+                        orderedSecond,
+                        out var gap,
+                        out var axisDistance))
+                {
+                    continue;
+                }
+
+                candidates.Add(new PlacementGraphShortEndpointGapContinuationCandidate(
+                    orderedFirst,
+                    orderedSecond,
+                    gap,
+                    axisDistance));
+            }
+        }
+
+        return candidates
+            .OrderBy(candidate => candidate.Gap)
+            .ThenBy(candidate => candidate.AxisDistance)
+            .ThenByDescending(candidate => candidate.First.Length + candidate.Second.Length)
+            .ThenBy(candidate => candidate.First.Edge.Id, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.Second.Edge.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool CanMergeShortEndpointGapPlacementGraphContinuations(
+        PlacementGraphMergeSpan first,
+        PlacementGraphMergeSpan second,
+        out double gap,
+        out double axisDistance)
+    {
+        gap = second.Start - first.End;
+        axisDistance = Math.Abs(first.Axis - second.Axis);
+        if (gap <= 0.001 || gap > ShortEndpointGapPlacementGraphContinuationTolerance(first, second))
+        {
+            return false;
+        }
+
+        if (axisDistance > ShortEndpointGapPlacementGraphAxisTolerance(first, second))
+        {
+            return false;
+        }
+
+        if (first.Length < MinShortEndpointGapPlacementGraphContinuationLengthDrawingUnits
+            || second.Length < MinShortEndpointGapPlacementGraphContinuationLengthDrawingUnits)
+        {
+            return false;
+        }
+
+        if (!IsStructuralPlacementGraphMergeContinuation(first.Edge)
+            || !IsStructuralPlacementGraphMergeContinuation(second.Edge)
+            || first.Edge.ExcludedFromStructuralTopology
+            || second.Edge.ExcludedFromStructuralTopology
+            || HasPlacementGraphDetailOrSurfaceEvidence(first.Edge)
+            || HasPlacementGraphDetailOrSurfaceEvidence(second.Edge)
+            || HasShortEndpointGapPlacementGraphBlockingEvidence(first.Edge)
+            || HasShortEndpointGapPlacementGraphBlockingEvidence(second.Edge))
+        {
+            return false;
+        }
+
+        if (HasExteriorInteriorPlacementGraphMismatch(first.Edge, second.Edge))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static double ShortEndpointGapPlacementGraphContinuationTolerance(
+        PlacementGraphMergeSpan first,
+        PlacementGraphMergeSpan second)
+    {
+        var maxThickness = Math.Max(
+            first.Edge.ThicknessDrawingUnits,
+            second.Edge.ThicknessDrawingUnits);
+        return Math.Clamp(
+            maxThickness * 1.5,
+            MaxInlinePlacementGraphMergeAxisDistanceDrawingUnits,
+            MaxShortEndpointGapPlacementGraphContinuationDrawingUnits);
+    }
+
+    private static double ShortEndpointGapPlacementGraphAxisTolerance(
+        PlacementGraphMergeSpan first,
+        PlacementGraphMergeSpan second)
+    {
+        var maxThickness = Math.Max(
+            first.Edge.ThicknessDrawingUnits,
+            second.Edge.ThicknessDrawingUnits);
+        return Math.Clamp(
+            maxThickness * 0.75,
+            MaxInlinePlacementGraphMergeAxisDistanceDrawingUnits,
+            MaxShortEndpointGapPlacementGraphAxisDistanceDrawingUnits);
+    }
+
+    private static bool HasShortEndpointGapPlacementGraphBlockingEvidence(PlacementWallGraphEdgeExport edge) =>
+        edge.Evidence.Any(item =>
+            item.Contains("door swing", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door leaf", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door arc", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door-adjacent", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("tiny door", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("opening-linked", StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasExteriorInteriorPlacementGraphMismatch(
+        PlacementWallGraphEdgeExport first,
+        PlacementWallGraphEdgeExport second)
+    {
+        var firstExterior = first.Evidence.Any(IsExteriorPlacementGraphEvidence);
+        var secondExterior = second.Evidence.Any(IsExteriorPlacementGraphEvidence);
+        var firstInterior = HasInteriorPlacementGraphEvidence(first);
+        var secondInterior = HasInteriorPlacementGraphEvidence(second);
+        return (firstExterior && secondInterior) || (secondExterior && firstInterior);
+    }
+
+    private static bool HasInteriorPlacementGraphEvidence(PlacementWallGraphEdgeExport edge) =>
+        edge.Evidence.Any(item =>
+            item.Contains("wall type interior", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("inside exterior envelope", StringComparison.OrdinalIgnoreCase));
+
+    private static PlacementWallGraphEdgeExport MergeShortEndpointGapPlacementGraphContinuations(
+        PlacementGraphShortEndpointGapContinuationCandidate candidate)
+    {
+        var merged = MergeInlineCollinearPlacementGraphEdges([candidate.First, candidate.Second]);
+        return merged with
+        {
+            Evidence = merged.Evidence
+                .Append(
+                    "placement wall graph short-gap continuation: "
+                    + $"bridged tiny structural endpoint gap {candidate.Gap:0.###} drawing units "
+                    + $"with axis distance {candidate.AxisDistance:0.###} drawing units")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray()
+        };
     }
 
     private static PlacementWallGraphEdgeExport[] SuppressNonImportablePlacementGraphEdges(
@@ -8001,6 +8252,12 @@ public sealed record PlacementWallGraphExport(
     private sealed record PlacementGraphTinyOpeningBridgeSuppression(
         PlacementWallGraphEdgeExport BridgeEdge,
         IReadOnlyList<PlacementGraphInteriorNodeAttachment> Attachments);
+
+    private sealed record PlacementGraphShortEndpointGapContinuationCandidate(
+        PlacementGraphMergeSpan First,
+        PlacementGraphMergeSpan Second,
+        double Gap,
+        double AxisDistance);
 
     private sealed record PlacementGraphResidualEndpointSnapResult(
         PlacementWallGraphEdgeExport[] Edges,

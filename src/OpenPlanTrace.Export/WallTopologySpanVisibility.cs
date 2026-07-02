@@ -796,6 +796,13 @@ internal static class WallTopologySpanVisibility
             var canRecoverUnsafeCleanProjection = unsafeCleanProjectionSpanCount > 0
                 && (IsTrustedExteriorSourceBackedFallbackForUnsafeCleanProjection(wall, context)
                     || IsTrustedInteriorSourceBackedFallbackForUnsafeCleanProjection(wall, context));
+            context.ComponentByWallId.TryGetValue(wall.Id, out var component);
+            context.WallEvidenceAssessments.TryGetValue(wall.Id, out var assessment);
+            var canRecoverRejectedObjectLikeBoundaryRecall =
+                WallPlacementContextGuards.IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
+                    wall,
+                    component,
+                    assessment);
             var coverageRatio = CleanPlacementCoverageRatio(
                 wall,
                 cleanSpans,
@@ -806,6 +813,7 @@ internal static class WallTopologySpanVisibility
                 context);
             if (((coverageRatio >= MaxSourceBackedFallbackExistingCoverageRatio || representedByExistingCleanSpan)
                     && !canRecoverUnsafeCleanProjection)
+                    && !canRecoverRejectedObjectLikeBoundaryRecall
                 || !ShouldBuildSourceBackedFallbackSpan(wall, context, openings))
             {
                 continue;
@@ -894,6 +902,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedRejectedObjectLikeBoundaryRecallWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
+                wall,
+                component,
+                assessment);
         var hasTrustedObjectLikeLongCleanFragmentInterior =
             WallPlacementContextGuards.IsTrustedObjectLikeLongCleanFragmentInteriorWallBody(
                 wall,
@@ -926,12 +939,14 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedFilledSecondaryStructuralPair
                 && !hasTrustedShortFilledInteriorWallBody
                 && !hasTrustedRejectedStrongBoundaryWallBody
-                && !hasTrustedRejectedMediumBoundaryFragmentWallBody)
+                && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody)
             || (wall.WallType == WallType.Unknown
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedObjectLikeExteriorShellPair
                 && !hasTrustedRejectedStrongBoundaryWallBody
-                && !hasTrustedRejectedMediumBoundaryFragmentWallBody)
+                && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody)
             || (wall.FragmentEvidence?.RequiresGeometryReview == true
                 && !trustedUnsafeExteriorCleanProjectionFallback
                 && !trustedUnsafeInteriorCleanProjectionFallback
@@ -1055,6 +1070,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortFilledInteriorWallBody
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1085,6 +1101,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortFilledInteriorWallBody
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1116,6 +1133,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortFilledInteriorWallBody
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1134,7 +1152,8 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedCleanIsolatedRoomBoundaryFragment
                 && assessment.RequiresReview)
             || ((!hasTrustedRejectedStrongBoundaryWallBody
-                    && !hasTrustedRejectedMediumBoundaryFragmentWallBody)
+                    && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                    && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody)
                 && (assessment.RejectedAsNoise
                     || assessment.Decision == WallEvidenceDecision.Reject))
             || (assessment.Category is not (WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.RecoveredWallBody)
@@ -1157,6 +1176,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortFilledInteriorWallBody
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1205,6 +1225,7 @@ internal static class WallTopologySpanVisibility
             && !hasTrustedShortFilledInteriorWallBody
             && !hasTrustedRejectedStrongBoundaryWallBody
             && !hasTrustedRejectedMediumBoundaryFragmentWallBody
+            && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
             && !trustedExteriorShellRepairSupportedWall
             && !hasTrustedSourceBackedExteriorShellClosure
             && !hasTrustedInferredExteriorShellFallback
@@ -1239,6 +1260,7 @@ internal static class WallTopologySpanVisibility
             || hasTrustedShortFilledInteriorWallBody
             || hasTrustedRejectedStrongBoundaryWallBody
             || hasTrustedRejectedMediumBoundaryFragmentWallBody
+            || hasTrustedRejectedObjectLikeBoundaryRecallWallBody
             || hasTrustedMainStructuralExteriorWallBody
             || hasTrustedMainStructuralExteriorRecallWallBody
             || hasTrustedLongIsolatedExteriorShellWallBody
@@ -2924,6 +2946,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var trustedRejectedObjectLikeBoundaryRecallWallBody =
+            WallPlacementContextGuards.IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
+                wall,
+                component,
+                assessment);
         var placementAxis = WallBodyFootprintBuilder.BuildPlacementAxis(wall, 0, 1);
         var centerLine = placementAxis.CenterLine;
         if (centerLine.Length <= 0.001)
@@ -3000,6 +3027,10 @@ internal static class WallTopologySpanVisibility
         else if (trustedRejectedMediumBoundaryFragmentWallBody)
         {
             evidence.Add("source-backed fallback accepted because rejected object-like fragment wall has medium boundary evidence");
+        }
+        else if (trustedRejectedObjectLikeBoundaryRecallWallBody)
+        {
+            evidence.Add("source-backed fallback accepted because object-like rejection was outweighed by wall-type and placement-ready evidence");
         }
         else if (trustedMainStructuralExteriorRecallWallBody)
         {
@@ -5466,6 +5497,12 @@ internal static class WallTopologySpanVisibility
                     continue;
                 }
 
+                if (candidateIsSourceBackedFallback
+                    && ContainsEvidence(candidate.Evidence, "object-like rejection was outweighed"))
+                {
+                    continue;
+                }
+
                 if (isTinyContainedSameType)
                 {
                     return true;
@@ -5691,6 +5728,11 @@ internal static class WallTopologySpanVisibility
             || IsTopologyBlockedSourceBackedFallbackSpan(candidate)
             || IsTopologyBlockedSourceBackedFallbackSpan(kept)
             || candidate.DrawingLength > kept.DrawingLength)
+        {
+            return false;
+        }
+
+        if (ContainsEvidence(candidate.Evidence, "object-like rejection was outweighed"))
         {
             return false;
         }

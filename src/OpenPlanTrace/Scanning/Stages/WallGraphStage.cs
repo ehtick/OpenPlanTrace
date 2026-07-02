@@ -4,6 +4,9 @@ internal sealed class WallGraphStage : IPipelineStage
 {
     private const double MinOneEndpointMainStructuralMediumPairScore = 0.80;
     private const double MinOneEndpointMainStructuralMediumLength = 24.0;
+    private const double MinTrustedMainStructuralFragmentMergedLength = 60.0;
+    private const int MaxTrustedMainStructuralFragmentMergedDuplicatePrimitives = 8;
+    private const double MaxTrustedMainStructuralFragmentMergedGapRatio = 0.02;
     private const double MinCompactStructuralPairedWallPairScore = 0.68;
     private const int MaxSecondaryInteriorFragmentPromotionFragments = 12;
     private const int MaxSecondaryInteriorFragmentPromotionDuplicatePrimitives = 8;
@@ -425,8 +428,11 @@ internal sealed class WallGraphStage : IPipelineStage
             .Where(assessment => graphInput.IsReviewGraphWall(assessment.WallId))
             .Where(assessment => wallsById.TryGetValue(assessment.WallId, out var wall)
                 && IsTrustedReviewCoordinateRepairAssessment(assessment, wall))
-            .Where(assessment => bandsByWallId.TryGetValue(assessment.WallId, out var bands)
-                && bands.Any(IsTrustedReviewCoordinateRepairBand))
+            .Where(assessment =>
+                wallsById.TryGetValue(assessment.WallId, out var wall)
+                && (bandsByWallId.TryGetValue(assessment.WallId, out var bands)
+                    && bands.Any(IsTrustedReviewCoordinateRepairBand)
+                    || IsTrustedCleanFragmentReviewCoordinateRepairAssessment(assessment, wall)))
             .Select(assessment => assessment.WallId)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
@@ -445,7 +451,8 @@ internal sealed class WallGraphStage : IPipelineStage
             return false;
         }
 
-        if (!assessment.Evidence.Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase)))
+        if (!assessment.Evidence.Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase))
+            && !IsTrustedCleanFragmentReviewCoordinateRepairAssessment(assessment, wall))
         {
             return false;
         }
@@ -462,6 +469,44 @@ internal sealed class WallGraphStage : IPipelineStage
         }
 
         return true;
+    }
+
+    private static bool IsTrustedCleanFragmentReviewCoordinateRepairAssessment(
+        WallEvidenceWallAssessment assessment,
+        WallSegment wall)
+    {
+        if (wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.WallType == WallType.Unknown
+            || wall.DrawingLength < MinTrustedMainStructuralFragmentMergedLength
+            || wall.Confidence.Value < 0.78
+            || assessment.Confidence.Value < 0.82
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence)
+        {
+            return false;
+        }
+
+        var maxHealedGap = Math.Max(3.0, wall.Thickness * 0.75);
+        if (fragmentEvidence.DuplicatePrimitiveCount > MaxTrustedMainStructuralFragmentMergedDuplicatePrimitives
+            || fragmentEvidence.GapRatio > MaxTrustedMainStructuralFragmentMergedGapRatio
+            || fragmentEvidence.TotalHealedGap > maxHealedGap
+            || fragmentEvidence.MaxHealedGap > maxHealedGap)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(fragmentEvidence.Evidence)
+            .ToArray();
+        if (!evidence.Any(item => item.Contains("merged collinear wall fragments", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return !evidence.Any(IsHardRiskReviewWallEvidence)
+            && !evidence.Any(IsCleanFragmentCoordinateRepairBlockedEvidence);
     }
 
     private static bool IsTrustedReviewCoordinateRepairBand(WallEvidenceBand band) =>
@@ -2133,13 +2178,21 @@ internal sealed class WallGraphStage : IPipelineStage
             return false;
         }
 
-        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
-            && !assessment.Evidence.Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase)))
+        var hasParallelWallFaceEvidence =
+            wall.DetectionKind == WallDetectionKind.ParallelLinePair
+            || assessment.Evidence.Any(item => item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase));
+        var hasTrustedFragmentMergedEvidence =
+            IsTrustedMainStructuralFragmentMergedMediumWallAssessment(
+                assessment,
+                wall,
+                supportedEndpointCount);
+        if (!hasParallelWallFaceEvidence && !hasTrustedFragmentMergedEvidence)
         {
             return false;
         }
 
-        if (wall.FragmentEvidence?.RequiresGeometryReview == true)
+        if (!hasTrustedFragmentMergedEvidence
+            && wall.FragmentEvidence?.RequiresGeometryReview == true)
         {
             return false;
         }
@@ -2157,6 +2210,83 @@ internal sealed class WallGraphStage : IPipelineStage
         }
 
         return true;
+    }
+
+    private static bool IsTrustedMainStructuralFragmentMergedMediumWallAssessment(
+        WallEvidenceWallAssessment assessment,
+        WallSegment wall,
+        int supportedEndpointCount)
+    {
+        if (supportedEndpointCount < 2
+            || wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.WallType == WallType.Unknown
+            || wall.DrawingLength < MinTrustedMainStructuralFragmentMergedLength
+            || wall.Confidence.Value < 0.78
+            || assessment.Confidence.Value < 0.82
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence)
+        {
+            return false;
+        }
+
+        var maxHealedGap = Math.Max(3.0, wall.Thickness * 0.75);
+        if (fragmentEvidence.DuplicatePrimitiveCount > MaxTrustedMainStructuralFragmentMergedDuplicatePrimitives
+            || fragmentEvidence.GapRatio > MaxTrustedMainStructuralFragmentMergedGapRatio
+            || fragmentEvidence.TotalHealedGap > maxHealedGap
+            || fragmentEvidence.MaxHealedGap > maxHealedGap)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(fragmentEvidence.Evidence)
+            .ToArray();
+        if (!evidence.Any(item => item.Contains("merged collinear wall fragments", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return !evidence.Any(IsHardRiskReviewWallEvidence)
+            && !evidence.Any(IsMainStructuralFragmentPromotionBlockedEvidence);
+    }
+
+    private static bool IsCleanFragmentCoordinateRepairBlockedEvidence(string evidence)
+    {
+        if (string.IsNullOrWhiteSpace(evidence))
+        {
+            return false;
+        }
+
+        return IsMainStructuralFragmentPromotionBlockedEvidence(evidence)
+            || evidence.Contains("dimension", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("annotation", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMainStructuralFragmentPromotionBlockedEvidence(string evidence)
+    {
+        if (string.IsNullOrWhiteSpace(evidence))
+        {
+            return false;
+        }
+
+        return evidence.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("already represented", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("block exact placement", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("review before exact placement", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("until reviewed", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("one structurally supported endpoint", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("one trusted structural endpoint", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("fewer than two distinct structural wall connections", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("topology import", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("repair candidate", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("endpoint-to-wall snap", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("fragment geometry requires review", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("unknown fragment-merged", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("weak/fragmented", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("surface/detail", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("non-wall", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsTrustedOneEndpointMainStructuralMediumWallAssessment(

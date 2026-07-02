@@ -547,6 +547,91 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_PromotesTwoEndpointMainStructuralCleanFragmentWall()
+    {
+        var top = DetectedWall("wall-top", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
+        var bottom = DetectedWall("wall-bottom", new PlanPoint(100, 220), new PlanPoint(320, 220)) with { WallType = WallType.Exterior };
+        var fragment = CleanFragmentWall("wall-clean-main-fragment", new PlanPoint(200, 100), new PlanPoint(200, 220));
+        var context = new ScanContext(
+            Document("wall-main-structural-clean-fragment-promotion"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { top, bottom, fragment });
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(top, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                Assessment(bottom, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                MainStructuralCleanFragmentReviewAssessment(fragment)
+            });
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == fragment.Id);
+        var component = Assert.Single(context.WallGraph.Components, component => component.WallIds.Contains(fragment.Id));
+
+        Assert.Equal(WallGraphComponentKind.MainStructural, component.Kind);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("2 topology-supported endpoint", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.main_structural_medium_walls_promoted"
+                && diagnostic.Properties["promotedWallCount"] == "1"
+                && diagnostic.Properties["wallIds"] == fragment.Id);
+    }
+
+    [Fact]
+    public async Task WallGraphStage_DoesNotPromoteDoorLikeMainStructuralFragmentWall()
+    {
+        var top = DetectedWall("wall-top", new PlanPoint(100, 100), new PlanPoint(320, 100)) with { WallType = WallType.Exterior };
+        var bottom = DetectedWall("wall-bottom", new PlanPoint(100, 220), new PlanPoint(320, 220)) with { WallType = WallType.Exterior };
+        var fragment = CleanFragmentWall("wall-door-like-main-fragment", new PlanPoint(200, 100), new PlanPoint(200, 220))
+            with
+            {
+                Evidence =
+                [
+                    "merged collinear wall fragments",
+                    "run merged 4 fragments",
+                    "door swing linework detail near wall opening",
+                    "wall type interior: supported wall evidence inside exterior envelope"
+                ]
+            };
+        var context = new ScanContext(
+            Document("wall-main-structural-door-fragment-promotion-blocked"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { top, bottom, fragment });
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(top, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                Assessment(bottom, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                MainStructuralCleanFragmentReviewAssessment(
+                    fragment,
+                    "door swing linework detail near wall opening")
+            });
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retainedReview = Assert.Single(context.WallEvidenceMap.WallAssessments, assessment => assessment.WallId == fragment.Id);
+
+        Assert.False(retainedReview.PlacementReady);
+        Assert.True(retainedReview.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retainedReview.Decision);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_evidence.main_structural_medium_walls_promoted");
+    }
+
+    [Fact]
     public async Task WallGraphStage_PromotesLongInteriorFragmentComponentWithGraphContext()
     {
         var mainWalls = new[]
@@ -3074,6 +3159,47 @@ public sealed class WallGraphTopologyTests
                 new[] { "fragment-merged wall body", "one trusted structural endpoint" },
                 new[] { "not placement-ready without graph recovery" })
         };
+
+    private static WallEvidenceWallAssessment MainStructuralCleanFragmentReviewAssessment(
+        WallSegment wall,
+        params string[] extraEvidence)
+    {
+        var evidence = new[]
+        {
+            "merged collinear wall fragments",
+            "run merged 4 fragments",
+            "wall type interior: supported wall evidence inside exterior envelope"
+        }
+        .Concat(extraEvidence)
+        .ToArray();
+
+        return new WallEvidenceWallAssessment(
+            wall.Id,
+            wall.PageNumber,
+            wall.Bounds,
+            WallEvidenceCategory.MediumWallBody,
+            new Confidence(0.88),
+            PlacementReady: false,
+            RequiresReview: true,
+            RejectedAsNoise: false,
+            wall.SourcePrimitiveIds,
+            evidence)
+        {
+            Decision = WallEvidenceDecision.Review,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                0.62,
+                0,
+                0.62,
+                0,
+                0,
+                0.20,
+                0.10,
+                0,
+                0.08,
+                ["fragment-merged wall body", "both endpoints supported by structural context"],
+                ["not placement-ready without graph recovery"])
+        };
+    }
 
     private static WallEvidenceWallAssessment DenseContinuousFragmentReviewAssessment(
         WallSegment wall,

@@ -946,6 +946,17 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         PlanRect? mainFloorplanBounds,
         ScannerOptions options)
     {
+        if (rejectedEvidence is not null
+            && TryGetTrustedRejectedObjectLikeBoundaryRecallType(
+                wall,
+                component,
+                rejectedEvidence,
+                out var recalledWallType,
+                out var recallEvidence))
+        {
+            return new WallTypeRefinement(recalledWallType, recallEvidence);
+        }
+
         if (rejectedEvidence is not null && IsNonStructuralWallComponent(component))
         {
             return new WallTypeRefinement(
@@ -1156,6 +1167,54 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         component is not null
         && (component.ExcludedFromStructuralTopology
             || component.Kind is WallGraphComponentKind.ObjectLikeIsland);
+
+    private static bool TryGetTrustedRejectedObjectLikeBoundaryRecallType(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment rejectedEvidence,
+        out WallType wallType,
+        out string evidence)
+    {
+        wallType = WallType.Unknown;
+        evidence = string.Empty;
+
+        if (!WallPlacementContextGuards.IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
+                wall,
+                component,
+                rejectedEvidence))
+        {
+            return false;
+        }
+
+        var combinedEvidence = wall.Evidence
+            .Concat(rejectedEvidence.Evidence)
+            .Concat(rejectedEvidence.ScoreBreakdown.PositiveEvidence)
+            .Concat(rejectedEvidence.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        if (wall.WallType == WallType.Exterior
+            || EvidenceContainsAny(combinedEvidence, "wall type exterior")
+            || EvidenceContainsAny(combinedEvidence, "exterior shell")
+            || EvidenceContainsAny(combinedEvidence, "local outer boundary"))
+        {
+            wallType = WallType.Exterior;
+            evidence =
+                $"wall type refined exterior: {WallPlacementContextGuards.TrustedRejectedObjectLikeBoundaryRecallEvidence}";
+            return true;
+        }
+
+        if (wall.WallType == WallType.Interior
+            || EvidenceContainsAny(combinedEvidence, "wall type interior")
+            || EvidenceContainsAny(combinedEvidence, "supported wall evidence inside exterior envelope")
+            || EvidenceContainsAny(combinedEvidence, "room boundary"))
+        {
+            wallType = WallType.Interior;
+            evidence =
+                $"wall type refined interior: {WallPlacementContextGuards.TrustedRejectedObjectLikeBoundaryRecallEvidence}";
+            return true;
+        }
+
+        return false;
+    }
 
     private static bool IsRecoveredMissingWallCandidate(WallSegment wall) =>
         wall.Evidence.Any(item =>

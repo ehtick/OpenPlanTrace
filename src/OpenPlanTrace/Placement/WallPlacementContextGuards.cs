@@ -69,6 +69,16 @@ public static class WallPlacementContextGuards
     private const double MinTrustedCleanIsolatedRoomBoundaryFragmentConfidence = 0.80;
     private const int MaxTrustedCleanIsolatedRoomBoundaryFragmentCount = 8;
     private const int MaxTrustedCleanIsolatedRoomBoundaryDuplicatePrimitives = 3;
+    private const double MinTrustedRejectedObjectLikeBoundaryRecallLengthDrawingUnits = 48.0;
+    private const double MinTrustedRejectedObjectLikeBoundaryRecallConfidence = 0.72;
+    private const double MinTrustedRejectedObjectLikeBoundaryRecallPairScore = 0.74;
+    private const double MinTrustedRejectedObjectLikeBoundaryRecallOverlapRatio = 0.90;
+    private const double MinTrustedRejectedObjectLikeBoundaryRecallFaceSeparationDrawingUnits = 1.0;
+    private const double MaxTrustedRejectedObjectLikeBoundaryRecallFaceSeparationDrawingUnits = 24.0;
+    private const int MaxTrustedRejectedObjectLikeBoundaryRecallFaceFragments = 180;
+    private const int MaxTrustedRejectedObjectLikeBoundaryRecallFragmentCount = 48;
+    private const int MaxTrustedRejectedObjectLikeBoundaryRecallDuplicatePrimitives = 48;
+    private const double MaxTrustedRejectedObjectLikeBoundaryRecallGapRatio = 0.025;
 
     public const string SecondaryStructuralWithoutRoomBoundarySupportReason =
         "secondary structural wall component lacks room-boundary support";
@@ -108,6 +118,9 @@ public static class WallPlacementContextGuards
 
     public const string TrustedRejectedMediumBoundaryFragmentWallBodyEvidence =
         "rejected object-like fragment wall restored because clean fragment geometry and two-end boundary evidence agree";
+
+    public const string TrustedRejectedObjectLikeBoundaryRecallEvidence =
+        "rejected object-like wall restored because wall-type and placement-ready evidence outweigh compact component classification";
 
     public const string TrustedShortRecoveredRoomBoundaryEvidence =
         "short recovered wall has two-ended structural support and room evidence on both sides";
@@ -970,6 +983,139 @@ public static class WallPlacementContextGuards
             "opening detail",
             "opening-linked wall fragment",
             "stair");
+    }
+
+    public static bool IsTrustedRejectedObjectLikeBoundaryRecallWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component?.Kind != WallGraphComponentKind.ObjectLikeIsland
+            || !component.ExcludedFromStructuralTopology
+            || component.WallIds.Count > 3
+            || wall.DrawingLength < MinTrustedRejectedObjectLikeBoundaryRecallLengthDrawingUnits
+            || wall.Confidence.Value < MinTrustedRejectedObjectLikeBoundaryRecallConfidence
+            || assessment is null
+            || assessment.Category != WallEvidenceCategory.ObjectOrFixtureDetail
+            || (!assessment.RejectedAsNoise && assessment.Decision != WallEvidenceDecision.Reject)
+            || assessment.Confidence.Value < MinTrustedRejectedObjectLikeBoundaryRecallConfidence
+            || (!wall.CenterLine.IsHorizontal() && !wall.CenterLine.IsVertical()))
+        {
+            return false;
+        }
+
+        var evidence = extraEvidence is null
+            ? WallEvidenceFor(wall, assessment)
+            : WallEvidenceFor(wall, assessment).Concat(extraEvidence).ToArray();
+        var hasOriginalPlacementReadyWallBody =
+            EvidenceContains(evidence, "wall evidence assessment: StrongWallBody / placement-ready")
+            || EvidenceContains(evidence, "wall evidence assessment: MediumWallBody / placement-ready")
+            || EvidenceContains(evidence, "wall evidence assessment: RecoveredWallBody / placement-ready");
+        var hasInteriorBoundaryEvidence =
+            EvidenceContains(evidence, "wall type interior: supported wall evidence inside exterior envelope")
+            || EvidenceContains(evidence, "detected room evidence on both sides")
+            || EvidenceContains(evidence, "geometric room boundary support")
+            || EvidenceContains(evidence, "shared by room adjacency boundary")
+            || EvidenceContains(evidence, "explicit room boundary support");
+        var hasExteriorBoundaryEvidence =
+            EvidenceContains(evidence, "wall type exterior: near detected floorplan/wall envelope")
+            || EvidenceContains(evidence, "local outer boundary")
+            || EvidenceContains(evidence, "exterior shell")
+            || EvidenceContains(evidence, "global-room-envelope-edge")
+            || EvidenceContains(evidence, "global-envelope-fragment-chain");
+        if (!hasOriginalPlacementReadyWallBody
+            || (!hasInteriorBoundaryEvidence && !hasExteriorBoundaryEvidence))
+        {
+            return false;
+        }
+
+        var pairedBody = IsTrustedRejectedObjectLikeRecallPair(wall, evidence);
+        var singleOrFragmentBody = IsTrustedRejectedObjectLikeRecallSingleOrFragment(wall);
+        if (!pairedBody && !singleOrFragmentBody)
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "duplicate wall-face",
+            "already represented by stronger paired wall body",
+            "already represented by clean topology span",
+            "recovered duplicate wall body",
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "surface/detail pattern",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening detail",
+            "opening-linked wall fragment",
+            "stair",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted",
+            "demoted from placement-ready");
+    }
+
+    private static bool IsTrustedRejectedObjectLikeRecallPair(
+        WallSegment wall,
+        IReadOnlyList<string> evidence)
+    {
+        var pairScore = wall.PairEvidence?.Score
+            ?? evidence.Select(TryReadPairScore).Where(score => score.HasValue).Select(score => score!.Value).DefaultIfEmpty(0).Max();
+        var overlapRatio = wall.PairEvidence?.OverlapRatio
+            ?? evidence.Select(TryReadOverlapRatio).Where(ratio => ratio.HasValue).Select(ratio => ratio!.Value).DefaultIfEmpty(0).Max();
+        var faceSeparation = wall.PairEvidence?.FaceSeparation
+            ?? evidence.Select(TryReadFaceSeparation).Where(separation => separation.HasValue).Select(separation => separation!.Value).DefaultIfEmpty(0).Max();
+        var maxFaceFragments = wall.PairEvidence is null
+            ? evidence.SelectMany(EvidenceFragmentCounts).DefaultIfEmpty(0).Max()
+            : Math.Max(wall.PairEvidence.FirstFaceFragmentCount, wall.PairEvidence.SecondFaceFragmentCount);
+
+        return pairScore >= MinTrustedRejectedObjectLikeBoundaryRecallPairScore
+            && overlapRatio >= MinTrustedRejectedObjectLikeBoundaryRecallOverlapRatio
+            && faceSeparation >= MinTrustedRejectedObjectLikeBoundaryRecallFaceSeparationDrawingUnits
+            && faceSeparation <= MaxTrustedRejectedObjectLikeBoundaryRecallFaceSeparationDrawingUnits
+            && maxFaceFragments <= MaxTrustedRejectedObjectLikeBoundaryRecallFaceFragments;
+    }
+
+    private static bool IsTrustedRejectedObjectLikeRecallSingleOrFragment(WallSegment wall)
+    {
+        if (wall.DetectionKind is not (WallDetectionKind.SingleLine or WallDetectionKind.FragmentMerged))
+        {
+            return false;
+        }
+
+        if (wall.FragmentEvidence is not { } fragmentEvidence)
+        {
+            return wall.SourcePrimitiveIds.Count > 0;
+        }
+
+        var uniqueSourcePrimitiveCount = Math.Max(0, wall.SourcePrimitiveIds.Count - fragmentEvidence.DuplicatePrimitiveCount);
+        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, uniqueSourcePrimitiveCount);
+        return !fragmentEvidence.RequiresGeometryReview
+            && fragmentCount <= MaxTrustedRejectedObjectLikeBoundaryRecallFragmentCount
+            && fragmentEvidence.DuplicatePrimitiveCount <= MaxTrustedRejectedObjectLikeBoundaryRecallDuplicatePrimitives
+            && fragmentEvidence.GapRatio <= MaxTrustedRejectedObjectLikeBoundaryRecallGapRatio
+            && fragmentEvidence.TotalHealedGap <= Math.Max(3.5, wall.DrawingLength * 0.04)
+            && fragmentEvidence.MaxHealedGap <= Math.Max(3.5, wall.Thickness);
     }
 
     public static bool IsTrustedDenseTwoSidedRoomFragmentMergedInteriorWallBody(
