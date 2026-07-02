@@ -551,6 +551,7 @@ public sealed class SchemaContractTests
             .ToArray();
         Assert.Contains("wall-qa-focus", svgProfiles);
         Assert.Contains("wall-qa-review", svgProfiles);
+        Assert.Contains("wall-qa-recall", svgProfiles);
     }
 
     [Fact]

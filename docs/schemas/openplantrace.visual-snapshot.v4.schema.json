@@ -585,6 +585,7 @@
             "structural-review",
             "wall-qa",
             "wall-qa-review",
+            "wall-qa-recall",
             "wall-qa-focus"
           ]
         },

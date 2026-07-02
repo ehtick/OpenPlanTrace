@@ -8,6 +8,7 @@ public enum SvgOverlayRenderProfile
     PlacementGraphQa,
     WallQa,
     WallQaReview,
+    WallQaRecall,
     WallQaFocus
 }
 
@@ -179,6 +180,36 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true
             },
+            SvgOverlayRenderProfile.WallQaRecall => new SvgOverlayRenderOptions
+            {
+                Profile = SvgOverlayRenderProfile.WallQaRecall,
+                IncludeLegend = true,
+                IncludeDiagnostics = true,
+                IncludeRegions = false,
+                IncludeDimensions = false,
+                IncludeAnnotations = false,
+                IncludeGridAxes = false,
+                IncludeGridBaySpacings = false,
+                IncludeWalls = false,
+                IncludeWallComponents = false,
+                IncludeWallNodes = false,
+                IncludeRooms = false,
+                IncludeRoomClusters = false,
+                IncludeRoomAdjacency = false,
+                IncludeOpenings = false,
+                IncludeObjects = false,
+                IncludeObjectAggregates = false,
+                IncludeSurfacePatterns = false,
+                IncludeWallTopologySpans = false,
+                IncludeWallBodyFootprints = true,
+                IncludeReviewOnlyWallTopologySpans = true,
+                IncludeSuppressedDetailWallTopologySpans = true,
+                IncludeWallGraphRepairs = false,
+                IncludePlacementWallGraph = true,
+                IncludeRoutingLayer = false,
+                IncludeSourceContext = true,
+                RequirePlacementReadyStructuralWallTopologySpans = true
+            },
             SvgOverlayRenderProfile.WallQaFocus => new SvgOverlayRenderOptions
             {
                 Profile = SvgOverlayRenderProfile.WallQaFocus,
@@ -298,6 +329,16 @@ public sealed record SvgOverlayRenderOptions
             case "omittedwalls":
                 profile = SvgOverlayRenderProfile.WallQaReview;
                 return true;
+            case "wallqarecall":
+            case "wallaccuracyrecall":
+            case "wallrecall":
+            case "recallwalls":
+            case "allwallcandidates":
+            case "wallcandidates":
+            case "noisywalls":
+            case "suppressedwalls":
+                profile = SvgOverlayRenderProfile.WallQaRecall;
+                return true;
             case "wallqafocus":
             case "wallaccuracyfocus":
             case "wallaccuracyreviewfocus":
@@ -317,6 +358,7 @@ public sealed record SvgOverlayRenderOptions
         profile switch
         {
             SvgOverlayRenderProfile.WallQaFocus => "wall-qa-focus",
+            SvgOverlayRenderProfile.WallQaRecall => "wall-qa-recall",
             SvgOverlayRenderProfile.WallQaReview => "wall-qa-review",
             SvgOverlayRenderProfile.WallQa => "wall-qa",
             SvgOverlayRenderProfile.PlacementGraphQa => "placement-graph-qa",

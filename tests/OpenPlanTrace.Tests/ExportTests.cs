@@ -2680,6 +2680,40 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void SvgRenderer_WallQaRecallProfileDrawsSuppressedWallCandidatesWithSourceContext()
+    {
+        var result = WithEndpointToWallHostRepairCandidate(
+            WithReviewOnlyWallAssessment(
+                WithReviewOnlyWallAssessment(
+                    CreateDenseMinorRoutingDetailResult(),
+                    "detail-tooth-1",
+                    WallEvidenceCategory.SurfacePatternDetail),
+                "detail-tooth-2",
+                WallEvidenceCategory.MediumWallBody));
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaRecall));
+
+        Assert.Contains("data-profile=\"wall-qa-recall\"", svg);
+        Assert.Contains("Wall QA recall (all review/noise candidates)", svg);
+        Assert.Contains("Solid blue/green = compact import wall graph", svg);
+        Assert.Contains("Dashed amber/purple = review and suppressed candidates", svg);
+        Assert.DoesNotContain("suppressed detail spans hidden", svg);
+        Assert.Contains("Faint source linework context", svg);
+        Assert.Contains("id=\"source-context\"", svg);
+        Assert.Contains("id=\"wall-body-footprints\"", svg);
+        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
+        Assert.Contains("id=\"wall-topology-review-spans\"", svg);
+        Assert.Contains("non-placement wall topology span edge-tooth-1", svg);
+        Assert.Contains("non-placement wall topology span edge-tooth-2", svg);
+        Assert.DoesNotContain("id=\"wall-graph-repairs\"", svg);
+        Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
+        Assert.DoesNotContain("id=\"walls\"", svg);
+    }
+
+    [Fact]
     public void SvgRenderer_WallQaReviewProfileSuppressesOpeningLinkedOneEndpointFragments()
     {
         var result = WithOpeningLinkedOneEndpointFragment(CreateDenseMinorRoutingDetailResult());
@@ -2955,6 +2989,17 @@ public sealed class ExportTests
     }
 
     [Theory]
+    [InlineData("wall-qa-recall")]
+    [InlineData("wallrecall")]
+    [InlineData("allwallcandidates")]
+    public void SvgOverlayRenderOptions_ParsesWallQaRecallProfileAliases(string value)
+    {
+        Assert.True(SvgOverlayRenderOptions.TryParseProfile(value, out var profile));
+        Assert.Equal(SvgOverlayRenderProfile.WallQaRecall, profile);
+        Assert.Equal("wall-qa-recall", SvgOverlayRenderOptions.ProfileName(profile));
+    }
+
+    [Theory]
     [InlineData("wall-qa-focus")]
     [InlineData("focused-wall-qa")]
     [InlineData("wall-qa-zoom")]
@@ -3079,6 +3124,30 @@ public sealed class ExportTests
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "wallBodyFootprints").Count);
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "placementWallGraphEdges").Count);
         Assert.Equal(3, page.Layers.Single(layer => layer.Name == "wallTopologyReviewSpans").Count);
+        Assert.DoesNotContain("wallTopologySpans", page.VisibleLayerNames);
+        Assert.DoesNotContain("walls", page.VisibleLayerNames);
+    }
+
+    [Fact]
+    public void VisualSnapshotExporter_WallQaRecallProfileExposesSuppressedNonPlacementTopologySpans()
+    {
+        var result = WithReviewOnlyWallAssessment(
+            CreateDenseMinorRoutingDetailResult(),
+            "detail-tooth-1",
+            WallEvidenceCategory.SurfacePatternDetail);
+
+        var snapshot = PlanOverlaySnapshot.From(
+            result,
+            new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaRecall));
+
+        var page = Assert.Single(snapshot.Pages);
+        Assert.Equal("wall-qa-recall", page.SvgProfile);
+        Assert.Contains("placementWallGraphEdges", page.VisibleLayerNames);
+        Assert.Contains("wallTopologyReviewSpans", page.VisibleLayerNames);
+        Assert.Contains("sourceContext", page.VisibleLayerNames);
+        Assert.Contains("wallBodyFootprints", page.VisibleLayerNames);
+        Assert.True(page.Layers.Single(layer => layer.Name == "wallTopologyReviewSpans").Count >= 1);
         Assert.DoesNotContain("wallTopologySpans", page.VisibleLayerNames);
         Assert.DoesNotContain("walls", page.VisibleLayerNames);
     }
