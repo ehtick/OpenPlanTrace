@@ -10540,6 +10540,154 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementWallGraphExport_SnapsPlacementReadyWallBodyResidualEndpointOntoTrustedSourceBackedHost()
+    {
+        var nodes = new[]
+        {
+            SyntheticNode("wall-body-host-node-top", 200, 60, WallNodeKind.Endpoint),
+            SyntheticNode("wall-body-host-node-bottom", 200, 260, WallNodeKind.Endpoint),
+            SyntheticNode("strong-wall-body-node-left", 80, 120, WallNodeKind.Endpoint),
+            SyntheticNode("strong-wall-body-node-near-host", 197.15, 120, WallNodeKind.Endpoint),
+            SyntheticNode("promoted-shell-node-left", 80, 190, WallNodeKind.Endpoint),
+            SyntheticNode("promoted-shell-node-near-host", 197.15, 190, WallNodeKind.Endpoint)
+        };
+        var edges = new[]
+        {
+            new WallEdge(
+                "wall-body-host-edge",
+                1,
+                nodes[0].Id,
+                nodes[1].Id,
+                "wall-body-host-wall",
+                Confidence.High),
+            new WallEdge(
+                "strong-wall-body-edge",
+                1,
+                nodes[2].Id,
+                nodes[3].Id,
+                "strong-wall-body-wall",
+                Confidence.High),
+            new WallEdge(
+                "promoted-shell-edge",
+                1,
+                nodes[4].Id,
+                nodes[5].Id,
+                "promoted-shell-wall",
+                Confidence.High)
+        };
+        var spans = new[]
+        {
+            new WallGraphTopologySpan(
+                edges[0].Id,
+                1,
+                edges[0].WallId,
+                edges[0].FromNodeId,
+                edges[0].ToNodeId,
+                new PlanLineSegment(new PlanPoint(200, 60), new PlanPoint(200, 260)),
+                new PlanRect(190, 58, 20, 204),
+                200,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                19.8,
+                Confidence.High,
+                ["wall-body-host-wall"],
+                [edges[0].Id],
+                [
+                    "source-backed clean placement fallback: wall graph did not provide enough clean topology coverage",
+                    "source-backed fallback accepted because source-backed exterior shell closure is placement-ready",
+                    "source-backed fallback accepted because protected object-like exterior shell pair has strong paired-face support",
+                    "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors",
+                    "source-backed fallback pair score 0,806, overlap 1, face separation 19,843 drawing units",
+                    "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                    "wall evidence: protected from object-like graph reclassification because strong exterior paired wall body is supported by shell evidence"
+                ],
+                null),
+            new WallGraphTopologySpan(
+                edges[1].Id,
+                1,
+                edges[1].WallId,
+                edges[1].FromNodeId,
+                edges[1].ToNodeId,
+                new PlanLineSegment(new PlanPoint(80, 120), new PlanPoint(197.15, 120)),
+                new PlanRect(78, 118, 121.15, 4),
+                117.15,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                4.25,
+                Confidence.High,
+                ["strong-wall-body-wall"],
+                [edges[1].Id],
+                [
+                    "filled wall-solid primitive",
+                    "parallel wall-face pair",
+                    "wall evidence: filled closed vector wall body",
+                    "wall type interior: supported wall evidence inside exterior envelope",
+                    "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.92"
+                ],
+                null),
+            new WallGraphTopologySpan(
+                edges[2].Id,
+                1,
+                edges[2].WallId,
+                edges[2].FromNodeId,
+                edges[2].ToNodeId,
+                new PlanLineSegment(new PlanPoint(80, 190), new PlanPoint(197.15, 190)),
+                new PlanRect(77, 187, 123.15, 6),
+                117.15,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                5.7,
+                Confidence.High,
+                ["promoted-shell-wall"],
+                [edges[2].Id],
+                [
+                    "parallel wall-face pair",
+                    "wall evidence: filled closed vector wall body",
+                    "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                    "wall evidence assessment: MediumWallBody / review / confidence 0.90",
+                    "wall evidence: trusted long main exterior shell promoted to placement-ready after wall-body review"
+                ],
+                null)
+        };
+
+        var export = PlacementWallGraphExport.From(
+            new WallGraph(nodes, edges, Array.Empty<WallGraphComponent>()),
+            spans,
+            PlanCalibration.Empty,
+            new Dictionary<string, PrimitiveSourceExport>(StringComparer.Ordinal),
+            new Dictionary<string, WallGraphComponent>(StringComparer.Ordinal),
+            new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal));
+
+        var strongBody = Assert.Single(export.Edges, edge => edge.Id == "strong-wall-body-edge");
+        var promotedShell = Assert.Single(export.Edges, edge => edge.Id == "promoted-shell-edge");
+
+        Assert.Equal(200, strongBody.CenterLine!.End.X, precision: 3);
+        Assert.Equal(200, promotedShell.CenterLine!.End.X, precision: 3);
+        Assert.Empty(export.ResidualEndpointOnHostCandidates);
+        Assert.Contains(
+            export.Evidence,
+            item => item.Contains("residual endpoint-on-host-wall candidates after cleanup: 0 total", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void PlacementWallGraphExport_SnapsTrustedSourceBackedExteriorResidualFallbackCorner()
     {
         var nodes = new[]

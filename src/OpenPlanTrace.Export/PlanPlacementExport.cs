@@ -5035,6 +5035,12 @@ public sealed record PlacementWallGraphExport(
             return false;
         }
 
+        if (evidence.Contains("protected object-like exterior shell pair has strong paired-face support", StringComparison.OrdinalIgnoreCase)
+            || evidence.Contains("protected from object-like graph reclassification because strong exterior paired wall body", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         return evidence.Contains("object-like", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("object/fixture", StringComparison.OrdinalIgnoreCase)
             || evidence.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
@@ -7006,14 +7012,12 @@ public sealed record PlacementWallGraphExport(
             return true;
         }
 
-        if (!IsStructuralPlacementGraphComponentKind(endpointSpan.Edge.WallComponentKind))
+        if (!IsTrustedResidualEndpointSnapWallBody(endpointSpan.Edge))
         {
             return false;
         }
 
-        if (!IsStructuralPlacementGraphComponentKind(hostSpan.Edge.WallComponentKind)
-            && !IsTrustedSourceBackedPlacementGraphHost(hostSpan.Edge)
-            && !IsTrustedExteriorShellPlacementGraphMergeContinuation(hostSpan.Edge))
+        if (!IsTrustedResidualEndpointSnapHostWallBody(hostSpan.Edge))
         {
             return false;
         }
@@ -7021,6 +7025,27 @@ public sealed record PlacementWallGraphExport(
         return !endpointSpan.Edge.Evidence.Concat(hostSpan.Edge.Evidence)
             .Any(IsPlacementGraphDetailOrSurfaceEvidence);
     }
+
+    private static bool IsTrustedResidualEndpointSnapWallBody(PlacementWallGraphEdgeExport edge) =>
+        IsStructuralPlacementGraphComponentKind(edge.WallComponentKind)
+        || IsTrustedExteriorShellPlacementGraphMergeContinuation(edge)
+        || IsTrustedSourceBackedPlacementGraphHost(edge)
+        || IsPlacementReadyWallBodyEvidence(edge);
+
+    private static bool IsTrustedResidualEndpointSnapHostWallBody(PlacementWallGraphEdgeExport edge) =>
+        IsTrustedResidualEndpointSnapWallBody(edge);
+
+    private static bool IsPlacementReadyWallBodyEvidence(PlacementWallGraphEdgeExport edge) =>
+        edge.Evidence.Any(item =>
+            item.Contains("wall evidence assessment: StrongWallBody / placement-ready", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("wall evidence: trusted long main exterior shell promoted to placement-ready", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("clean promoted fragment wall-body evidence is placement-ready", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("shared indoor room-boundary inference is placement-ready", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("wall type interior", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("wall type exterior", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("room boundary", StringComparison.OrdinalIgnoreCase))
+        && !edge.Evidence.Any(IsPlacementGraphDetailOrSurfaceEvidence);
 
     private static bool CanUseTrustedSourceBackedExteriorResidualEndpointSnap(
         PlacementGraphMergeSpan endpointSpan,
