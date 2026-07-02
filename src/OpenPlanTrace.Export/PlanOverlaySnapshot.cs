@@ -45,7 +45,8 @@ public sealed record PlanOverlaySnapshot(
                 svgPathsByPage,
                 svgOptions,
                 placementPageSummaries.TryGetValue(page.Number, out var pageSummary) ? pageSummary : null,
-                placementExport.WallGraph))
+                placementExport.WallGraph,
+                placementExport.Walls))
             .ToArray();
 
         return new PlanOverlaySnapshot(
@@ -111,7 +112,8 @@ public sealed record PlanOverlayPageSnapshot(
         IReadOnlyDictionary<int, string>? svgPathsByPage = null,
         SvgOverlayRenderOptions? svgOptions = null,
         PlacementPageSummaryExport? placementPageSummary = null,
-        PlacementWallGraphExport? placementWallGraph = null)
+        PlacementWallGraphExport? placementWallGraph = null,
+        IReadOnlyList<PlacementWallExport>? placementWalls = null)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(page);
@@ -149,7 +151,8 @@ public sealed record PlanOverlayPageSnapshot(
             result,
             page.Number,
             placementPageSummary: placementPageSummary,
-            placementWallGraph: placementWallGraph);
+            placementWallGraph: placementWallGraph,
+            placementWalls: placementWalls);
         var issues = BuildIssues(result, page, pageBounds, layers, detectionBounds, coverage, pageReviewQueue, wallPlacement).ToArray();
 
         return new PlanOverlayPageSnapshot(
@@ -778,6 +781,9 @@ public sealed record PlanRectSnapshot(
                 PlanOverlaySnapshot.Round(rect.Center.X),
                 PlanOverlaySnapshot.Round(rect.Center.Y),
                 PlanOverlaySnapshot.Round(rect.Area));
+
+    public static PlanRectSnapshot From(RectExport rect) =>
+        From(new PlanRect(rect.X, rect.Y, rect.Width, rect.Height));
 
     public static PlanRectSnapshot FromNormalized(PlanRect rect, PlanRect pageBounds)
     {

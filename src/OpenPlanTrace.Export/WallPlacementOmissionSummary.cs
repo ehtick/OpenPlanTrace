@@ -147,7 +147,8 @@ internal static class WallPlacementOmissionSummary
         int maxTopOmissions = 5,
         int maxOmittedWallExamples = 12,
         PlacementPageSummaryExport? placementPageSummary = null,
-        PlacementWallGraphExport? placementWallGraph = null)
+        PlacementWallGraphExport? placementWallGraph = null,
+        IReadOnlyList<PlacementWallExport>? placementWalls = null)
     {
         var componentByWallId = BuildWallComponentLookup(result.WallGraph.Components);
         var wallEvidenceAssessments = WallEvidenceExportHelpers.BuildAssessmentLookup(result.WallEvidenceMap);
@@ -258,18 +259,26 @@ internal static class WallPlacementOmissionSummary
             omissionCounts,
             topOmissions,
             TopOmittedWallExamples(omittedWalls, maxOmittedWallExamples));
-        return placementPageSummary is null
-            ? summary
-            : summary with
-            {
-                PlacementReadyWallCount = placementPageSummary.PlacementReadyWallCount,
-                PlacementOmittedWallCount = placementPageSummary.PlacementOmittedWallCount,
-                RepresentedWallCount = placementPageSummary.RepresentedWallCount,
-                PlacementSuppressedWallCount = placementPageSummary.PlacementSuppressedWallCount,
-                PlacementReviewWallCount = placementPageSummary.PlacementReviewWallCount,
-                OmissionCounts = placementPageSummary.WallPlacementOmissionCounts,
-                TopOmissions = TopOmissions(placementPageSummary.WallPlacementOmissionCounts, maxTopOmissions)
-            };
+        if (placementPageSummary is null)
+        {
+            return summary;
+        }
+
+        return summary with
+        {
+            PlacementReadyWallCount = placementPageSummary.PlacementReadyWallCount,
+            PlacementOmittedWallCount = placementPageSummary.PlacementOmittedWallCount,
+            RepresentedWallCount = placementPageSummary.RepresentedWallCount,
+            PlacementSuppressedWallCount = placementPageSummary.PlacementSuppressedWallCount,
+            PlacementReviewWallCount = placementPageSummary.PlacementReviewWallCount,
+            OmissionCounts = placementPageSummary.WallPlacementOmissionCounts,
+            TopOmissions = TopOmissions(placementPageSummary.WallPlacementOmissionCounts, maxTopOmissions),
+            OmittedWallExamples = placementWalls is null
+                ? summary.OmittedWallExamples
+                : TopOmittedWallExamples(
+                    OmittedWallExamplesFromPlacementWalls(placementWalls, pageNumber),
+                    maxOmittedWallExamples)
+        };
     }
 
     private static PlanOverlayWallGraphResidualSummary ExtractResidualEndpointOnHostWallSummary(
@@ -340,6 +349,34 @@ internal static class WallPlacementOmissionSummary
             topologySpans.Count,
             wall.SourcePrimitiveIds.Count,
             omission.Evidence.Take(4).ToArray());
+
+    private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> OmittedWallExamplesFromPlacementWalls(
+        IReadOnlyList<PlacementWallExport> placementWalls,
+        int pageNumber) =>
+        placementWalls
+            .Where(wall => wall.PageNumber == pageNumber && wall.PlacementOmission is not null)
+            .Select(ToOmittedWallExample)
+            .ToArray();
+
+    private static PlanOverlayWallPlacementOmittedWallExample ToOmittedWallExample(PlacementWallExport wall)
+    {
+        var omission = wall.PlacementOmission!;
+        return new PlanOverlayWallPlacementOmittedWallExample(
+            wall.Id,
+            wall.PageNumber,
+            omission.Code,
+            OmissionLabel(omission.Code),
+            PriorityOmissionCodes.Contains(omission.Code, StringComparer.Ordinal),
+            wall.WallType,
+            wall.DetectionKind,
+            PlanOverlaySnapshot.Round(wall.Confidence),
+            PlanOverlaySnapshot.Round(wall.DrawingLength),
+            PlanRectSnapshot.From(wall.Bounds),
+            wall.CenterLine,
+            wall.TopologySpans.Count,
+            wall.SourcePrimitiveIds.Count,
+            omission.Evidence.Take(4).ToArray());
+    }
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions(
         IReadOnlyDictionary<string, int> omissionCounts,

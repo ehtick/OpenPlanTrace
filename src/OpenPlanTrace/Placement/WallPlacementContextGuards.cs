@@ -39,6 +39,14 @@ public static class WallPlacementContextGuards
     private const double MinTrustedLongOneEndpointFragmentMergedInteriorAssessmentConfidence = 0.82;
     private const int MaxTrustedLongOneEndpointFragmentMergedInteriorFragments = 12;
     private const int MaxTrustedLongOneEndpointFragmentMergedInteriorDuplicatePrimitives = 8;
+    private const double MinTrustedOpeningLinkedFragmentMergedInteriorLengthDrawingUnits = 48.0;
+    private const double MinTrustedOpeningLinkedFragmentMergedInteriorConfidence = 0.76;
+    private const double MinTrustedOpeningLinkedFragmentMergedInteriorAssessmentConfidence = 0.76;
+    private const int MaxTrustedOpeningLinkedCompactFragmentMergedInteriorFragments = 16;
+    private const int MaxTrustedOpeningLinkedDenseFragmentMergedInteriorFragments = 120;
+    private const int MaxTrustedOpeningLinkedFragmentMergedInteriorDuplicatePrimitives = 16;
+    private const double MaxTrustedOpeningLinkedFragmentMergedInteriorGapRatio = 0.02;
+    private const double MaxTrustedOpeningLinkedFragmentMergedInteriorTotalHealedGapRatio = 0.04;
     private const int MinTrustedDenseLongOneEndpointFragmentMergedInteriorFragments = 24;
     private const int MaxTrustedDenseLongOneEndpointFragmentMergedInteriorFragments = 180;
     private const int MaxTrustedDenseLongOneEndpointFragmentMergedInteriorDuplicatePrimitives = 8;
@@ -364,6 +372,103 @@ public static class WallPlacementContextGuards
             "alone is not trusted");
     }
 
+    public static bool IsTrustedOpeningLinkedFragmentMergedInteriorWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component is null
+            || component.Kind == WallGraphComponentKind.ObjectLikeIsland
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.PairEvidence is not null
+            || wall.DrawingLength < MinTrustedOpeningLinkedFragmentMergedInteriorLengthDrawingUnits
+            || wall.Confidence.Value < MinTrustedOpeningLinkedFragmentMergedInteriorConfidence
+            || wall.FragmentEvidence is not { RequiresGeometryReview: false } fragmentEvidence
+            || assessment is null
+            || assessment.Confidence.Value < MinTrustedOpeningLinkedFragmentMergedInteriorAssessmentConfidence
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category is not (WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.RecoveredWallBody))
+        {
+            return false;
+        }
+
+        var uniqueSourcePrimitiveCount = Math.Max(0, wall.SourcePrimitiveIds.Count - fragmentEvidence.DuplicatePrimitiveCount);
+        var fragmentCount = Math.Max(fragmentEvidence.FragmentCount, uniqueSourcePrimitiveCount);
+        var compactFragmentBody = fragmentCount is >= 2 and <= MaxTrustedOpeningLinkedCompactFragmentMergedInteriorFragments;
+        var denseFragmentBody = fragmentCount is > MaxTrustedOpeningLinkedCompactFragmentMergedInteriorFragments
+            and <= MaxTrustedOpeningLinkedDenseFragmentMergedInteriorFragments;
+        if ((!compactFragmentBody && !denseFragmentBody)
+            || fragmentEvidence.DuplicatePrimitiveCount > MaxTrustedOpeningLinkedFragmentMergedInteriorDuplicatePrimitives
+            || fragmentEvidence.GapRatio > MaxTrustedOpeningLinkedFragmentMergedInteriorGapRatio
+            || fragmentEvidence.TotalHealedGap > Math.Max(
+                1.0,
+                wall.DrawingLength * MaxTrustedOpeningLinkedFragmentMergedInteriorTotalHealedGapRatio))
+        {
+            return false;
+        }
+
+        var evidence = extraEvidence is null
+            ? WallEvidenceFor(wall, assessment).Concat(component.Evidence).ToArray()
+            : WallEvidenceFor(wall, assessment).Concat(component.Evidence).Concat(extraEvidence).ToArray();
+        if (!EvidenceContains(evidence, "opening-linked wall fragment")
+            || !EvidenceContains(evidence, "merged collinear wall fragments")
+            || !EvidenceContains(evidence, "supported wall evidence inside exterior envelope"))
+        {
+            return false;
+        }
+
+        var hasEndpointSupport = EvidenceContainsAny(
+            evidence,
+            "one endpoint supported by structural context",
+            "both endpoints supported by structural context",
+            "supported endpoint");
+        var hasRoomBoundarySupport = HasSemanticWallPlacementSupport(evidence);
+        if (!hasEndpointSupport && !hasRoomBoundarySupport)
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "surface pattern",
+            "surface/detail",
+            "object/fixture",
+            "fixture detail",
+            "stair",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "tiny door-adjacent placement topology piece",
+            "opening cutouts fully consume",
+            "already represented",
+            "recovered duplicate wall body",
+            "rejected as non-wall",
+            "non-wall",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
+    }
+
     public static bool IsTrustedObjectLikeLongCleanFragmentInteriorWallBody(
         WallSegment wall,
         WallGraphComponent? component,
@@ -517,7 +622,7 @@ public static class WallPlacementContextGuards
         if (component?.Kind != WallGraphComponentKind.ObjectLikeIsland
             || !component.ExcludedFromStructuralTopology
             || wall.DetectionKind != WallDetectionKind.ParallelLinePair
-            || wall.DrawingLength < 32.0
+            || wall.DrawingLength < 30.0
             || wall.Confidence.Value < 0.78
             || assessment is null
             || assessment.Category != WallEvidenceCategory.ObjectOrFixtureDetail
@@ -1295,10 +1400,14 @@ public static class WallPlacementContextGuards
         IReadOnlyDictionary<string, WallEvidenceWallAssessment> wallEvidenceByWallId) =>
         component?.Kind == WallGraphComponentKind.SecondaryStructural
         && wallEvidenceByWallId.TryGetValue(wall.Id, out var assessment)
-        && IsTrustedLongOneEndpointFragmentMergedInteriorWallBody(
-            wall,
-            component,
-            assessment);
+        && (IsTrustedLongOneEndpointFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                assessment)
+            || IsTrustedOpeningLinkedFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                assessment));
 
     private static IReadOnlyList<string> WallEvidenceFor(
         WallSegment wall,

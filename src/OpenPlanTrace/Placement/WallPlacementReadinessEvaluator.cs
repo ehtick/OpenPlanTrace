@@ -36,9 +36,9 @@ public static class WallPlacementReadinessEvaluator
     private const double MinTrustedMainStructuralExteriorPairOverlapRatio = 0.95;
     private const int MaxTrustedMainStructuralExteriorPairFaceFragments = 96;
     private const int MaxTrustedMainStructuralExteriorPairTotalFaceFragments = 180;
-    private const double MinTrustedMainStructuralExteriorRecallPairLengthDrawingUnits = 80.0;
-    private const double MinTrustedMainStructuralExteriorRecallPairScore = 0.52;
-    private const double MinTrustedMainStructuralExteriorRecallPairOverlapRatio = 0.75;
+    private const double MinTrustedMainStructuralExteriorRecallPairLengthDrawingUnits = 64.0;
+    private const double MinTrustedMainStructuralExteriorRecallPairScore = 0.48;
+    private const double MinTrustedMainStructuralExteriorRecallPairOverlapRatio = 0.68;
     private const double MinTrustedMainStructuralExteriorRecallPairFaceSeparationDrawingUnits = 6.0;
     private const int MaxTrustedMainStructuralExteriorRecallPairFaceFragments = 320;
     private const int MaxTrustedMainStructuralExteriorRecallPairTotalFaceFragments = 340;

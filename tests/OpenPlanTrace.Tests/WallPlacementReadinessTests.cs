@@ -2949,19 +2949,19 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
-    public void Evaluate_AllowsRecallSafeLongMainStructuralExteriorReviewPair()
+    public void Evaluate_AllowsRecallSafeMediumMainStructuralExteriorReviewPair()
     {
         var wall = Wall("wall:recall-safe-main-exterior-shell", Confidence.High) with
         {
-            CenterLine = new PlanLineSegment(new PlanPoint(250, 615), new PlanPoint(250, 700)),
+            CenterLine = new PlanLineSegment(new PlanPoint(250, 615), new PlanPoint(250, 681)),
             WallType = WallType.Exterior,
             DetectionKind = WallDetectionKind.ParallelLinePair,
             PairEvidence = new WallPairEvidence(
-                new PlanLineSegment(new PlanPoint(239.25, 615), new PlanPoint(239.25, 700)),
-                new PlanLineSegment(new PlanPoint(260.75, 615), new PlanPoint(260.75, 700)),
+                new PlanLineSegment(new PlanPoint(239.25, 615), new PlanPoint(239.25, 681)),
+                new PlanLineSegment(new PlanPoint(260.75, 615), new PlanPoint(260.75, 681)),
                 FaceSeparation: 21.5,
-                OverlapRatio: 0.785,
-                Score: 0.553,
+                OverlapRatio: 0.70,
+                Score: 0.49,
                 FirstFaceFragmentCount: 3,
                 SecondFaceFragmentCount: 299,
                 FirstFaceSourcePrimitiveIds: ["main-exterior-face-a"],
@@ -2975,8 +2975,8 @@ public sealed class WallPlacementReadinessTests
             [
                 "parallel wall-face pair",
                 "face separation 21.495 drawing units",
-                "pair score 0.553",
-                "overlap ratio 0.785",
+                "pair score 0.49",
+                "overlap ratio 0.70",
                 "second face merged 299 fragments",
                 "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
             ]

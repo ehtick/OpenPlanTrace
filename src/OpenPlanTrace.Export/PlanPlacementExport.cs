@@ -1580,6 +1580,12 @@ public sealed record PlacementWallOmissionExport(
                 wall,
                 component,
                 evidenceAssessment);
+        var trustedOpeningLinkedFragmentMergedInteriorWallBody =
+            WallPlacementContextGuards.IsTrustedOpeningLinkedFragmentMergedInteriorWallBody(
+                wall,
+                component,
+                evidenceAssessment,
+                evidence);
 
         if (repairCandidates.Any(candidate => candidate.ImportImpact == WallGraphRepairImportImpact.TopologyImportBlocked))
         {
@@ -1674,7 +1680,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedObjectLikeExteriorShellPair
             && !trustedRejectedStrongBoundaryWallBody
             && !trustedRejectedMediumBoundaryFragmentWallBody
-            && !trustedOpeningLinkedFilledInteriorWallBody)
+            && !trustedOpeningLinkedFilledInteriorWallBody
+            && !trustedOpeningLinkedFragmentMergedInteriorWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "structural_topology_excluded",
@@ -1693,6 +1700,7 @@ public sealed record PlacementWallOmissionExport(
         }
 
         if (!trustedOpeningLinkedFilledInteriorWallBody
+            && !trustedOpeningLinkedFragmentMergedInteriorWallBody
             && IsSuppressedOpeningLinkedIsolatedFragment(component, wall, topologySpans, evidence))
         {
             return new PlacementWallOmissionClassification(
@@ -1703,7 +1711,8 @@ public sealed record PlacementWallOmissionExport(
         }
 
         if (component?.Kind == WallGraphComponentKind.IsolatedFragment
-            && !trustedOpeningLinkedFilledInteriorWallBody)
+            && !trustedOpeningLinkedFilledInteriorWallBody
+            && !trustedOpeningLinkedFragmentMergedInteriorWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "isolated_fragment",
@@ -2574,6 +2583,10 @@ public sealed record PlacementWallExport(
                 component,
                 evidenceAssessment)
             && !WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
+                wall,
+                component,
+                evidenceAssessment)
+            && !WallPlacementContextGuards.IsTrustedOpeningLinkedFragmentMergedInteriorWallBody(
                 wall,
                 component,
                 evidenceAssessment)
@@ -4724,6 +4737,9 @@ public sealed record PlacementWallGraphExport(
             .Concat(ordered.Any(span => IsTrustedSourceBackedIsolatedPlacementContinuation(span.Edge))
                 ? new[] { "placement wall graph inline run absorbed source-backed isolated continuation into structural run" }
                 : Array.Empty<string>())
+            .Concat(ordered.Any(span => IsTrustedSourceBackedRecoveredBoundaryPlacementContinuation(span.Edge))
+                ? new[] { "placement wall graph inline run absorbed source-backed recovered boundary continuation into structural run" }
+                : Array.Empty<string>())
             .Concat(IsOpeningCutoutSplitPlacementGraphRun(ordered)
                 ? new[]
                 {
@@ -4952,7 +4968,8 @@ public sealed record PlacementWallGraphExport(
     {
         if (edge.CenterLine is null
             || (edge.ExcludedFromStructuralTopology
-                && !IsTrustedSourceBackedIsolatedPlacementContinuation(edge))
+                && !IsTrustedSourceBackedIsolatedPlacementContinuation(edge)
+                && !IsTrustedSourceBackedRecoveredBoundaryPlacementContinuation(edge))
             || edge.DrawingLength <= 0)
         {
             return null;
@@ -5032,7 +5049,8 @@ public sealed record PlacementWallGraphExport(
     private static bool IsStructuralPlacementGraphMergeContinuation(PlacementWallGraphEdgeExport edge) =>
         IsStructuralPlacementGraphComponentKind(edge.WallComponentKind)
         || IsTrustedExteriorShellPlacementGraphMergeContinuation(edge)
-        || IsTrustedSourceBackedIsolatedPlacementContinuation(edge);
+        || IsTrustedSourceBackedIsolatedPlacementContinuation(edge)
+        || IsTrustedSourceBackedRecoveredBoundaryPlacementContinuation(edge);
 
     private static bool IsTrustedSourceBackedIsolatedPlacementContinuation(PlacementWallGraphEdgeExport edge)
     {
@@ -5069,8 +5087,43 @@ public sealed record PlacementWallGraphExport(
             || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static bool IsTrustedSourceBackedRecoveredBoundaryPlacementContinuation(PlacementWallGraphEdgeExport edge)
+    {
+        var componentKindAllowsFallbackMerge =
+            string.IsNullOrWhiteSpace(edge.WallComponentKind)
+            || string.Equals(edge.WallComponentKind, nameof(WallGraphComponentKind.ObjectLikeIsland), StringComparison.Ordinal)
+            || string.Equals(edge.WallComponentKind, nameof(WallGraphComponentKind.IsolatedFragment), StringComparison.Ordinal);
+        if (!componentKindAllowsFallbackMerge
+            || !edge.Evidence.Any(item => item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (!edge.Evidence.Any(IsTrustedRecoveredBoundaryPlacementEvidence))
+        {
+            return false;
+        }
+
+        return !edge.Evidence.Any(item =>
+            item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("review as detail/object", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsTrustedRecoveredBoundaryPlacementEvidence(string evidence) =>
+        evidence.Contains("rejected object-like paired wall has strong boundary evidence", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("rejected object-like fragment wall has medium boundary evidence", StringComparison.OrdinalIgnoreCase);
+
     private static bool HasPlacementGraphDetailOrSurfaceEvidence(PlacementWallGraphEdgeExport edge) =>
-        edge.Evidence.Any(IsPlacementGraphDetailOrSurfaceEvidence);
+        !IsTrustedSourceBackedRecoveredBoundaryPlacementContinuation(edge)
+        && edge.Evidence.Any(IsPlacementGraphDetailOrSurfaceEvidence);
 
     private static bool IsPlacementGraphDetailOrSurfaceEvidence(string evidence)
     {
@@ -5086,7 +5139,8 @@ public sealed record PlacementWallGraphExport(
         }
 
         if (evidence.Contains("protected object-like exterior shell pair has strong paired-face support", StringComparison.OrdinalIgnoreCase)
-            || evidence.Contains("protected from object-like graph reclassification because strong exterior paired wall body", StringComparison.OrdinalIgnoreCase))
+            || evidence.Contains("protected from object-like graph reclassification because strong exterior paired wall body", StringComparison.OrdinalIgnoreCase)
+            || IsTrustedRecoveredBoundaryPlacementEvidence(evidence))
         {
             return false;
         }
@@ -8061,6 +8115,16 @@ public sealed record PlacementWallGraphEdgeExport(
                 && WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
                     edgeExteriorShellSourceWall,
                     component,
+                    evidenceAssessment))
+            && !(topologySpan?.SourceWall is { } edgeRejectedStrongBoundaryWall
+                && WallPlacementContextGuards.IsTrustedRejectedStrongBoundaryWallBody(
+                    edgeRejectedStrongBoundaryWall,
+                    component,
+                    evidenceAssessment))
+            && !(topologySpan?.SourceWall is { } edgeRejectedMediumBoundaryWall
+                && WallPlacementContextGuards.IsTrustedRejectedMediumBoundaryFragmentWallBody(
+                    edgeRejectedMediumBoundaryWall,
+                    component,
                     evidenceAssessment));
         return new PlacementWallGraphEdgeExport(
             topologySpan?.Id ?? edge.Id,
@@ -8123,6 +8187,16 @@ public sealed record PlacementWallGraphEdgeExport(
             && !(topologySpan.SourceWall is { } spanExteriorShellSourceWall
                 && WallPlacementContextGuards.IsTrustedObjectLikeExteriorShellPairWallBody(
                     spanExteriorShellSourceWall,
+                    component,
+                    evidenceAssessment))
+            && !(topologySpan.SourceWall is { } spanRejectedStrongBoundaryWall
+                && WallPlacementContextGuards.IsTrustedRejectedStrongBoundaryWallBody(
+                    spanRejectedStrongBoundaryWall,
+                    component,
+                    evidenceAssessment))
+            && !(topologySpan.SourceWall is { } spanRejectedMediumBoundaryWall
+                && WallPlacementContextGuards.IsTrustedRejectedMediumBoundaryFragmentWallBody(
+                    spanRejectedMediumBoundaryWall,
                     component,
                     evidenceAssessment));
         return new PlacementWallGraphEdgeExport(
