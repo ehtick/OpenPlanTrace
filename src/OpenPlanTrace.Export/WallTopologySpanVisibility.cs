@@ -1530,11 +1530,14 @@ internal static class WallTopologySpanVisibility
             return false;
         }
 
-        return ContainsEvidence(
-            wall.Evidence
-                .Concat(assessment.Evidence)
-                .Concat(assessment.ScoreBreakdown.PositiveEvidence),
-            "source-backed exterior shell closure");
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+
+        return ContainsEvidence(evidence, "source-backed exterior shell closure")
+            && !ContainsEvidence(evidence, "source-backed shell closure clipped around outdoor rooms");
     }
 
     private static bool IsTrustedExteriorSourceBackedFallbackForUnsafeCleanProjection(

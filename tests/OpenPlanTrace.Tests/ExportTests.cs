@@ -5968,6 +5968,35 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_DoesNotRecoverOutdoorClippedSourceBackedExteriorShellClosure()
+    {
+        var result = CreateSourceBackedExteriorShellClosureFallbackResult(
+            [
+                "wall evidence: source-backed shell closure clipped around outdoor rooms page:1:room:covered-entry"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "page:1:wall-exterior-shell-source-backed:001");
+
+        Assert.Empty(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.NotEqual(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.False(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Empty(document.RootElement.GetProperty("wallGraph").GetProperty("edges").EnumerateArray());
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(0, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_DoesNotRecoverShortExteriorWallSolidWhenSurfaceDetailEvidenceExists()
     {
         var result = CreateSourceBackedFallbackWallResult(
@@ -16973,6 +17002,75 @@ public sealed class ExportTests
         return result with
         {
             Walls = [inferredWall],
+            WallGraph = WallGraph.Empty,
+            WallEvidenceMap = new WallEvidenceMap(
+                Array.Empty<WallEvidenceSegment>(),
+                Array.Empty<WallEvidenceBand>(),
+                [assessment],
+                SourceCandidateWallCount: 1,
+                RecoveredCandidateWallCount: 1)
+        };
+    }
+
+    private static PlanScanResult CreateSourceBackedExteriorShellClosureFallbackResult(
+        IReadOnlyList<string>? extraEvidence = null)
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            wallLength: 120,
+            wallType: WallType.Exterior,
+            category: WallEvidenceCategory.RecoveredWallBody);
+        var evidence = new[]
+            {
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors",
+                "source-backed exterior shell closure source-line support from 8 primitive(s)",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary"
+            }
+            .Concat(extraEvidence ?? Array.Empty<string>())
+            .ToArray();
+        var sourcePrimitiveIds = Enumerable.Range(1, 8)
+            .Select(index => $"source-backed-shell-source-{index:000}")
+            .ToArray();
+        var sourceWall = result.Walls.Single(item => item.Id == "source-backed-fallback-wall");
+        var closureWall = sourceWall with
+        {
+            Id = "page:1:wall-exterior-shell-source-backed:001",
+            DetectionKind = WallDetectionKind.SingleLine,
+            PairEvidence = null,
+            WallType = WallType.Exterior,
+            Confidence = new Confidence(0.68),
+            SourcePrimitiveIds = sourcePrimitiveIds,
+            Evidence = evidence
+        };
+        var assessment = new WallEvidenceWallAssessment(
+            closureWall.Id,
+            closureWall.PageNumber,
+            closureWall.Bounds,
+            WallEvidenceCategory.RecoveredWallBody,
+            new Confidence(0.68),
+            PlacementReady: true,
+            RequiresReview: false,
+            RejectedAsNoise: false,
+            sourcePrimitiveIds,
+            evidence)
+        {
+            Decision = WallEvidenceDecision.Accept,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.68,
+                NegativeScore: 0,
+                DecisionScore: 0.68,
+                PairSupportScore: 0,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.42,
+                RecoverySupportScore: 0.26,
+                NoisePenalty: 0,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence: evidence,
+                NegativeEvidence: Array.Empty<string>())
+        };
+
+        return result with
+        {
+            Walls = [closureWall],
             WallGraph = WallGraph.Empty,
             WallEvidenceMap = new WallEvidenceMap(
                 Array.Empty<WallEvidenceSegment>(),
