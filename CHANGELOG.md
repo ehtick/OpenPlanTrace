@@ -8,6 +8,14 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.08.021] - 2026-07-02
+
+- Improved weak endpoint-gap repair filtering.
+- Improved trusted paired-wall endpoint snapping.
+- Improved opening-aware wall repair suppression.
+- Small improvement to pipeline refinement metadata.
+- Small improvement to wall graph gap tests.
+
 ## [0.08.020] - 2026-07-02
 
 - Improved trusted paired-wall endpoint trimming.

@@ -128,6 +128,14 @@ public static class PipelineStageMetadataCatalog
             Capabilities("door-gap-detection", "swing-arc-evidence", "opening-placement"),
             OptionalReads(PlanArtifactKind.Annotations, PlanArtifactKind.SheetRegions)),
         Create(
+            "wall-graph-opening-repair-suppression",
+            "Wall graph opening repair suppression",
+            PipelineStageKind.Topology,
+            Reads(PlanArtifactKind.WallGraph),
+            Writes(PlanArtifactKind.WallGraph, PlanArtifactKind.Diagnostics),
+            Capabilities("opening-aware-repair-filtering", "wall-graph-diagnostic-pruning"),
+            OptionalReads(PlanArtifactKind.Openings)),
+        Create(
             "rooms",
             "Room detection",
             PipelineStageKind.Topology,

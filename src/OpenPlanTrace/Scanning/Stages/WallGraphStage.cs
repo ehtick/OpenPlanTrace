@@ -292,9 +292,12 @@ internal sealed class WallGraphStage : IPipelineStage
             graphEdges,
             components,
             graphWalls,
+            context.Openings,
             automaticCoordinateRepairWallIds,
             context.Options,
-            out var suppressedReviewEndpointGapCount).ToArray();
+            out var suppressedReviewEndpointGapCount,
+            out var suppressedWeakEndpointFragmentGapCount,
+            out var suppressedOpeningEndpointGapCount).ToArray();
         var endpointOverrunRepairCandidates = DetectEndpointOverrunRepairCandidates(
             endpointOverrunReviews,
             graphNodes,
@@ -315,6 +318,8 @@ internal sealed class WallGraphStage : IPipelineStage
         AddComponentDiagnostics(context, components);
         AddSurfacePatternWallOverlapDiagnostics(context, components);
         AddEndpointGapDiagnostics(context, endpointGapRepairCandidates);
+        AddWeakEndpointGapSuppressionDiagnostics(context, suppressedWeakEndpointFragmentGapCount);
+        AddOpeningEndpointGapSuppressionDiagnostics(context, suppressedOpeningEndpointGapCount);
         AddEndpointOverrunDiagnostics(context, endpointOverrunRepairCandidates);
         AddGraphInputRejectionDiagnostics(context, graphInput.RejectedWalls);
         AddCoordinateRepairTrustGateDiagnostics(context, graphInput, graphWalls, coordinateRepairSkippedWallIds);
@@ -3803,11 +3808,16 @@ internal sealed class WallGraphStage : IPipelineStage
         IReadOnlyList<WallEdge> edges,
         IReadOnlyList<WallGraphComponent> components,
         IReadOnlyList<WallSegment> walls,
+        IReadOnlyList<OpeningCandidate> openings,
         IReadOnlySet<string> repairCandidateWallIds,
         ScannerOptions options,
-        out int suppressedReviewEndpointGapCount)
+        out int suppressedReviewEndpointGapCount,
+        out int suppressedWeakEndpointFragmentGapCount,
+        out int suppressedOpeningEndpointGapCount)
     {
         suppressedReviewEndpointGapCount = 0;
+        suppressedWeakEndpointFragmentGapCount = 0;
+        suppressedOpeningEndpointGapCount = 0;
         if (options.MaxWallGraphEndpointGapReviewItems <= 0)
         {
             return Array.Empty<WallGraphRepairCandidate>();
@@ -3823,6 +3833,9 @@ internal sealed class WallGraphStage : IPipelineStage
 
         var wallsById = walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
         var componentByWallId = BuildComponentByWallId(components);
+        var openingsByPage = openings
+            .GroupBy(opening => opening.PageNumber)
+            .ToDictionary(group => group.Key, group => group.ToArray() as IReadOnlyList<OpeningCandidate>);
         var incidentEdgesByNode = nodes.ToDictionary(
             node => node.Id,
             _ => new List<WallEdge>(),
@@ -3889,6 +3902,28 @@ internal sealed class WallGraphStage : IPipelineStage
                 }
 
                 var involvedWallIds = nodeWallIds.Concat(new[] { wall.Id }).ToArray();
+                if (ShouldSuppressOpeningAdjacentEndpointGapReview(
+                        node.PageNumber,
+                        node.Position,
+                        projected,
+                        involvedWallIds,
+                        openingsByPage,
+                        options))
+                {
+                    suppressedOpeningEndpointGapCount++;
+                    continue;
+                }
+
+                if (ShouldSuppressWeakDetailEndpointGapReview(
+                        nodeWallIds.Append(wall.Id),
+                        wallsById,
+                        componentByWallId,
+                        options))
+                {
+                    suppressedWeakEndpointFragmentGapCount++;
+                    continue;
+                }
+
                 if (!CanCreateEndpointGapRepairCandidate(involvedWallIds, repairCandidateWallIds))
                 {
                     suppressedReviewEndpointGapCount++;
@@ -3930,6 +3965,28 @@ internal sealed class WallGraphStage : IPipelineStage
                 }
 
                 var involvedWallIds = nodeWallIds.Concat(otherWallIds).ToArray();
+                if (ShouldSuppressOpeningAdjacentEndpointGapReview(
+                        node.PageNumber,
+                        node.Position,
+                        other.Position,
+                        involvedWallIds,
+                        openingsByPage,
+                        options))
+                {
+                    suppressedOpeningEndpointGapCount++;
+                    continue;
+                }
+
+                if (ShouldSuppressWeakDetailEndpointGapReview(
+                        involvedWallIds,
+                        wallsById,
+                        componentByWallId,
+                        options))
+                {
+                    suppressedWeakEndpointFragmentGapCount++;
+                    continue;
+                }
+
                 if (!CanCreateEndpointGapRepairCandidate(involvedWallIds, repairCandidateWallIds))
                 {
                     suppressedReviewEndpointGapCount++;
@@ -4095,6 +4152,154 @@ internal sealed class WallGraphStage : IPipelineStage
 
         return components.Any(component =>
             component.Kind is WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural);
+    }
+
+    private static bool ShouldSuppressOpeningAdjacentEndpointGapReview(
+        int pageNumber,
+        PlanPoint first,
+        PlanPoint second,
+        IEnumerable<string> wallIds,
+        IReadOnlyDictionary<int, IReadOnlyList<OpeningCandidate>> openingsByPage,
+        ScannerOptions options)
+    {
+        if (!openingsByPage.TryGetValue(pageNumber, out var pageOpenings) || pageOpenings.Count == 0)
+        {
+            return false;
+        }
+
+        var involvedWallIds = wallIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        if (involvedWallIds.Count == 0)
+        {
+            return false;
+        }
+
+        var openingTolerance = Math.Max(options.WallSnapTolerance * 3.0, options.DefaultWallThickness * 2.0);
+        var gapBounds = PlanRect
+            .FromPoints(first, second)
+            .Inflate(Math.Max(options.DefaultWallThickness * 4.0, options.WallSnapTolerance * 6.0));
+        return pageOpenings.Any(opening =>
+            opening.Type is OpeningType.Door or OpeningType.Window or OpeningType.GenericOpening
+            && opening.Confidence.Value >= 0.55
+            && gapBounds.Intersects(opening.Bounds, openingTolerance)
+            && OpeningReferencesAnyWall(opening, involvedWallIds));
+    }
+
+    private static bool OpeningReferencesAnyWall(
+        OpeningCandidate opening,
+        IReadOnlySet<string> wallIds) =>
+        (!string.IsNullOrWhiteSpace(opening.WallId) && wallIds.Contains(opening.WallId))
+        || opening.HostWallIds.Any(wallIds.Contains)
+        || opening.AdjacentWallIds.Any(wallIds.Contains)
+        || opening.Evidence.Any(item =>
+            wallIds.Any(wallId => item.Contains(wallId, StringComparison.OrdinalIgnoreCase)));
+
+    private static bool ShouldSuppressWeakDetailEndpointGapReview(
+        IEnumerable<string> wallIds,
+        IReadOnlyDictionary<string, WallSegment> wallsById,
+        IReadOnlyDictionary<string, WallGraphComponent> componentByWallId,
+        ScannerOptions options)
+    {
+        var involvedWalls = wallIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Select(id => wallsById.TryGetValue(id, out var wall) ? wall : null)
+            .Where(wall => wall is not null)
+            .Cast<WallSegment>()
+            .ToArray();
+        if (involvedWalls.Length < 2
+            || !involvedWalls.Any(wall => IsTrustedEndpointGapAnchor(wall, componentByWallId)))
+        {
+            return false;
+        }
+
+        return involvedWalls.Any(wall => IsWeakDetailEndpointGapWall(wall, componentByWallId, options))
+            && !involvedWalls.All(wall => IsTrustedEndpointGapAnchor(wall, componentByWallId));
+    }
+
+    private static bool IsTrustedEndpointGapAnchor(
+        WallSegment wall,
+        IReadOnlyDictionary<string, WallGraphComponent> componentByWallId)
+    {
+        if (!componentByWallId.TryGetValue(wall.Id, out var component)
+            || component.ExcludedFromStructuralTopology
+            || component.Kind is not (WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural))
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence;
+        if (evidence.Any(IsHardRiskReviewWallEvidence)
+            || evidence.Any(item =>
+                item.Contains("demoted from placement-ready", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("review-only short isolated graph fragment", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("rejected", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var pairScore = wall.PairEvidence?.Score
+            ?? (TryReadPairScore(evidence, out var parsedPairScore) ? parsedPairScore : 0);
+        return wall.Confidence.Value >= 0.88
+            || pairScore >= 0.88
+            || evidence.Any(item =>
+                item.Contains("filled closed vector wall body", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("room-confirmed wall body", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("geometric room-boundary paired wall promoted", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("explicit room boundary support", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase))
+            || (pairScore >= 0.82
+                && evidence.Any(item =>
+                item.Contains("StrongWallBody / placement-ready", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("strong double-edge wall body", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool IsWeakDetailEndpointGapWall(
+        WallSegment wall,
+        IReadOnlyDictionary<string, WallGraphComponent> componentByWallId,
+        ScannerOptions options)
+    {
+        var evidence = wall.Evidence;
+        if (evidence.Any(item =>
+            item.Contains("demoted from placement-ready", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("review-only short isolated graph fragment", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("short isolated graph fragment requires review", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("dense local detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("tiny door-adjacent", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("opening-linked wall fragment", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("fragment geometry requires review", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("already represented by clean topology span", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("duplicate wall-face", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        var hasDimensionLikeEvidence = evidence.Any(item =>
+            item.Contains("classified Dimension", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("dimension-like", StringComparison.OrdinalIgnoreCase));
+        var pairScore = wall.PairEvidence?.Score
+            ?? (TryReadPairScore(evidence, out var parsedPairScore) ? parsedPairScore : 0);
+        var shortWeakLength = Math.Max(options.MinWallLength * 2.0, options.DefaultWallThickness * 12.0);
+        if (hasDimensionLikeEvidence
+            && wall.DrawingLength <= shortWeakLength)
+        {
+            return true;
+        }
+
+        if (hasDimensionLikeEvidence
+            && wall.Confidence.Value < 0.80
+            && pairScore < 0.82)
+        {
+            return true;
+        }
+
+        return wall.DetectionKind == WallDetectionKind.SingleLine
+            && wall.DrawingLength <= shortWeakLength
+            && (wall.Confidence.Value < 0.70
+                || componentByWallId.TryGetValue(wall.Id, out var component)
+                && component.Kind == WallGraphComponentKind.IsolatedFragment);
     }
 
     private static bool ContainsObjectLikeWall(
@@ -4425,8 +4630,54 @@ internal sealed class WallGraphStage : IPipelineStage
                     ["targetX"] = gap.TargetPoint.X.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                     ["targetY"] = gap.TargetPoint.Y.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture),
                     ["wallIds"] = string.Join(",", gap.WallIds)
-                });
+            });
         }
+    }
+
+    private static void AddWeakEndpointGapSuppressionDiagnostics(
+        ScanContext context,
+        int suppressedWeakEndpointFragmentGapCount)
+    {
+        if (suppressedWeakEndpointFragmentGapCount <= 0)
+        {
+            return;
+        }
+
+        context.AddDiagnostic(
+            "wall_graph.endpoint_gap.weak_fragment_suppressed",
+            DiagnosticSeverity.Info,
+            "wall-graph",
+            "Endpoint gap review candidates from weak short/detail fragments into trusted host walls were suppressed.",
+            confidence: Confidence.Medium,
+            scope: DiagnosticScope.Detection,
+            properties: new Dictionary<string, string>
+            {
+                ["suppressedEndpointGapCandidateCount"] =
+                    suppressedWeakEndpointFragmentGapCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            });
+    }
+
+    private static void AddOpeningEndpointGapSuppressionDiagnostics(
+        ScanContext context,
+        int suppressedOpeningEndpointGapCount)
+    {
+        if (suppressedOpeningEndpointGapCount <= 0)
+        {
+            return;
+        }
+
+        context.AddDiagnostic(
+            "wall_graph.endpoint_gap.opening_suppressed",
+            DiagnosticSeverity.Info,
+            "wall-graph",
+            "Endpoint gap repair candidates crossing known door/window opening evidence were suppressed.",
+            confidence: Confidence.Medium,
+            scope: DiagnosticScope.Detection,
+            properties: new Dictionary<string, string>
+            {
+                ["suppressedEndpointGapCandidateCount"] =
+                    suppressedOpeningEndpointGapCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            });
     }
 
     private static void AddEndpointOverrunDiagnostics(
@@ -4760,6 +5011,12 @@ internal sealed class WallGraphStage : IPipelineStage
         ScannerOptions options)
     {
         var baseTolerance = TrustedEndpointSnapTolerance(options);
+        if (IsExtendedTrustedEndpointSnapWall(endpointWall, context)
+            && IsExtendedTrustedEndpointSnapWall(hostWall, context))
+        {
+            return Math.Max(baseTolerance, UnresolvedEndpointGapReviewTolerance(options));
+        }
+
         if (!IsHighTrustPairedEndpointSnapWall(endpointWall, context, options)
             || !IsTrustedEndpointSnapHostWall(hostWall))
         {
@@ -4838,6 +5095,67 @@ internal sealed class WallGraphStage : IPipelineStage
             && assessment.Confidence.Value >= 0.82
             && IsTrustedOneEndpointMainStructuralMediumWallAssessment(assessment, wall, supportedEndpointCount: 1);
     }
+
+    private static bool IsExtendedTrustedEndpointSnapWall(WallSegment wall, ScanContext context)
+    {
+        if (wall.Confidence.Value < 0.86
+            || wall.FragmentEvidence?.RequiresGeometryReview == true
+            || HasOpeningKeywordEvidence(wall)
+            || wall.Evidence.Any(IsHardRiskReviewWallEvidence)
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is not { } pair)
+        {
+            return false;
+        }
+
+        if (pair.OverlapRatio < 0.95
+            || pair.FaceSeparation < 2.0
+            || pair.FaceSeparation > 18.0
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > 80)
+        {
+            return false;
+        }
+
+        var assessment = context.WallEvidenceMap.WallAssessments
+            .FirstOrDefault(item => string.Equals(item.WallId, wall.Id, StringComparison.Ordinal));
+        if (assessment is null
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Confidence.Value < 0.86
+            || assessment.Category is not (WallEvidenceCategory.StrongWallBody or WallEvidenceCategory.MediumWallBody))
+        {
+            return false;
+        }
+
+        var evidence = assessment.Evidence
+            .Concat(wall.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        var hasRoomBoundaryPromotionOverride = assessment.Decision == WallEvidenceDecision.Accept
+            && assessment.PlacementReady
+            && HasRoomBoundaryPromotionEvidence(evidence);
+        if (evidence.Any(IsHardRiskReviewWallEvidence)
+            || evidence.Any(IsMainStructuralPromotionBlockedEvidence) && !hasRoomBoundaryPromotionOverride)
+        {
+            return false;
+        }
+
+        return assessment.PlacementReady
+            || (assessment.RequiresReview
+                && evidence.Any(item =>
+                item.Contains("supported wall evidence inside exterior envelope", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("geometric room boundary", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("room boundary", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("StrongWallBody", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool HasRoomBoundaryPromotionEvidence(IEnumerable<string> evidence) =>
+        evidence.Any(item =>
+            item.Contains("room-confirmed wall body promoted", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("geometric room-boundary paired wall promoted", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("explicit room boundary support", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<PairedEndpointSnap> DetectPairedEndpointToWallSnaps(
         IReadOnlyList<WallSegment> walls,
@@ -5326,7 +5644,7 @@ internal sealed class WallGraphStage : IPipelineStage
                 pageWalls,
                 pairedEndpointSnapPointsByWallId,
                 snapTolerance,
-                PairedEndpointSnapTolerance(options),
+                Math.Max(PairedEndpointSnapTolerance(options), EndpointOverrunTrimTolerance(options)),
                 sharedTolerance))
         {
             normalized.RemoveAt(1);
@@ -5354,7 +5672,7 @@ internal sealed class WallGraphStage : IPipelineStage
                 pageWalls,
                 pairedEndpointSnapPointsByWallId,
                 snapTolerance,
-                PairedEndpointSnapTolerance(options),
+                Math.Max(PairedEndpointSnapTolerance(options), EndpointOverrunTrimTolerance(options)),
                 sharedTolerance))
         {
             normalized.RemoveAt(normalized.Count - 2);
@@ -5483,7 +5801,7 @@ internal sealed class WallGraphStage : IPipelineStage
         IReadOnlyList<WallSegment> pageWalls,
         IReadOnlyDictionary<string, IReadOnlyList<PlanPoint>> pairedEndpointSnapPointsByWallId,
         double snapTolerance,
-        double pairedEndpointSnapTolerance,
+        double approvedEndpointSnapTolerance,
         double sharedTolerance)
     {
         var gap = inferredJunctionPoint.DistanceTo(originalEndpoint);
@@ -5498,7 +5816,7 @@ internal sealed class WallGraphStage : IPipelineStage
             pairedEndpointSnapPointsByWallId,
             sharedTolerance);
         if (gap > snapTolerance
-            && (!hasPairedEndpointSnapSupport || gap > pairedEndpointSnapTolerance))
+            && (!hasPairedEndpointSnapSupport || gap > approvedEndpointSnapTolerance))
         {
             return false;
         }

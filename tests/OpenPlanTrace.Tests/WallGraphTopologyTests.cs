@@ -884,6 +884,110 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_SuppressesWeakDetailEndpointGapAgainstTrustedHostWall()
+    {
+        var top = DetectedWall("wall-room-top", new PlanPoint(100, 100), new PlanPoint(320, 100));
+        var right = DetectedWall("wall-room-right", new PlanPoint(320, 100), new PlanPoint(320, 260));
+        var bottom = DetectedWall("wall-room-bottom", new PlanPoint(320, 260), new PlanPoint(100, 260));
+        var left = DetectedWall("wall-room-left", new PlanPoint(100, 260), new PlanPoint(100, 100));
+        var weakDetail = DetectedWall("wall-weak-detail-endpoint", new PlanPoint(200, 114), new PlanPoint(200, 220)) with
+        {
+            Confidence = new Confidence(0.64),
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall evidence: demoted from placement-ready because short unlayered wall candidate sits inside dense local detail/stair-like linework"
+            ]
+        };
+        var context = new ScanContext(
+            Document("wall-weak-detail-endpoint-gap-suppression"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { top, right, bottom, left, weakDetail });
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { bottom.Id, left.Id, right.Id, top.Id, weakDetail.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { bottom.Id, left.Id, right.Id, top.Id, weakDetail.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Empty(context.WallGraph.RepairCandidates);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.review");
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.weak_fragment_suppressed"
+                && diagnostic.Properties["suppressedEndpointGapCandidateCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallGraphStage_SuppressesEndpointGapRepairCandidateAcrossKnownOpening()
+    {
+        var hostWall = DetectedWall("wall-opening-host", new PlanPoint(100, 60), new PlanPoint(100, 180))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.90),
+                Evidence = new[]
+                {
+                    "parallel wall-face pair",
+                    "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.90"
+                }
+            };
+        var partition = DetectedWall("wall-opening-gap-partition", new PlanPoint(116, 100), new PlanPoint(240, 100))
+            with
+            {
+                Confidence = new Confidence(0.66),
+                Evidence = new[]
+                {
+                    "single wall-length vector run",
+                    "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.66"
+                }
+            };
+        var opening = new OpeningCandidate(
+            "opening-host-door",
+            1,
+            OpeningType.Door,
+            new PlanRect(86, 76, 54, 54),
+            new Confidence(0.80))
+        {
+            WallId = hostWall.Id,
+            HostWallIds = new[] { hostWall.Id },
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(116, 100)),
+            Evidence = new[] { "door swing arc attached to host wall" }
+        };
+        var context = new ScanContext(
+            Document("wall-opening-gap-repair-suppression"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { hostWall, partition });
+        context.Openings.Add(opening);
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Empty(context.WallGraph.RepairCandidates);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.review");
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.opening_suppressed"
+                && int.Parse(
+                    diagnostic.Properties["suppressedEndpointGapCandidateCount"],
+                    System.Globalization.CultureInfo.InvariantCulture) >= 1);
+    }
+
+    [Fact]
     public async Task WallGraphStage_DoesNotLetReviewWallsSplitTrustedTopologyJunctions()
     {
         var hostWall = DetectedWall("wall-accepted-host", new PlanPoint(100, 100), new PlanPoint(320, 100));
@@ -1160,6 +1264,104 @@ public sealed class WallGraphTopologyTests
         Assert.Equal(100, normalizedPartition.CenterLine.Start.Y, precision: 1);
         Assert.DoesNotContain(context.WallGraph.Nodes, node =>
             node.Position.DistanceTo(new PlanPoint(113, 100)) <= 0.5);
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.trusted_endpoint_snapped"
+                && diagnostic.Properties["trustedEndpointSnapCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallGraphStage_AutoSnapsTrustedMediumPairedEndpointGapAcrossReviewTolerance()
+    {
+        var hostWall = DetectedWall("wall-trusted-medium-host", new PlanPoint(100, 60), new PlanPoint(100, 180))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.91),
+                PairEvidence = new WallPairEvidence(
+                    new PlanLineSegment(new PlanPoint(96, 60), new PlanPoint(96, 180)),
+                    new PlanLineSegment(new PlanPoint(104, 60), new PlanPoint(104, 180)),
+                    FaceSeparation: 8,
+                    OverlapRatio: 1,
+                    Score: 0.90,
+                    FirstFaceFragmentCount: 3,
+                    SecondFaceFragmentCount: 3,
+                    FirstFaceSourcePrimitiveIds: ["wall-trusted-medium-host-face-a"],
+                    SecondFaceSourcePrimitiveIds: ["wall-trusted-medium-host-face-b"]),
+                Evidence = new[]
+                {
+                    "parallel wall-face pair",
+                    "pair score 0.90",
+                    "overlap ratio 1",
+                    "wall type interior: supported wall evidence inside exterior envelope",
+                    "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.91"
+                }
+            };
+        var partition = DetectedWall("wall-trusted-medium-gap-partition", new PlanPoint(116.5, 100), new PlanPoint(240, 100))
+            with
+            {
+                DetectionKind = WallDetectionKind.ParallelLinePair,
+                Confidence = new Confidence(0.90),
+                WallType = WallType.Interior,
+                PairEvidence = new WallPairEvidence(
+                    new PlanLineSegment(new PlanPoint(116.5, 96), new PlanPoint(240, 96)),
+                    new PlanLineSegment(new PlanPoint(116.5, 104), new PlanPoint(240, 104)),
+                    FaceSeparation: 8,
+                    OverlapRatio: 1,
+                    Score: 0.69,
+                    FirstFaceFragmentCount: 30,
+                    SecondFaceFragmentCount: 4,
+                    FirstFaceSourcePrimitiveIds: ["wall-trusted-medium-gap-partition-face-a"],
+                    SecondFaceSourcePrimitiveIds: ["wall-trusted-medium-gap-partition-face-b"]),
+                Evidence = new[]
+                {
+                    "parallel wall-face pair",
+                    "pair score 0.69",
+                    "overlap ratio 1",
+                    "first face merged 30 fragments",
+                    "wall type interior: supported wall evidence inside exterior envelope",
+                    "wall evidence: short unlayered parallel-face candidate has noisy fragmented face evidence; keep for topology but block exact placement until reviewed",
+                    "wall evidence: room-confirmed wall body promoted to placement-ready after room adjacency refinement",
+                    "wall evidence: geometric room boundary support from reliable room-boundary alignment",
+                    "wall evidence: geometric room-boundary paired wall promoted after room refinement confirmed the candidate is a structural room edge",
+                    "wall evidence assessment: MediumWallBody / review / confidence 0.90"
+                }
+            };
+        var context = new ScanContext(
+            Document("wall-trusted-medium-paired-endpoint-gap-full-review-auto-snap"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { hostWall, partition });
+        context.WallTopologyPreparation = new WallTopologyPreparation(
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<WallTopologyRejectedWall>(),
+            new[] { hostWall.Id, partition.Id },
+            Array.Empty<string>(),
+            Array.Empty<string>());
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(hostWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, new Confidence(0.91)),
+                MediumPairedReviewAssessmentWithPairScore(partition, 0.69) with
+                {
+                    Confidence = new Confidence(0.90),
+                    PlacementReady = true,
+                    RequiresReview = false,
+                    Decision = WallEvidenceDecision.Accept,
+                    Evidence = partition.Evidence
+                }
+            });
+
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Empty(context.WallGraph.RepairCandidates);
+        var normalizedPartition = Assert.Single(context.Walls, wall => wall.Id == partition.Id);
+
+        Assert.Equal(100, normalizedPartition.CenterLine.Start.X, precision: 1);
+        Assert.Equal(100, normalizedPartition.CenterLine.Start.Y, precision: 1);
+        Assert.DoesNotContain(context.WallGraph.Nodes, node =>
+            node.Position.DistanceTo(new PlanPoint(116.5, 100)) <= 0.5);
         Assert.Contains(
             context.Diagnostics.Build().Messages,
             diagnostic => diagnostic.Code == "wall_graph.endpoint_gap.trusted_endpoint_snapped"

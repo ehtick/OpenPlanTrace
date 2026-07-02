@@ -37,7 +37,7 @@ public sealed class OpenPlanTraceScanner : IFloorplanScanner
             var inputCount = context.TotalDetectionCount;
             var artifactCountsBefore = context.ArtifactCounts();
             var inputArtifacts = context.SnapshotArtifacts(metadata.Reads.Concat(metadata.OptionalReads));
-            var diagnosticStart = context.Diagnostics.MessageCount;
+            var diagnosticStart = context.Diagnostics.MessageCursor;
             var stopwatch = Stopwatch.StartNew();
             progress?.Report(new PipelineStageProgress(
                 metadata.Stage,
@@ -160,6 +160,7 @@ public sealed class OpenPlanTraceScanner : IFloorplanScanner
             new WallTopologyPreparationStage(),
             new WallGraphStage(),
             new OpeningDetectionStage(),
+            new WallGraphOpeningRepairSuppressionStage(),
             new RoomDetectionStage(),
             new RoomAdjacencyStage(),
             new WallTypeRefinementStage(),

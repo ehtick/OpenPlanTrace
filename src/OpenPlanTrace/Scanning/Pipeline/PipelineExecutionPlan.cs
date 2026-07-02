@@ -371,6 +371,12 @@ public sealed record PipelineExecutionPlan(
             .Where(stage => stage.Writes.Contains(artifact))
             .OrderBy(stage => stage.Order)
             .ToArray();
+        var primaryProducers = producers
+            .Where(stage => !IsArtifactRefinementStage(stage, artifact))
+            .ToArray();
+        var producerConflictCount = primaryProducers.Length == 0
+            ? producers.Length
+            : primaryProducers.Length;
         var requiredConsumers = stages
             .Where(stage => stage.Reads.Contains(artifact))
             .OrderBy(stage => stage.Order)
@@ -405,7 +411,9 @@ public sealed record PipelineExecutionPlan(
         }
         else if (producers.Length > 1)
         {
-            evidence.Add("artifact has multiple planned producers and should be reviewed for write ownership.");
+            evidence.Add(producerConflictCount > 1
+                ? "artifact has multiple planned producers and should be reviewed for write ownership."
+                : "artifact has one primary producer plus refinement stage(s).");
         }
 
         if (consumers.Length == 0)
@@ -433,11 +441,16 @@ public sealed record PipelineExecutionPlan(
             producers.Length == 0 ? 0 : producers.Last().ExecutionWave,
             consumers.Length == 0 ? 0 : consumers.First().ExecutionWave,
             consumers.Length == 0 ? 0 : consumers.Last().ExecutionWave,
-            producers.Length > 1,
+            producerConflictCount > 1,
             requiredConsumers.Length > 0,
             DependencyRoleFor(isSourceArtifact, producers.Length, consumers.Length),
             evidence);
     }
+
+    private static bool IsArtifactRefinementStage(PipelineStagePlan stage, PlanArtifactKind artifact) =>
+        stage.Writes.Contains(artifact)
+        && stage.Order > 0
+        && (stage.Reads.Contains(artifact) || stage.OptionalReads.Contains(artifact));
 
     private static string DependencyRoleFor(bool isSourceArtifact, int producerCount, int consumerCount)
     {
