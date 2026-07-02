@@ -2521,16 +2521,19 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa\"", svg);
         Assert.Contains("Walls-only placement QA", svg);
+        Assert.Contains("Solid blue/green = compact import wall graph", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
         Assert.Contains("id=\"wall-body-footprints\"", svg);
-        Assert.Contains("id=\"wall-topology-spans\"", svg);
+        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
         Assert.Contains("wall body footprint detail-host:solid-span:1:body-footprint", svg);
-        Assert.Contains("clean wall topology span detail-host:clean-run:1", svg);
+        Assert.Contains("placement wall graph edge detail-host:clean-run:1", svg);
         Assert.Contains("1 visible topology spans", svg);
         Assert.Contains("1 visible wall body footprints", svg);
         Assert.Contains("1 wall graph repairs hidden (1 blocking)", svg);
+        Assert.Contains("1 exported wall graph edges", svg);
         Assert.DoesNotContain("id=\"wall-graph-repairs\"", svg);
+        Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("id=\"walls\"", svg);
         Assert.DoesNotContain("edge-tooth-1", svg);
     }
@@ -2546,8 +2549,11 @@ public sealed class ExportTests
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQa));
 
         Assert.Contains("data-profile=\"wall-qa\"", svg);
-        Assert.Contains("clean wall topology span detail-host:clean-run:1", svg);
+        Assert.Contains("Solid blue/green = compact import wall graph", svg);
+        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
+        Assert.Contains("placement wall graph edge detail-host:clean-run:1", svg);
         Assert.DoesNotContain("clean wall topology span trusted-exterior-shell-fragment", svg);
+        Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("class=\"wall-topology-span wall-topology-span-exterior wall-topology-span-excluded\"", svg);
         Assert.Contains("hidden non-placement topology spans", svg);
 
@@ -2579,20 +2585,23 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa-review\"", svg);
         Assert.Contains("Wall QA review (actionable amber only)", svg);
+        Assert.Contains("Solid blue/green = compact import wall graph", svg);
         Assert.Contains("Dashed amber = review-only wall candidates", svg);
         Assert.Contains("suppressed detail spans hidden", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
         Assert.Contains("id=\"wall-body-footprints\"", svg);
-        Assert.Contains("id=\"wall-topology-spans\"", svg);
+        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
         Assert.Contains("id=\"wall-topology-review-spans\"", svg);
         Assert.Contains("wall body footprint detail-host:solid-span:1:body-footprint", svg);
-        Assert.Contains("clean wall topology span detail-host:clean-run:1", svg);
+        Assert.Contains("placement wall graph edge detail-host:clean-run:1", svg);
         Assert.Contains("non-placement wall topology span edge-tooth-2", svg);
         Assert.DoesNotContain("non-placement wall topology span edge-tooth-1", svg);
         Assert.Contains("1 visible topology spans", svg);
         Assert.Contains("1 visible wall body footprints", svg);
+        Assert.Contains("1 exported wall graph edges", svg);
         Assert.DoesNotContain("id=\"wall-graph-repairs\"", svg);
+        Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("id=\"walls\"", svg);
     }
 
@@ -2693,9 +2702,11 @@ public sealed class ExportTests
         Assert.Contains("<rect class=\"sheet-bg\" x=\"74\" y=\"74\" width=\"520\"", svg);
         Assert.Contains("<g id=\"legend\" transform=\"translate(342 86)\"", svg);
         Assert.Contains("Focused wall topology crop", svg);
+        Assert.Contains("Solid blue/green = compact import wall graph", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
-        Assert.Contains("id=\"wall-topology-spans\"", svg);
+        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
+        Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("viewBox=\"0 0", svg);
     }
 
@@ -2987,13 +2998,14 @@ public sealed class ExportTests
 
         var page = Assert.Single(snapshot.Pages);
         Assert.Equal("wall-qa-review", page.SvgProfile);
-        Assert.Contains("wallTopologySpans", page.VisibleLayerNames);
+        Assert.Contains("placementWallGraphEdges", page.VisibleLayerNames);
         Assert.Contains("wallTopologyReviewSpans", page.VisibleLayerNames);
         Assert.Contains("sourceContext", page.VisibleLayerNames);
         Assert.Contains("wallBodyFootprints", page.VisibleLayerNames);
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "wallBodyFootprints").Count);
-        Assert.Equal(1, page.Layers.Single(layer => layer.Name == "wallTopologySpans").Count);
+        Assert.Equal(1, page.Layers.Single(layer => layer.Name == "placementWallGraphEdges").Count);
         Assert.Equal(3, page.Layers.Single(layer => layer.Name == "wallTopologyReviewSpans").Count);
+        Assert.DoesNotContain("wallTopologySpans", page.VisibleLayerNames);
         Assert.DoesNotContain("walls", page.VisibleLayerNames);
     }
 

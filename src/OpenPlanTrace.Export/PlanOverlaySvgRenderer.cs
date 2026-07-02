@@ -762,6 +762,11 @@ public static class PlanOverlaySvgRenderer
                 rows.Add("Focused wall topology crop");
             }
 
+            if (options.IncludePlacementWallGraph)
+            {
+                rows.Add("Solid blue/green = compact import wall graph");
+            }
+
             if (options.IncludeReviewOnlyWallTopologySpans)
             {
                 rows.Add("Dashed amber = review-only wall candidates");
