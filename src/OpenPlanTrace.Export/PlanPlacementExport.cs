@@ -3639,6 +3639,8 @@ public sealed record PlacementWallGraphExport(
     private const double MinDominantPlacementGraphMergeAxisLengthRatio = 2.0;
     private const double MinDominantPlacementGraphMergeAxisBandDistanceDrawingUnits = 0.75;
     private const double MaxDominantPlacementGraphMergeAxisBandDistanceDrawingUnits = 2.5;
+    private const double MaxProtectedTopologyGraphRepresentationAxisDistanceDrawingUnits = 1.5;
+    private const double MinProtectedTopologyGraphRepresentationCoverageRatio = 0.985;
     private const double MaxTrustedExteriorDominantPlacementGraphMergeAxisBandDistanceDrawingUnits = 4.0;
 
     public static PlacementWallGraphExport From(
@@ -3792,6 +3794,16 @@ public sealed record PlacementWallGraphExport(
         edges = postBridgeResidualNodeCoordinateAlignment.Edges;
         var postBridgeResidualNodeNormalization = NormalizePlacementGraphNodeReferencesFromGeometry(edges);
         edges = postBridgeResidualNodeNormalization.Edges;
+        var protectedTopologyRestoration = RestoreMissingProtectedPlacementGraphTopologyEdges(
+            edges,
+            topologySpans,
+            calibration,
+            sourceLookup,
+            wallComponentLookup,
+            wallEvidenceAssessments);
+        edges = protectedTopologyRestoration.Edges;
+        var postProtectedTopologyRestorationNodeNormalization = NormalizePlacementGraphNodeReferencesFromGeometry(edges);
+        edges = postProtectedTopologyRestorationNodeNormalization.Edges;
         var residualEndpointOnHostSummary = SummarizeResidualPlacementGraphEndpointOnHostEdges(edges);
         var finalCompactedEdgeCount = Math.Max(0, finalCompactionPreEdgeCount - finalPostCompactionEdgeCount);
         var alignedEndpointCount = preNormalizationNodeCoordinateAlignment.AlignedEndpointCount
@@ -3865,6 +3877,8 @@ public sealed record PlacementWallGraphExport(
             $"placement wall graph post-bridge snapped {postBridgeResidualEndpointSnap.SnappedEndpointCount} residual endpoint(s) onto host wall runs",
             $"placement wall graph post-bridge compacted {postBridgeResidualCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postBridgeResidualSuppressedContainedEdgeCount} contained duplicate edge(s)",
             $"placement wall graph split {postBridgeResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-bridge residual cleanup",
+            $"placement wall graph restored {protectedTopologyRestoration.RestoredEdgeCount} protected bridged topology edge(s) missing from final graph coverage",
+            $"placement wall graph split {postProtectedTopologyRestorationNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after protected topology restoration",
             "placement wall graph residual endpoint-on-host-wall candidates after cleanup: "
             + $"{residualEndpointOnHostSummary.CandidateEndpointCount} total, "
             + $"{residualEndpointOnHostSummary.CoincidentCandidateEndpointCount} coincident, "
@@ -3913,6 +3927,118 @@ public sealed record PlacementWallGraphExport(
                 spansByEdgeId[edgeId] = span;
             }
         }
+    }
+
+    private static PlacementGraphProtectedTopologyRestorationResult RestoreMissingProtectedPlacementGraphTopologyEdges(
+        IReadOnlyList<PlacementWallGraphEdgeExport> edges,
+        IReadOnlyList<WallGraphTopologySpan> topologySpans,
+        PlanCalibration calibration,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup,
+        IReadOnlyDictionary<string, WallGraphComponent> wallComponentLookup,
+        IReadOnlyDictionary<string, WallEvidenceWallAssessment> wallEvidenceAssessments)
+    {
+        var restored = new List<PlacementWallGraphEdgeExport>(edges);
+        var restoredCount = 0;
+        foreach (var span in topologySpans.Where(IsProtectedPlacementGraphTopologySpan))
+        {
+            var edge = PlacementWallGraphEdgeExport.From(
+                span,
+                calibration,
+                sourceLookup,
+                wallComponentLookup,
+                wallEvidenceAssessments);
+            if (IsProtectedPlacementGraphTopologyEdgeRepresented(edge, restored))
+            {
+                continue;
+            }
+
+            restored.Add(edge with
+            {
+                Evidence = edge.Evidence
+                    .Append("placement wall graph protected topology restoration: restored protected bridged clean topology span after graph cleanup")
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+            });
+            restoredCount++;
+        }
+
+        if (restoredCount == 0)
+        {
+            return new PlacementGraphProtectedTopologyRestorationResult(edges.ToArray(), 0);
+        }
+
+        return new PlacementGraphProtectedTopologyRestorationResult(
+            restored
+                .OrderBy(edge => edge.PageNumber)
+                .ThenBy(edge => edge.Bounds?.Y ?? double.MaxValue)
+                .ThenBy(edge => edge.Bounds?.X ?? double.MaxValue)
+                .ThenBy(edge => edge.Id, StringComparer.Ordinal)
+                .ToArray(),
+            restoredCount);
+    }
+
+    private static bool IsProtectedPlacementGraphTopologySpan(WallGraphTopologySpan span)
+    {
+        if (span.SourceWall?.WallType != WallType.Exterior)
+        {
+            return false;
+        }
+
+        return span.Evidence.Any(item =>
+            item.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsProtectedPlacementGraphTopologyEdgeRepresented(
+        PlacementWallGraphEdgeExport protectedEdge,
+        IReadOnlyList<PlacementWallGraphEdgeExport> edges)
+    {
+        if (TryCreatePlacementGraphMergeSpan(-1, protectedEdge) is not { } protectedSpan)
+        {
+            return true;
+        }
+
+        var intervals = edges
+            .Select((edge, index) => TryCreatePlacementGraphMergeSpan(index, edge))
+            .Where(span => span is not null)
+            .Select(span => span!)
+            .Where(span =>
+                span.Edge.PageNumber == protectedSpan.Edge.PageNumber
+                && span.Orientation == protectedSpan.Orientation
+                && Math.Abs(span.Axis - protectedSpan.Axis)
+                    <= MaxProtectedTopologyGraphRepresentationAxisDistanceDrawingUnits
+                && span.End > protectedSpan.Start
+                && span.Start < protectedSpan.End)
+            .Select(span => (
+                Start: Math.Max(span.Start, protectedSpan.Start),
+                End: Math.Min(span.End, protectedSpan.End)))
+            .Where(interval => interval.End > interval.Start + 0.001)
+            .OrderBy(interval => interval.Start)
+            .ThenBy(interval => interval.End)
+            .ToArray();
+        if (intervals.Length == 0)
+        {
+            return false;
+        }
+
+        var covered = 0.0;
+        var currentStart = intervals[0].Start;
+        var currentEnd = intervals[0].End;
+        foreach (var interval in intervals.Skip(1))
+        {
+            if (interval.Start <= currentEnd + 0.001)
+            {
+                currentEnd = Math.Max(currentEnd, interval.End);
+                continue;
+            }
+
+            covered += currentEnd - currentStart;
+            currentStart = interval.Start;
+            currentEnd = interval.End;
+        }
+
+        covered += currentEnd - currentStart;
+        return covered / Math.Max(protectedSpan.Length, 0.001)
+            >= MinProtectedTopologyGraphRepresentationCoverageRatio;
     }
 
     private static PlacementWallGraphEdgeExport[] CollapseCleanPlacementGraphEdges(
@@ -7857,6 +7983,10 @@ public sealed record PlacementWallGraphExport(
     private sealed record PlacementGraphRedundantEndpointOnHostFragmentSuppressionResult(
         PlacementWallGraphEdgeExport[] Edges,
         int SuppressedFragmentCount);
+
+    private sealed record PlacementGraphProtectedTopologyRestorationResult(
+        PlacementWallGraphEdgeExport[] Edges,
+        int RestoredEdgeCount);
 
     private sealed record PlacementGraphRedundantEndpointOnHostFragmentSuppression(
         PlacementGraphMergeSpan CandidateSpan,

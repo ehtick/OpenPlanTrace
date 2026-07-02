@@ -7919,6 +7919,18 @@ public sealed class ExportTests
             span.GetProperty("evidence").EnumerateArray(),
             evidence => evidence.GetString()?.Contains("inferred exterior shell wall", StringComparison.OrdinalIgnoreCase) == true);
         Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
+
+        var graphEdge = Assert.Single(document.RootElement
+            .GetProperty("wallGraph")
+            .GetProperty("edges")
+            .EnumerateArray()
+            .Where(edge => edge.GetProperty("evidence").EnumerateArray().Any(
+                evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true)));
+        var graphCenterLine = graphEdge.GetProperty("centerLine");
+        Assert.Equal(80, graphCenterLine.GetProperty("start").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(360, graphCenterLine.GetProperty("end").GetProperty("x").GetDouble(), precision: 3);
+        Assert.Equal(120, graphCenterLine.GetProperty("start").GetProperty("y").GetDouble(), precision: 3);
+        Assert.Equal(120, graphCenterLine.GetProperty("end").GetProperty("y").GetDouble(), precision: 3);
     }
 
     [Fact]
@@ -7940,6 +7952,10 @@ public sealed class ExportTests
         Assert.Equal(2, spans.Length);
         Assert.DoesNotContain(
             spans.SelectMany(span => span.GetProperty("evidence").EnumerateArray()),
+            evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.DoesNotContain(
+            document.RootElement.GetProperty("wallGraph").GetProperty("edges").EnumerateArray()
+                .SelectMany(edge => edge.GetProperty("evidence").EnumerateArray()),
             evidence => evidence.GetString()?.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase) == true);
         Assert.Equal(2, document.RootElement.GetProperty("summary").GetProperty("wallTopologySpanCount").GetInt32());
     }
