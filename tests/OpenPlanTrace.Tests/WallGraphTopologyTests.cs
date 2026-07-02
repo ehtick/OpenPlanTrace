@@ -1515,6 +1515,74 @@ public sealed class WallGraphTopologyTests
     }
 
     [Fact]
+    public async Task WallGraphStage_TrimsLongTrustedPairedWallGraphEndpointOverrunAtSupportedJunction()
+    {
+        var overrunWall = StrongPairedWall(
+            "trusted-paired-long-overrun",
+            new PlanPoint(40, 100),
+            new PlanPoint(320, 100),
+            pairScore: 0.94) with
+        {
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(40, 98), new PlanPoint(320, 98)),
+                new PlanLineSegment(new PlanPoint(40, 102), new PlanPoint(320, 102)),
+                FaceSeparation: 4,
+                OverlapRatio: 1,
+                Score: 0.94,
+                FirstFaceFragmentCount: 2,
+                SecondFaceFragmentCount: 2,
+                FirstFaceSourcePrimitiveIds: ["trusted-paired-long-overrun-face-a"],
+                SecondFaceSourcePrimitiveIds: ["trusted-paired-long-overrun-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.94"
+            ]
+        };
+        var supportWall = DetectedWall("left-support", new PlanPoint(100, 100), new PlanPoint(100, 260));
+        var context = new ScanContext(
+            Document("trusted-paired-long-overrun-trim"),
+            new ScannerOptions());
+        context.Walls.AddRange(new[] { overrunWall, supportWall });
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                Assessment(overrunWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High),
+                Assessment(supportWall, WallEvidenceDecision.Accept, WallEvidenceCategory.StrongWallBody, Confidence.High)
+            });
+
+        await new WallTopologyPreparationStage().ExecuteAsync(context, CancellationToken.None);
+        await new WallGraphStage().ExecuteAsync(context, CancellationToken.None);
+
+        var trimmedWall = Assert.Single(context.Walls, wall => wall.Id == overrunWall.Id);
+        var corner = Assert.Single(context.WallGraph.Nodes, node =>
+            node.Kind == WallNodeKind.Corner
+            && Math.Abs(node.Position.X - 100) <= 0.5
+            && Math.Abs(node.Position.Y - 100) <= 0.5);
+
+        Assert.Equal(100, trimmedWall.CenterLine.Start.X, precision: 1);
+        Assert.Equal(100, trimmedWall.CenterLine.Start.Y, precision: 1);
+        Assert.Equal(320, trimmedWall.CenterLine.End.X, precision: 1);
+        Assert.Equal(2, corner.Degree);
+        Assert.DoesNotContain(context.WallGraph.Nodes, node =>
+            node.Position.DistanceTo(new PlanPoint(40, 100)) <= 0.5);
+        Assert.DoesNotContain(
+            context.WallGraph.RepairCandidates,
+            candidate => candidate.Kind == WallGraphRepairCandidateKind.EndpointOverrun);
+        Assert.Contains(
+            trimmedWall.Evidence,
+            item => item.Contains("trimmed 1 supported endpoint overrun", StringComparison.Ordinal));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "wall_graph.topology.normalized"
+                && diagnostic.Properties["trimmedEndpointOverrunCount"] == "1");
+    }
+
+    [Fact]
     public async Task PlacementExporter_IncludesEndpointOverrunTrimRepairCandidate()
     {
         var result = await new OpenPlanTraceScanner().ScanAsync(

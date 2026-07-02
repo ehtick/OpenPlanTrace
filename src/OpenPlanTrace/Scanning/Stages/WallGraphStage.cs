@@ -5577,9 +5577,54 @@ internal sealed class WallGraphStage : IPipelineStage
         }
 
         return support.HasPerpendicularEndpointJunction
-            && tailLength <= ExtendedEndpointOverrunTrimTolerance(options)
-            && tailLength <= Math.Max(wall.DrawingLength * 0.35, trimTolerance);
+            && ((tailLength <= ExtendedEndpointOverrunTrimTolerance(options)
+                    && tailLength <= Math.Max(wall.DrawingLength * 0.35, trimTolerance))
+                || IsTrustedPairedEndpointOverrunTail(wall, tailLength, trimTolerance, options));
     }
+
+    private static bool IsTrustedPairedEndpointOverrunTail(
+        WallSegment wall,
+        double tailLength,
+        double trimTolerance,
+        ScannerOptions options)
+    {
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is not { } pair
+            || wall.Confidence.Value < 0.88
+            || wall.DrawingLength < 120
+            || tailLength <= trimTolerance
+            || tailLength > TrustedPairedEndpointOverrunTrimTolerance(options, trimTolerance)
+            || tailLength > Math.Max(wall.DrawingLength * 0.35, trimTolerance)
+            || pair.Score < 0.88
+            || pair.OverlapRatio < 0.90
+            || pair.FaceSeparation < 1.0
+            || pair.FaceSeparation > Math.Max(options.DefaultWallThickness * 3.0, 18.0)
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > 220)
+        {
+            return false;
+        }
+
+        return wall.Evidence.Any(item =>
+                item.Contains("StrongWallBody / placement-ready", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("filled closed vector wall body", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("strong double-edge wall body", StringComparison.OrdinalIgnoreCase))
+            && !wall.Evidence.Any(item =>
+                item.Contains("door", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("opening", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("stair", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("object/fixture", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static double TrustedPairedEndpointOverrunTrimTolerance(ScannerOptions options, double trimTolerance) =>
+        Math.Max(
+            trimTolerance,
+            Math.Min(
+                EndpointOverrunReviewTolerance(options),
+                ExtendedEndpointOverrunTrimTolerance(options) * 1.35));
 
     private static bool TryCreateEndpointOverrunReview(
         WallSegment wall,
