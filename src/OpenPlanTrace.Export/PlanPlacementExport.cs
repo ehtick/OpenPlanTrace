@@ -7645,9 +7645,12 @@ public sealed record PlacementWallGraphExport(
             return false;
         }
 
-        return !endpointSpan.Edge.Evidence.Concat(hostSpan.Edge.Evidence)
-            .Any(IsPlacementGraphDetailOrSurfaceEvidence);
+        return !HasHardPlacementGraphResidualEndpointSnapBlocker(endpointSpan.Edge)
+            && !HasHardPlacementGraphResidualEndpointSnapBlocker(hostSpan.Edge);
     }
+
+    private static bool HasHardPlacementGraphResidualEndpointSnapBlocker(PlacementWallGraphEdgeExport edge) =>
+        HasHardPlacementGraphRepresentativeDetailEvidence(edge);
 
     private static bool IsTrustedSourceBackedPlacementGraphHost(PlacementWallGraphEdgeExport edge) =>
         edge.Evidence.Any(item => item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase))

@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.09.004] - 2026-07-03
+
+- Improved trusted exterior residual endpoint snapping.
+- Improved source-backed wall cleanup with inherited object evidence.
+- Small improvement to residual snap regression tests.
+
 ## [0.09.003] - 2026-07-03
 
 - Improved exterior placement graph duplicate suppression.

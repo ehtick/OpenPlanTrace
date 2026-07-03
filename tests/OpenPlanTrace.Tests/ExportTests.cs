@@ -11975,6 +11975,8 @@ public sealed class ExportTests
                     "source-backed fallback pair score 0.956, overlap 1, face separation 6 drawing units",
                     "filled wall-solid primitive",
                     "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                    "wall evidence assessment: ObjectOrFixtureDetail / rejected / graph component inherited from absorbed fragment",
+                    "wall graph edge excluded because wall evidence rejected as non-wall/noise (ObjectOrFixtureDetail)",
                     "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
                 ],
                 null),
@@ -12005,6 +12007,8 @@ public sealed class ExportTests
                     "source-backed fallback pair score 0.937, overlap 1, face separation 4 drawing units",
                     "filled wall-solid primitive",
                     "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                    "wall evidence assessment: ObjectOrFixtureDetail / rejected / graph component inherited from absorbed fragment",
+                    "wall graph edge excluded because wall evidence rejected as non-wall/noise (ObjectOrFixtureDetail)",
                     "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
                 ],
                 null)
