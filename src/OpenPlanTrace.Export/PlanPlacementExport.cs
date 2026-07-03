@@ -1603,6 +1603,12 @@ public sealed record PlacementWallOmissionExport(
                 component,
                 evidenceAssessment,
                 evidence);
+        var trustedIsolatedTwoSidedInteriorPairWallBody =
+            WallPlacementContextGuards.IsTrustedIsolatedTwoSidedInteriorPairWallBody(
+                wall,
+                component,
+                evidenceAssessment,
+                evidence);
 
         if (repairCandidates.Any(candidate => candidate.ImportImpact == WallGraphRepairImportImpact.TopologyImportBlocked))
         {
@@ -1702,7 +1708,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedOpeningLinkedFilledInteriorWallBody
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
             && !trustedShortRecoveredRoomBoundaryWallBody
-            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody)
+            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody
+            && !trustedIsolatedTwoSidedInteriorPairWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "structural_topology_excluded",
@@ -1724,6 +1731,7 @@ public sealed record PlacementWallOmissionExport(
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
             && !trustedShortRecoveredRoomBoundaryWallBody
             && !trustedCleanIsolatedRoomBoundaryFragmentWallBody
+            && !trustedIsolatedTwoSidedInteriorPairWallBody
             && IsSuppressedOpeningLinkedIsolatedFragment(component, wall, topologySpans, evidence))
         {
             return new PlacementWallOmissionClassification(
@@ -1737,7 +1745,8 @@ public sealed record PlacementWallOmissionExport(
             && !trustedOpeningLinkedFilledInteriorWallBody
             && !trustedOpeningLinkedFragmentMergedInteriorWallBody
             && !trustedShortRecoveredRoomBoundaryWallBody
-            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody)
+            && !trustedCleanIsolatedRoomBoundaryFragmentWallBody
+            && !trustedIsolatedTwoSidedInteriorPairWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "isolated_fragment",
@@ -1912,7 +1921,8 @@ public sealed record PlacementWallOmissionExport(
                 || evidenceAssessment.Decision == WallEvidenceDecision.Review)
             && !trustedRejectedStrongBoundaryWallBody
             && !trustedRejectedMediumBoundaryFragmentWallBody
-            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody
+            && !trustedIsolatedTwoSidedInteriorPairWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "wall_evidence_review_required",
@@ -1934,7 +1944,8 @@ public sealed record PlacementWallOmissionExport(
         if (topologySpans.Count == 0
             && !trustedRejectedStrongBoundaryWallBody
             && !trustedRejectedMediumBoundaryFragmentWallBody
-            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody
+            && !trustedIsolatedTwoSidedInteriorPairWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "no_clean_topology_spans",
@@ -1946,7 +1957,8 @@ public sealed record PlacementWallOmissionExport(
         if (reliability.RequiresReview
             && !trustedRejectedStrongBoundaryWallBody
             && !trustedRejectedMediumBoundaryFragmentWallBody
-            && !trustedRejectedObjectLikeBoundaryRecallWallBody)
+            && !trustedRejectedObjectLikeBoundaryRecallWallBody
+            && !trustedIsolatedTwoSidedInteriorPairWallBody)
         {
             return new PlacementWallOmissionClassification(
                 "coordinate_review_required",
@@ -1957,7 +1969,8 @@ public sealed record PlacementWallOmissionExport(
 
         if (trustedRejectedStrongBoundaryWallBody
             || trustedRejectedMediumBoundaryFragmentWallBody
-            || trustedRejectedObjectLikeBoundaryRecallWallBody)
+            || trustedRejectedObjectLikeBoundaryRecallWallBody
+            || trustedIsolatedTwoSidedInteriorPairWallBody)
         {
             return null;
         }
@@ -2620,6 +2633,11 @@ public sealed record PlacementWallExport(
                 component,
                 evidenceAssessment)
             && !WallPlacementContextGuards.IsTrustedCleanIsolatedRoomBoundaryFragmentWallBody(
+                wall,
+                component,
+                evidenceAssessment,
+                combinedReviewReasons)
+            && !WallPlacementContextGuards.IsTrustedIsolatedTwoSidedInteriorPairWallBody(
                 wall,
                 component,
                 evidenceAssessment,

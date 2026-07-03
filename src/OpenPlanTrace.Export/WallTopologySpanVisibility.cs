@@ -907,6 +907,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var hasTrustedIsolatedTwoSidedInteriorPair =
+            WallPlacementContextGuards.IsTrustedIsolatedTwoSidedInteriorPairWallBody(
+                wall,
+                component,
+                assessment);
         var hasTrustedObjectLikeLongCleanFragmentInterior =
             WallPlacementContextGuards.IsTrustedObjectLikeLongCleanFragmentInteriorWallBody(
                 wall,
@@ -940,13 +945,15 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedShortFilledInteriorWallBody
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
-                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody)
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+                && !hasTrustedIsolatedTwoSidedInteriorPair)
             || (wall.WallType == WallType.Unknown
                 && !hasTrustedLongIsolatedExteriorShellWallBody
                 && !hasTrustedObjectLikeExteriorShellPair
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
-                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody)
+                && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+                && !hasTrustedIsolatedTwoSidedInteriorPair)
             || (wall.FragmentEvidence?.RequiresGeometryReview == true
                 && !trustedUnsafeExteriorCleanProjectionFallback
                 && !trustedUnsafeInteriorCleanProjectionFallback
@@ -1071,6 +1078,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
                 && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+                && !hasTrustedIsolatedTwoSidedInteriorPair
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1102,6 +1110,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
                 && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+                && !hasTrustedIsolatedTwoSidedInteriorPair
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1134,6 +1143,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
                 && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+                && !hasTrustedIsolatedTwoSidedInteriorPair
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1177,6 +1187,7 @@ internal static class WallTopologySpanVisibility
                 && !hasTrustedRejectedStrongBoundaryWallBody
                 && !hasTrustedRejectedMediumBoundaryFragmentWallBody
                 && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+                && !hasTrustedIsolatedTwoSidedInteriorPair
                 && !hasTrustedMainStructuralExteriorWallBody
                 && !hasTrustedMainStructuralExteriorRecallWallBody
                 && !hasTrustedLongIsolatedExteriorShellWallBody
@@ -1226,6 +1237,7 @@ internal static class WallTopologySpanVisibility
             && !hasTrustedRejectedStrongBoundaryWallBody
             && !hasTrustedRejectedMediumBoundaryFragmentWallBody
             && !hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+            && !hasTrustedIsolatedTwoSidedInteriorPair
             && !trustedExteriorShellRepairSupportedWall
             && !hasTrustedSourceBackedExteriorShellClosure
             && !hasTrustedInferredExteriorShellFallback
@@ -1261,6 +1273,7 @@ internal static class WallTopologySpanVisibility
             || hasTrustedRejectedStrongBoundaryWallBody
             || hasTrustedRejectedMediumBoundaryFragmentWallBody
             || hasTrustedRejectedObjectLikeBoundaryRecallWallBody
+            || hasTrustedIsolatedTwoSidedInteriorPair
             || hasTrustedMainStructuralExteriorWallBody
             || hasTrustedMainStructuralExteriorRecallWallBody
             || hasTrustedLongIsolatedExteriorShellWallBody
@@ -2951,6 +2964,12 @@ internal static class WallTopologySpanVisibility
                 wall,
                 component,
                 assessment);
+        var trustedIsolatedTwoSidedInteriorPair =
+            WallPlacementContextGuards.IsTrustedIsolatedTwoSidedInteriorPairWallBody(
+                wall,
+                component,
+                assessment,
+                reviewReasons);
         var placementAxis = WallBodyFootprintBuilder.BuildPlacementAxis(wall, 0, 1);
         var centerLine = placementAxis.CenterLine;
         if (centerLine.Length <= 0.001)
@@ -3031,6 +3050,10 @@ internal static class WallTopologySpanVisibility
         else if (trustedRejectedObjectLikeBoundaryRecallWallBody)
         {
             evidence.Add("source-backed fallback accepted because object-like rejection was outweighed by wall-type and placement-ready evidence");
+        }
+        else if (trustedIsolatedTwoSidedInteriorPair)
+        {
+            evidence.Add("source-backed fallback accepted because isolated paired interior wall has two-sided room evidence");
         }
         else if (trustedMainStructuralExteriorRecallWallBody)
         {

@@ -69,6 +69,14 @@ public static class WallPlacementContextGuards
     private const double MinTrustedCleanIsolatedRoomBoundaryFragmentConfidence = 0.80;
     private const int MaxTrustedCleanIsolatedRoomBoundaryFragmentCount = 8;
     private const int MaxTrustedCleanIsolatedRoomBoundaryDuplicatePrimitives = 3;
+    private const double MinTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits = 36.0;
+    private const double MaxTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits = 80.0;
+    private const double MinTrustedIsolatedTwoSidedInteriorPairConfidence = 0.72;
+    private const double MinTrustedIsolatedTwoSidedInteriorPairScore = 0.78;
+    private const double MinTrustedIsolatedTwoSidedInteriorPairOverlapRatio = 0.95;
+    private const double MinTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits = 2.0;
+    private const double MaxTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits = 18.0;
+    private const int MaxTrustedIsolatedTwoSidedInteriorPairFaceFragments = 16;
     private const double MinTrustedRejectedObjectLikeBoundaryRecallLengthDrawingUnits = 48.0;
     private const double MinTrustedRejectedObjectLikeBoundaryRecallConfidence = 0.72;
     private const double MinTrustedRejectedObjectLikeBoundaryRecallPairScore = 0.74;
@@ -127,6 +135,9 @@ public static class WallPlacementContextGuards
 
     public const string TrustedCleanIsolatedRoomBoundaryFragmentEvidence =
         "clean isolated fragment wall has structural endpoint and interior boundary support";
+
+    public const string TrustedIsolatedTwoSidedInteriorPairEvidence =
+        "trusted isolated two-sided interior paired wall body";
 
     public static bool IsTrustedRecoveredMainStructuralInteriorWallBody(
         WallSegment wall,
@@ -382,6 +393,98 @@ public static class WallPlacementContextGuards
             "not trusted",
             "without shell support",
             "alone is not trusted");
+    }
+
+    public static bool IsTrustedIsolatedTwoSidedInteriorPairWallBody(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment,
+        IEnumerable<string>? extraEvidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(wall);
+
+        if (component is null
+            || component.Kind != WallGraphComponentKind.IsolatedFragment
+            || component.ExcludedFromStructuralTopology
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits
+            || wall.DrawingLength > MaxTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits
+            || wall.Confidence.Value < MinTrustedIsolatedTwoSidedInteriorPairConfidence
+            || assessment is null
+            || assessment.Confidence.Value < MinTrustedIsolatedTwoSidedInteriorPairConfidence
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category != WallEvidenceCategory.MediumWallBody
+            || wall.PairEvidence is not { } pair
+            || (!wall.CenterLine.IsHorizontal() && !wall.CenterLine.IsVertical()))
+        {
+            return false;
+        }
+
+        if (pair.Score < MinTrustedIsolatedTwoSidedInteriorPairScore
+            || pair.OverlapRatio < MinTrustedIsolatedTwoSidedInteriorPairOverlapRatio
+            || pair.FaceSeparation < MinTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits
+            || pair.FaceSeparation > MaxTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits
+            || MaxFaceFragmentCount(wall, assessment) > MaxTrustedIsolatedTwoSidedInteriorPairFaceFragments)
+        {
+            return false;
+        }
+
+        var baseEvidence = WallEvidenceFor(wall, assessment)
+            .Concat(component.Evidence)
+            .ToArray();
+        var evidence = extraEvidence is null
+            ? baseEvidence
+            : baseEvidence.Concat(extraEvidence).ToArray();
+        var hasPairedWallBodyEvidence =
+            EvidenceContains(evidence, "parallel wall-face pair")
+            && EvidenceContains(evidence, "supported wall evidence inside exterior envelope");
+        var hasTwoSidedRoomEvidence =
+            EvidenceContains(evidence, "detected room evidence on both sides")
+            || EvidenceContains(evidence, "two-sided room evidence True")
+            || EvidenceContains(evidence, "shared by room adjacency boundary")
+            || EvidenceContains(evidence, "explicit room boundary support");
+        if (!hasPairedWallBodyEvidence || !hasTwoSidedRoomEvidence)
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "duplicate wall-face",
+            "already represented by stronger paired wall body",
+            "already represented by clean topology span",
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim/detail",
+            "trim linework",
+            "glazing",
+            "detail linework",
+            "surface pattern",
+            "surface/detail pattern",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "opening detail",
+            "opening-linked wall fragment",
+            "tiny door-adjacent",
+            "opening cutouts fully consume",
+            "stair",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted",
+            "demoted from placement-ready");
     }
 
     public static bool IsTrustedOneEndpointNoisyMainStructuralInteriorWallBody(
