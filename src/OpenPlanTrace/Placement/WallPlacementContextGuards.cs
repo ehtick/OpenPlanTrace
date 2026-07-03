@@ -69,14 +69,18 @@ public static class WallPlacementContextGuards
     private const double MinTrustedCleanIsolatedRoomBoundaryFragmentConfidence = 0.80;
     private const int MaxTrustedCleanIsolatedRoomBoundaryFragmentCount = 8;
     private const int MaxTrustedCleanIsolatedRoomBoundaryDuplicatePrimitives = 3;
-    private const double MinTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits = 36.0;
+    private const double MinTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits = 24.0;
     private const double MaxTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits = 80.0;
+    private const double ShortTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits = 36.0;
     private const double MinTrustedIsolatedTwoSidedInteriorPairConfidence = 0.72;
     private const double MinTrustedIsolatedTwoSidedInteriorPairScore = 0.78;
+    private const double MinTrustedShortIsolatedTwoSidedInteriorPairScore = 0.90;
     private const double MinTrustedIsolatedTwoSidedInteriorPairOverlapRatio = 0.95;
+    private const double MinTrustedShortIsolatedTwoSidedInteriorPairOverlapRatio = 0.98;
     private const double MinTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits = 2.0;
     private const double MaxTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits = 18.0;
     private const int MaxTrustedIsolatedTwoSidedInteriorPairFaceFragments = 16;
+    private const int MaxTrustedShortIsolatedTwoSidedInteriorPairFaceFragments = 12;
     private const double MinTrustedRejectedObjectLikeBoundaryRecallLengthDrawingUnits = 48.0;
     private const double MinTrustedRejectedObjectLikeBoundaryRecallConfidence = 0.72;
     private const double MinTrustedRejectedObjectLikeBoundaryRecallPairScore = 0.74;
@@ -422,11 +426,21 @@ public static class WallPlacementContextGuards
             return false;
         }
 
-        if (pair.Score < MinTrustedIsolatedTwoSidedInteriorPairScore
-            || pair.OverlapRatio < MinTrustedIsolatedTwoSidedInteriorPairOverlapRatio
+        var isShortPair = wall.DrawingLength < ShortTrustedIsolatedTwoSidedInteriorPairLengthDrawingUnits;
+        var minimumPairScore = isShortPair
+            ? MinTrustedShortIsolatedTwoSidedInteriorPairScore
+            : MinTrustedIsolatedTwoSidedInteriorPairScore;
+        var minimumOverlapRatio = isShortPair
+            ? MinTrustedShortIsolatedTwoSidedInteriorPairOverlapRatio
+            : MinTrustedIsolatedTwoSidedInteriorPairOverlapRatio;
+        var maxFaceFragments = isShortPair
+            ? MaxTrustedShortIsolatedTwoSidedInteriorPairFaceFragments
+            : MaxTrustedIsolatedTwoSidedInteriorPairFaceFragments;
+        if (pair.Score < minimumPairScore
+            || pair.OverlapRatio < minimumOverlapRatio
             || pair.FaceSeparation < MinTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits
             || pair.FaceSeparation > MaxTrustedIsolatedTwoSidedInteriorPairFaceSeparationDrawingUnits
-            || MaxFaceFragmentCount(wall, assessment) > MaxTrustedIsolatedTwoSidedInteriorPairFaceFragments)
+            || MaxFaceFragmentCount(wall, assessment) > maxFaceFragments)
         {
             return false;
         }

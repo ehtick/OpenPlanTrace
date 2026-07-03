@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.09.002] - 2026-07-03
+
+- Improved short isolated interior wall-pair recovery.
+- Improved strict score guards for short two-sided wall pairs.
+- Small improvement to short wall-pair regression tests.
+
 ## [0.09.001] - 2026-07-03
 
 - Improved isolated two-sided interior wall recovery.
