@@ -15,6 +15,11 @@ internal static class WallCleanTopologyRepresentationMatcher
     private const double MaxExteriorRepresentedByCleanTopologyAxisDistance = 18.0;
     private const double MaxNearIsolatedFragmentAxisDistance = 4.0;
     private const double MaxTrustedSourceBackedExteriorRepresentationAxisDistance = 8.0;
+    private const double MaxExteriorFragmentRepresentedBySourceBackedFallbackAxisDistance = 12.0;
+    private const double MaxExteriorFragmentRepresentedBySourceBackedFallbackLengthRatio = 1.05;
+    private const double MinExteriorFragmentRepresentedBySourceBackedFallbackOverlapRatio = 0.95;
+    private const double MinExteriorFragmentRepresentedBySourceBackedFallbackPairScore = 0.86;
+    private const double MinExteriorFragmentRepresentedBySourceBackedFallbackPairOverlapRatio = 0.90;
     private const int MaxNearIsolatedFragmentCount = 8;
     private const double MaxNearIsolatedFragmentGapRatio = 0.001;
 
@@ -164,6 +169,13 @@ internal static class WallCleanTopologyRepresentationMatcher
                 span,
                 axisDistance)
                 ? MinTrustedSourceBackedExteriorRepresentedOverlapRatio
+            : IsExteriorFragmentRepresentedByTrustedSourceBackedFallbackCandidate(
+                wall,
+                component,
+                evidenceAssessment,
+                span,
+                axisDistance)
+                ? MinExteriorFragmentRepresentedBySourceBackedFallbackOverlapRatio
             : MinRepresentedByCleanTopologyOverlapRatio;
 
     private static bool IsRecoveredRoomBoundaryPairCandidate(
@@ -335,6 +347,69 @@ internal static class WallCleanTopologyRepresentationMatcher
                 "terrace");
     }
 
+    private static bool IsExteriorFragmentRepresentedByTrustedSourceBackedFallbackCandidate(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? evidenceAssessment,
+        WallGraphTopologySpan span,
+        double axisDistance)
+    {
+        if (wall.WallType != WallType.Exterior
+            || span.SourceWall is not { WallType: WallType.Exterior } sourceWall
+            || !IsSourceBackedFallbackSpan(span)
+            || wall.DrawingLength > span.DrawingLength * MaxExteriorFragmentRepresentedBySourceBackedFallbackLengthRatio
+            || axisDistance > MaxExteriorFragmentRepresentedBySourceBackedFallbackAxisDistance
+            || sourceWall.PairEvidence is not { } pair
+            || pair.Score < MinExteriorFragmentRepresentedBySourceBackedFallbackPairScore
+            || pair.OverlapRatio < MinExteriorFragmentRepresentedBySourceBackedFallbackPairOverlapRatio
+            || component?.Kind == WallGraphComponentKind.ObjectLikeIsland
+            || evidenceAssessment is null
+            || evidenceAssessment.RejectedAsNoise
+            || evidenceAssessment.Decision == WallEvidenceDecision.Reject)
+        {
+            return false;
+        }
+
+        var hostEvidence = span.Evidence
+            .Concat(sourceWall.Evidence)
+            .ToArray();
+        if (!ContainsEvidence(hostEvidence, "source-backed clean placement fallback")
+            || !ContainsAnyEvidence(
+                hostEvidence,
+                "filled wall-solid primitive",
+                "strong double-edge wall body",
+                "paired wall-face evidence is placement-ready",
+                "trusted long isolated exterior shell",
+                "wall type exterior"))
+        {
+            return false;
+        }
+
+        return !ContainsAnyEvidence(
+            wall,
+            component,
+            evidenceAssessment,
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "door leaf",
+            "door swing",
+            "fixture detail",
+            "object/fixture",
+            "opening detail",
+            "overbygd",
+            "railing",
+            "repeated short detail",
+            "stair",
+            "surface pattern",
+            "surface/detail",
+            "terrace detail",
+            "trim/detail",
+            "wall-like linework near anchored opening",
+            "witness/extension",
+            "non-wall");
+    }
+
     private static double OverlapRatio(
         WallSegment wall,
         WallGraphTopologySpan span)
@@ -455,6 +530,19 @@ internal static class WallCleanTopologyRepresentationMatcher
             }
         }
     }
+
+    private static bool IsSourceBackedFallbackSpan(WallGraphTopologySpan span) =>
+        span.Id.Contains(":source-backed-fallback:", StringComparison.Ordinal);
+
+    private static bool ContainsEvidence(
+        IEnumerable<string> evidence,
+        string text) =>
+        evidence.Any(item => item.Contains(text, StringComparison.OrdinalIgnoreCase));
+
+    private static bool ContainsAnyEvidence(
+        IEnumerable<string> evidence,
+        params string[] text) =>
+        evidence.Any(item => text.Any(token => item.Contains(token, StringComparison.OrdinalIgnoreCase)));
 
     private enum RepresentedTopologyOrientation
     {

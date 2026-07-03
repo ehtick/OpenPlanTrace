@@ -39,6 +39,11 @@ internal static class WallTopologySpanVisibility
     private const double MaxContainedSourceBackedFallbackAxisDistanceDrawingUnits = 6.0;
     private const double MaxContainedSourceBackedFallbackLengthRatio = 0.55;
     private const double MinContainedSourceBackedFallbackOverlapRatio = 0.985;
+    private const double MaxExteriorFragmentRepresentedBySourceBackedFallbackAxisDistanceDrawingUnits = 12.0;
+    private const double MaxExteriorFragmentRepresentedBySourceBackedFallbackLengthRatio = 1.05;
+    private const double MinExteriorFragmentRepresentedBySourceBackedFallbackOverlapRatio = 0.95;
+    private const double MinExteriorFragmentRepresentedBySourceBackedFallbackPairScore = 0.86;
+    private const double MinExteriorFragmentRepresentedBySourceBackedFallbackPairOverlapRatio = 0.90;
     private const double MaxRedundantLongSourceBackedExteriorFallbackAxisDistanceDrawingUnits = 9.0;
     private const double MaxRedundantLongSourceBackedExteriorFallbackLengthRatio = 0.92;
     private const double MinRedundantLongSourceBackedExteriorFallbackOverlapRatio = 0.985;
@@ -5498,8 +5503,7 @@ internal static class WallTopologySpanVisibility
             var maxAxisDistance = ContainedDuplicateAxisDistance(candidate, kept);
             var axisDistance = Math.Abs(AxisCoordinate(candidate) - AxisCoordinate(kept));
             var couldBeTinyContainedSameType = CouldBeTinyContainedSameTypePlacementSpan(candidate, kept, axisDistance);
-            if (ResolveAxisOrientation(kept.CenterLine) != candidateOrientation
-                || (axisDistance > maxAxisDistance && !couldBeTinyContainedSameType))
+            if (ResolveAxisOrientation(kept.CenterLine) != candidateOrientation)
             {
                 continue;
             }
@@ -5511,6 +5515,20 @@ internal static class WallTopologySpanVisibility
             }
 
             var overlapRatio = overlap / Math.Max(candidate.DrawingLength, 0.001);
+            if (CanRepresentExteriorFragmentWithTrustedSourceBackedFallback(
+                    candidate,
+                    kept,
+                    overlapRatio,
+                    axisDistance))
+            {
+                return true;
+            }
+
+            if (axisDistance > maxAxisDistance && !couldBeTinyContainedSameType)
+            {
+                continue;
+            }
+
             var isTinyContainedSameType = IsTinyContainedSameTypePlacementSpan(candidate, kept, overlapRatio, axisDistance);
             if (IsContainedDuplicateOverlapAcceptable(candidate, kept, overlapRatio, axisDistance)
                 || isTinyContainedSameType)
@@ -5780,6 +5798,68 @@ internal static class WallTopologySpanVisibility
             && overlapRatio >= MinContainedSourceBackedFallbackOverlapRatio
             && candidate.DrawingLength <= kept.DrawingLength * MaxContainedSourceBackedFallbackLengthRatio
             && ContainsEvidence(candidate.Evidence, "source-backed fallback accepted");
+    }
+
+    private static bool CanRepresentExteriorFragmentWithTrustedSourceBackedFallback(
+        WallGraphTopologySpan candidate,
+        WallGraphTopologySpan kept,
+        double overlapRatio,
+        double axisDistance)
+    {
+        if (candidate.SourceWall?.WallType != WallType.Exterior
+            || kept.SourceWall?.WallType != WallType.Exterior
+            || IsSourceBackedFallbackSpan(candidate)
+            || !IsSourceBackedFallbackSpan(kept)
+            || IsTopologyBlockedSourceBackedFallbackSpan(kept)
+            || overlapRatio < MinExteriorFragmentRepresentedBySourceBackedFallbackOverlapRatio
+            || axisDistance > MaxExteriorFragmentRepresentedBySourceBackedFallbackAxisDistanceDrawingUnits
+            || candidate.DrawingLength > kept.DrawingLength * MaxExteriorFragmentRepresentedBySourceBackedFallbackLengthRatio
+            || kept.SourceWall.PairEvidence is not { } pair
+            || pair.Score < MinExteriorFragmentRepresentedBySourceBackedFallbackPairScore
+            || pair.OverlapRatio < MinExteriorFragmentRepresentedBySourceBackedFallbackPairOverlapRatio)
+        {
+            return false;
+        }
+
+        var candidateEvidence = candidate.SourceWall.Evidence
+            .Concat(candidate.Evidence)
+            .ToArray();
+        if (ContainsAnyEvidence(
+                candidateEvidence,
+                "covered-area",
+                "covered entry",
+                "covered-entry",
+                "door leaf",
+                "door swing",
+                "fixture detail",
+                "object/fixture",
+                "opening detail",
+                "overbygd",
+                "railing",
+                "repeated short detail",
+                "stair",
+                "surface pattern",
+                "surface/detail",
+                "terrace detail",
+                "trim/detail",
+                "wall-like linework near anchored opening",
+                "witness/extension",
+                "non-wall"))
+        {
+            return false;
+        }
+
+        var keptEvidence = kept.SourceWall.Evidence
+            .Concat(kept.Evidence)
+            .ToArray();
+        return ContainsEvidence(keptEvidence, "source-backed clean placement fallback")
+            && ContainsAnyEvidence(
+                keptEvidence,
+                "filled wall-solid primitive",
+                "strong double-edge wall body",
+                "paired wall-face evidence is placement-ready",
+                "trusted long isolated exterior shell",
+                "wall type exterior");
     }
 
     private static bool IsRedundantLongSourceBackedExteriorFallback(

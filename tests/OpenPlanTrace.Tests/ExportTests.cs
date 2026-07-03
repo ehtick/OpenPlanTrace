@@ -8601,6 +8601,62 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_RepresentsExteriorFragmentWithLongerTrustedSourceBackedFallback()
+    {
+        var result = CreateSourceBackedFallbackWallResult(
+            includeNearbyGraphSpan: true,
+            wallLength: 150,
+            wallType: WallType.Exterior,
+            nearbyGraphWallType: WallType.Exterior,
+            nearbyGraphAxisOffset: 10,
+            nearbyGraphStartX: 112,
+            nearbyGraphEndX: 188,
+            evidence:
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall evidence: strong double-edge wall body",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "pair score 0.93"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+
+        var fallbackWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "source-backed-fallback-wall");
+        var fallbackSpan = Assert.Single(fallbackWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", fallbackSpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+
+        var graphWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "nearby-graph-wall");
+        Assert.Empty(graphWall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Equal(
+            "duplicate_clean_topology_span",
+            graphWall.GetProperty("placementOmission").GetProperty("code").GetString());
+        Assert.Contains(
+            graphWall.GetProperty("placementOmission").GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("source-backed-fallback-wall", StringComparison.OrdinalIgnoreCase) == true);
+
+        var graphEdges = document.RootElement
+            .GetProperty("wallGraph")
+            .GetProperty("edges")
+            .EnumerateArray()
+            .ToArray();
+        var edge = Assert.Single(graphEdges);
+        Assert.Equal("source-backed-fallback-wall", edge.GetProperty("wallId").GetString());
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("representedWallCount").GetInt32());
+    }
+
+    [Fact]
     public void PlacementExporter_RepresentsNearCoveredExteriorWallByTrustedSourceBackedShell()
     {
         var result = CreateSourceBackedExteriorHostWithNearCoveredDuplicateWallResult();

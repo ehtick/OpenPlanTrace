@@ -3647,6 +3647,9 @@ public sealed record PlacementWallGraphExport(
     private const double MinContainedPlacementGraphEdgeOverlapRatio = 0.985;
     private const double MinNearContainedPlacementGraphEdgeOverlapRatio = 0.95;
     private const double MaxNearContainedPlacementGraphEdgeOverhangDrawingUnits = 4.0;
+    private const double MaxTrustedExteriorShellGraphRepresentativeAxisDistanceDrawingUnits = 12.0;
+    private const double MaxTrustedExteriorShellGraphRepresentativeLengthRatio = 1.05;
+    private const double MinTrustedExteriorShellGraphRepresentativeOverlapRatio = 0.95;
     private const double MinStackedPlacementGraphDuplicateOverlapRatio = 0.80;
     private const double MinStackedPlacementGraphDuplicateHostLengthRatio = 1.25;
     private const double MaxStackedPlacementGraphDuplicateOverhangDrawingUnits = 14.0;
@@ -4560,11 +4563,6 @@ public sealed record PlacementWallGraphExport(
             }
 
             var candidateAxisDistance = Math.Abs(candidate.Axis - representative.Axis);
-            if (candidateAxisDistance > ContainedPlacementGraphEdgeAxisTolerance(candidate, representative))
-            {
-                continue;
-            }
-
             var overlap = Math.Min(candidate.End, representative.End) - Math.Max(candidate.Start, representative.Start);
             if (overlap <= 0.001)
             {
@@ -4572,7 +4570,19 @@ public sealed record PlacementWallGraphExport(
             }
 
             var candidateOverlapRatio = overlap / Math.Max(candidate.Length, 0.001);
-            if (!IsContainedPlacementGraphOverlapAcceptable(
+            var trustedExteriorShellRepresentative = IsTrustedExteriorShellPlacementGraphRepresentative(
+                candidate,
+                representative,
+                candidateOverlapRatio,
+                candidateAxisDistance);
+            if (!trustedExteriorShellRepresentative
+                && candidateAxisDistance > ContainedPlacementGraphEdgeAxisTolerance(candidate, representative))
+            {
+                continue;
+            }
+
+            if (!trustedExteriorShellRepresentative
+                && !IsContainedPlacementGraphOverlapAcceptable(
                     candidate,
                     representative,
                     candidateOverlapRatio))
@@ -4592,6 +4602,53 @@ public sealed record PlacementWallGraphExport(
 
         return bestIndex;
     }
+
+    private static bool IsTrustedExteriorShellPlacementGraphRepresentative(
+        PlacementGraphMergeSpan candidate,
+        PlacementGraphMergeSpan representative,
+        double candidateOverlapRatio,
+        double axisDistance)
+    {
+        if (axisDistance > MaxTrustedExteriorShellGraphRepresentativeAxisDistanceDrawingUnits
+            || candidateOverlapRatio < MinTrustedExteriorShellGraphRepresentativeOverlapRatio
+            || candidate.Length > representative.Length * MaxTrustedExteriorShellGraphRepresentativeLengthRatio
+            || !candidate.Edge.Evidence.Any(IsExteriorPlacementGraphEvidence)
+            || !representative.Edge.Evidence.Any(IsExteriorPlacementGraphEvidence)
+            || !IsTrustedExteriorShellPlacementGraphMergeContinuation(representative.Edge)
+            || HasHardPlacementGraphRepresentativeDetailEvidence(representative.Edge))
+        {
+            return false;
+        }
+
+        if (!representative.Edge.Evidence.Any(item =>
+                item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("trusted long isolated exterior shell", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("placement wall graph inline run absorbed source-backed isolated continuation", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return !candidate.Edge.Evidence.Any(item =>
+            item.Contains("non-wall", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("surface/detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("wall-like linework near anchored opening", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasHardPlacementGraphRepresentativeDetailEvidence(PlacementWallGraphEdgeExport edge) =>
+        edge.Evidence.Any(item =>
+            item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("surface/detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("wall-like linework near anchored opening", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("terrace detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase));
 
     private static double ContainedPlacementGraphEdgeAxisTolerance(
         PlacementGraphMergeSpan candidate,
