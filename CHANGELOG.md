@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.09.005] - 2026-07-03
+
+- Improved wall-evidence primitive reuse.
+- Improved door-arc support checks during wall filtering.
+- Small improvement to hard PDF scan performance.
+
 ## [0.09.004] - 2026-07-03
 
 - Improved trusted exterior residual endpoint snapping.

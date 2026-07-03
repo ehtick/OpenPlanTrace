@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 
 namespace OpenPlanTrace;
 
@@ -7,6 +8,7 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     private const string StageName = "wall-evidence";
     private const int MinDimensionLikeFragmentedPerimeterPairMaxFaceFragments = 40;
     private const int MinDimensionLikeFragmentedPerimeterPairTotalFaceFragments = 48;
+    private static readonly ConditionalWeakTable<ScanContext, WallEvidencePrimitiveCache> PrimitiveCaches = new();
 
     public string Name => StageName;
 
@@ -1783,8 +1785,8 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
 
         var layerCategories = SourceLayerCategories(wall, context).ToArray();
         var doorLayerBacked = layerCategories.Any(category => category is LayerCategory.Door or LayerCategory.Window);
-        var arcSupport = NearbyDoorArcSupport(wall, page, context.Options);
-        var radialLeafSupport = NearbyRadialDoorLeafArcSupport(wall, page, context.Options);
+        var arcSupport = NearbyDoorArcSupport(wall, page, context);
+        var radialLeafSupport = NearbyRadialDoorLeafArcSupport(wall, page, context);
         var lengthLimit = Math.Max(context.Options.MaxOpeningGap * 1.7, context.Options.MinWallLength * 2.0);
         var structuralEndpointSupportCount = CountStructuralEndpointSupport(
             wall.CenterLine,
@@ -1886,7 +1888,7 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
 
         var layerCategories = SourceLayerCategories(wall, context).Distinct().ToArray();
         var doorLayerBacked = layerCategories.Any(category => category is LayerCategory.Door or LayerCategory.Window);
-        var arcSupport = NearbyDoorArcSupport(wall, page, context.Options);
+        var arcSupport = NearbyDoorArcSupport(wall, page, context);
         var hasSwingArcEvidence = arcSupport.Score >= (doorLayerBacked ? 0.42 : 0.62);
         if (!doorLayerBacked && !hasSwingArcEvidence)
         {
@@ -2168,7 +2170,7 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
                     continue;
                 }
 
-                if (IsShortRecoveryDoorLeafNoise(candidate, page, context.Options))
+                if (IsShortRecoveryDoorLeafNoise(candidate, page, context))
                 {
                     continue;
                 }
@@ -2567,10 +2569,14 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
                     var first = lines[leftIndex];
                     var second = lines[rightIndex];
                     var separation = Math.Abs(first.Coordinate - second.Coordinate);
-                    if (separation < context.Options.MinWallPairSeparation
-                        || separation > context.Options.MaxWallPairSeparation)
+                    if (separation < context.Options.MinWallPairSeparation)
                     {
                         continue;
+                    }
+
+                    if (separation > context.Options.MaxWallPairSeparation)
+                    {
+                        break;
                     }
 
                     var overlap = AxisOverlap(first, second);
@@ -2868,21 +2874,22 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     private static bool IsShortRecoveryDoorLeafNoise(
         PrimitiveLineCandidate candidate,
         PlanPage page,
-        ScannerOptions options)
+        ScanContext context)
     {
+        var options = context.Options;
         var syntheticWall = new WallSegment(
             "wall-evidence-short-recovery-candidate",
             page.Number,
             candidate.Segment,
             options.DefaultWallThickness,
             Confidence.Low);
-        var radialLeafSupport = NearbyRadialDoorLeafArcSupport(syntheticWall, page, options);
+        var radialLeafSupport = NearbyRadialDoorLeafArcSupport(syntheticWall, page, context);
         if (radialLeafSupport.Score >= 0.70)
         {
             return true;
         }
 
-        var arcSupport = NearbyDoorArcSupport(syntheticWall, page, options);
+        var arcSupport = NearbyDoorArcSupport(syntheticWall, page, context);
         return arcSupport.Score >= 0.86
             && candidate.Length <= Math.Max(options.MaxOpeningGap * 1.05, options.MinWallLength * 1.15);
     }
@@ -3020,16 +3027,16 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     private static NearbyArcSupport NearbyDoorArcSupport(
         WallSegment wall,
         PlanPage page,
-        ScannerOptions options)
+        ScanContext context)
     {
+        var options = context.Options;
         var searchBounds = wall.Bounds.Inflate(Math.Max(options.MaxOpeningGap * 0.75, options.WallSnapTolerance * 8.0));
         var best = NearbyArcSupport.Empty;
 
-        for (var index = 0; index < page.Primitives.Count; index++)
+        foreach (var cachedArc in GetPrimitiveCache(context).DoorArcsForPage(page.Number))
         {
-            var primitive = page.Primitives[index];
-            if (!TryResolveDoorSwingArcPrimitive(primitive, options, out var arc)
-                || !arc.Bounds.Intersects(searchBounds)
+            var arc = cachedArc.Arc;
+            if (!arc.Bounds.Intersects(searchBounds)
                 || arc.Radius < options.MinOpeningGap * 0.35
                 || arc.Radius > options.MaxOpeningGap * 1.35)
             {
@@ -3065,7 +3072,7 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             {
                 best = new NearbyArcSupport(
                     Math.Min(score, 0.98),
-                    primitive.SourceId ?? primitive.Source.SourceId ?? $"p{page.Number}:primitive:{index}",
+                    cachedArc.SourceId,
                     arc.Bounds);
             }
         }
@@ -3076,16 +3083,16 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     private static NearbyArcSupport NearbyRadialDoorLeafArcSupport(
         WallSegment wall,
         PlanPage page,
-        ScannerOptions options)
+        ScanContext context)
     {
+        var options = context.Options;
         var searchBounds = wall.Bounds.Inflate(Math.Max(options.MaxOpeningGap * 0.75, options.WallSnapTolerance * 8.0));
         var best = NearbyArcSupport.Empty;
 
-        for (var index = 0; index < page.Primitives.Count; index++)
+        foreach (var cachedArc in GetPrimitiveCache(context).DoorArcsForPage(page.Number))
         {
-            var primitive = page.Primitives[index];
-            if (!TryResolveDoorSwingArcPrimitive(primitive, options, out var arc)
-                || !arc.Bounds.Intersects(searchBounds)
+            var arc = cachedArc.Arc;
+            if (!arc.Bounds.Intersects(searchBounds)
                 || !IsPlausibleDoorSwingArc(arc, options))
             {
                 continue;
@@ -3105,7 +3112,7 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             {
                 best = new NearbyArcSupport(
                     Math.Min(score, 0.98),
-                    primitive.SourceId ?? primitive.Source.SourceId ?? $"p{page.Number}:primitive:{index}",
+                    cachedArc.SourceId,
                     arc.Bounds);
             }
         }
@@ -3174,25 +3181,14 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
         return false;
     }
 
-    private static IEnumerable<LayerCategory> SourceLayerCategories(WallSegment wall, ScanContext context)
-    {
-        var sourceIds = wall.SourcePrimitiveIds.ToHashSet(StringComparer.Ordinal);
-        foreach (var page in context.Document.Pages.Where(page => page.Number == wall.PageNumber))
-        {
-            for (var index = 0; index < page.Primitives.Count; index++)
-            {
-                var primitive = page.Primitives[index];
-                var sourceId = context.PrimitiveId(page.Number, index, primitive);
-                if (sourceIds.Contains(sourceId))
-                {
-                    yield return LayerCategoryFor(primitive.Layer ?? primitive.Source.Layer, context);
-                }
-            }
-        }
-    }
+    private static IEnumerable<LayerCategory> SourceLayerCategories(WallSegment wall, ScanContext context) =>
+        GetPrimitiveCache(context).SourceLayerCategories(wall);
 
     private static bool IsWallLayerBacked(WallSegment wall, ScanContext context) =>
         SourceLayerCategories(wall, context).Any(IsWallLikeCategory);
+
+    private static WallEvidencePrimitiveCache GetPrimitiveCache(ScanContext context) =>
+        PrimitiveCaches.GetValue(context, static scanContext => WallEvidencePrimitiveCache.Create(scanContext));
 
     private static bool IsWallLikeCategory(LayerCategory category) =>
         category is LayerCategory.Wall or LayerCategory.Structural;
@@ -3467,6 +3463,82 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
         }
     }
 
+    private sealed class WallEvidencePrimitiveCache
+    {
+        private readonly IReadOnlyDictionary<int, IReadOnlyList<CachedDoorArc>> _doorArcsByPage;
+        private readonly IReadOnlyDictionary<int, IReadOnlyDictionary<string, IReadOnlyList<LayerCategory>>> _layerCategoriesBySourceIdByPage;
+
+        private WallEvidencePrimitiveCache(
+            IReadOnlyDictionary<int, IReadOnlyList<CachedDoorArc>> doorArcsByPage,
+            IReadOnlyDictionary<int, IReadOnlyDictionary<string, IReadOnlyList<LayerCategory>>> layerCategoriesBySourceIdByPage)
+        {
+            _doorArcsByPage = doorArcsByPage;
+            _layerCategoriesBySourceIdByPage = layerCategoriesBySourceIdByPage;
+        }
+
+        public static WallEvidencePrimitiveCache Create(ScanContext context)
+        {
+            var doorArcsByPage = new Dictionary<int, IReadOnlyList<CachedDoorArc>>();
+            var layerCategoriesBySourceIdByPage = new Dictionary<int, IReadOnlyDictionary<string, IReadOnlyList<LayerCategory>>>();
+
+            foreach (var page in context.Document.Pages)
+            {
+                var doorArcs = new List<CachedDoorArc>();
+                var layerCategories = new Dictionary<string, List<LayerCategory>>(StringComparer.Ordinal);
+
+                for (var index = 0; index < page.Primitives.Count; index++)
+                {
+                    var primitive = page.Primitives[index];
+                    var sourceId = context.PrimitiveId(page.Number, index, primitive);
+                    if (!layerCategories.TryGetValue(sourceId, out var categories))
+                    {
+                        categories = new List<LayerCategory>();
+                        layerCategories[sourceId] = categories;
+                    }
+
+                    categories.Add(LayerCategoryFor(primitive.Layer ?? primitive.Source.Layer, context));
+
+                    if (TryResolveDoorSwingArcPrimitive(primitive, context.Options, out var arc))
+                    {
+                        doorArcs.Add(new CachedDoorArc(sourceId, arc));
+                    }
+                }
+
+                doorArcsByPage[page.Number] = doorArcs.ToArray();
+                layerCategoriesBySourceIdByPage[page.Number] = layerCategories.ToDictionary(
+                    pair => pair.Key,
+                    pair => (IReadOnlyList<LayerCategory>)pair.Value.ToArray(),
+                    StringComparer.Ordinal);
+            }
+
+            return new WallEvidencePrimitiveCache(doorArcsByPage, layerCategoriesBySourceIdByPage);
+        }
+
+        public IReadOnlyList<CachedDoorArc> DoorArcsForPage(int pageNumber) =>
+            _doorArcsByPage.TryGetValue(pageNumber, out var doorArcs)
+                ? doorArcs
+                : Array.Empty<CachedDoorArc>();
+
+        public IEnumerable<LayerCategory> SourceLayerCategories(WallSegment wall)
+        {
+            if (!_layerCategoriesBySourceIdByPage.TryGetValue(wall.PageNumber, out var layerCategoriesBySourceId))
+            {
+                yield break;
+            }
+
+            foreach (var sourceId in wall.SourcePrimitiveIds)
+            {
+                if (layerCategoriesBySourceId.TryGetValue(sourceId, out var categories))
+                {
+                    foreach (var category in categories)
+                    {
+                        yield return category;
+                    }
+                }
+            }
+        }
+    }
+
     private readonly record struct PrimitiveLineCandidate(
         string SourceId,
         int PageNumber,
@@ -3504,6 +3576,8 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     {
         public static NearbyArcSupport Empty { get; } = new(0, null, PlanRect.Empty);
     }
+
+    private readonly record struct CachedDoorArc(string SourceId, ArcPrimitive Arc);
 
     private readonly record struct FaceFragmentCounts(
         int MaxFaceFragments,
