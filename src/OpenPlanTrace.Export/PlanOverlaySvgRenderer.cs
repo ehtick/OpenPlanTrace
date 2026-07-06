@@ -827,7 +827,11 @@ public static class PlanOverlaySvgRenderer
         var placementWallGraph = options.IncludePlacementWallGraph
             ? placementExport.WallGraph
             : null;
-        var wallReadiness = WallPlacementOmissionSummary.From(result, page.Number);
+        var wallReadiness = WallPlacementOmissionSummary.From(
+            result,
+            page.Number,
+            placementPageSummary: placementPageSummary,
+            placementWalls: placementExport.Walls);
         var repairCandidateCount = result.WallGraph.RepairCandidates.Count(candidate => candidate.PageNumber == page.Number);
         var blockingRepairCandidateCount = result.WallGraph.RepairCandidates.Count(candidate =>
             candidate.PageNumber == page.Number
@@ -1334,14 +1338,27 @@ public static class PlanOverlaySvgRenderer
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> OmittedWallRiskHighlights(
         PlanScanResult result,
         int pageNumber,
-        SvgOverlayRenderOptions options) =>
-        options.IncludeOmittedWallRiskHighlights
-            ? WallPlacementOmissionSummary
-                .VisualOmittedWallRisks(result, pageNumber)
-                .Where(risk => options.IncludeSuppressedDetailWallTopologySpans
-                    || !WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(risk))
-                .ToArray()
-            : Array.Empty<PlanOverlayWallPlacementOmittedWallExample>();
+        SvgOverlayRenderOptions options)
+    {
+        if (!options.IncludeOmittedWallRiskHighlights)
+        {
+            return Array.Empty<PlanOverlayWallPlacementOmittedWallExample>();
+        }
+
+        var placementExport = PlanPlacementExport.From(result);
+        var placementPageSummary = placementExport.Summary.PageSummaries
+            .FirstOrDefault(summary => summary.PageNumber == pageNumber);
+
+        return WallPlacementOmissionSummary
+            .VisualOmittedWallRisks(
+                result,
+                pageNumber,
+                placementPageSummary: placementPageSummary,
+                placementWalls: placementExport.Walls)
+            .Where(risk => options.IncludeSuppressedDetailWallTopologySpans
+                || !WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(risk))
+            .ToArray();
+    }
 
     private static PlanRect OmittedWallRiskBounds(PlanOverlayWallPlacementOmittedWallExample risk)
     {

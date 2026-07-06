@@ -314,11 +314,15 @@ internal static class WallPlacementOmissionSummary
     public static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> VisualOmittedWallRisks(
         PlanScanResult result,
         int pageNumber,
-        int maxExamples = 12) =>
+        int maxExamples = 12,
+        PlacementPageSummaryExport? placementPageSummary = null,
+        IReadOnlyList<PlacementWallExport>? placementWalls = null) =>
         From(
                 result,
                 pageNumber,
-                maxOmittedWallExamples: Math.Max(maxExamples * 3, 24))
+                maxOmittedWallExamples: Math.Max(maxExamples * 3, 24),
+                placementPageSummary: placementPageSummary,
+                placementWalls: placementWalls)
             .OmittedWallExamples
             .Where(IsVisualOmittedWallRisk)
             .Take(maxExamples)

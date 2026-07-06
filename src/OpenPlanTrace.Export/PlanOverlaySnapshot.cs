@@ -527,12 +527,22 @@ public sealed record PlanOverlayPageSnapshot(
     private static PlanOverlayWallPlacementOmittedWallExample[] OmittedWallRiskHighlights(
         PlanScanResult result,
         int pageNumber,
-        SvgOverlayRenderOptions options) =>
-        WallPlacementOmissionSummary
-            .VisualOmittedWallRisks(result, pageNumber)
+        SvgOverlayRenderOptions options)
+    {
+        var placementExport = PlanPlacementExport.From(result);
+        var placementPageSummary = placementExport.Summary.PageSummaries
+            .FirstOrDefault(summary => summary.PageNumber == pageNumber);
+
+        return WallPlacementOmissionSummary
+            .VisualOmittedWallRisks(
+                result,
+                pageNumber,
+                placementPageSummary: placementPageSummary,
+                placementWalls: placementExport.Walls)
             .Where(risk => options.IncludeSuppressedDetailWallTopologySpans
                 || !WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(risk))
             .ToArray();
+    }
 
     private static PlanRect OmittedWallRiskBounds(PlanOverlayWallPlacementOmittedWallExample example)
     {

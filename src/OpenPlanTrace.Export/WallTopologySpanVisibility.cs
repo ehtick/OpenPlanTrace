@@ -89,6 +89,7 @@ internal static class WallTopologySpanVisibility
     private const double MaxSourceBackedFallbackFaceSeparationDrawingUnits = 24.0;
     private const double MaxSourceBackedFallbackExistingCoverageRatio = 0.68;
     private const double MinLongSourceBackedFallbackWallLengthDrawingUnits = 120.0;
+    private const int MinTrustedClippedSourceBackedExteriorShellClosurePrimitiveCount = 3;
     private const double MinTrustedShortExteriorSourceBackedFallbackWallLengthDrawingUnits = 36.0;
     private const double MinTrustedShortExteriorSourceBackedFallbackPairScore = 0.88;
     private const double MinTrustedShortExteriorSourceBackedFallbackOverlapRatio = 0.95;
@@ -1576,8 +1577,49 @@ internal static class WallTopologySpanVisibility
             .Concat(assessment.ScoreBreakdown.NegativeEvidence)
             .ToArray();
 
-        return ContainsEvidence(evidence, "source-backed exterior shell closure")
-            && !ContainsEvidence(evidence, "source-backed shell closure clipped around outdoor rooms");
+        if (!ContainsEvidence(evidence, "source-backed exterior shell closure"))
+        {
+            return false;
+        }
+
+        return !ContainsEvidence(evidence, "source-backed shell closure clipped around outdoor rooms")
+            || IsTrustedClippedSourceBackedExteriorShellClosure(wall, evidence);
+    }
+
+    private static bool IsTrustedClippedSourceBackedExteriorShellClosure(
+        WallSegment wall,
+        IReadOnlyList<string> evidence)
+    {
+        if (wall.SourcePrimitiveIds.Count < MinTrustedClippedSourceBackedExteriorShellClosurePrimitiveCount
+            || wall.DrawingLength < MinLongSourceBackedFallbackWallLengthDrawingUnits
+            || !ContainsEvidence(evidence, "shell anchors")
+            || (!ContainsEvidence(evidence, "source-backed shell closure start anchors")
+                && !ContainsEvidence(evidence, "source-backed shell closure end anchors")
+                && !ContainsEvidence(evidence, "source-backed shell closure length")))
+        {
+            return false;
+        }
+
+        return !ContainsAnyEvidence(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "covered-entry",
+            "covered entry",
+            "overbygd",
+            "canopy",
+            "terrace boundary",
+            "railing",
+            "stair-like linework",
+            "surface pattern",
+            "object/fixture",
+            "fixture detail",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc");
     }
 
     private static bool IsTrustedExteriorSourceBackedFallbackForUnsafeCleanProjection(

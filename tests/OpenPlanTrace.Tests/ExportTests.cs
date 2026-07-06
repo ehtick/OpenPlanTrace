@@ -2761,6 +2761,34 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void SvgRenderer_WallQaFocusProfileDoesNotFlagPlacementReadySourceBackedFallbackAsOmittedRisk()
+    {
+        var result = CreateSourceBackedExteriorShellClosureFallbackResult(
+            [
+                "wall evidence: source-backed shell closure clipped around outdoor rooms page:1:room:11",
+                "wall evidence: source-backed shell closure length 199.266, anchors page:1:wall:35,page:1:wall:47",
+                "wall evidence: source-backed shell closure primitive count 3",
+                "wall evidence: source-backed shell closure start anchors page:1:wall:35",
+                "wall evidence: source-backed shell closure end anchors page:1:wall:47"
+            ]);
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
+
+        Assert.DoesNotContain("id=\"wall-omitted-risk-highlights\"", svg);
+        Assert.DoesNotContain("omitted wall review risk 1", svg);
+
+        var snapshot = PlanOverlaySnapshot.From(
+            result,
+            new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
+        var page = Assert.Single(snapshot.Pages);
+        Assert.Equal(0, page.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count);
+    }
+
+    [Fact]
     public void SvgRenderer_WallQaRecallProfileKeepsSuppressedDetailOmittedRiskHighlights()
     {
         var result = WithOpeningLinkedOneEndpointFragment(CreateDenseMinorRoutingDetailResult());
@@ -6251,6 +6279,42 @@ public sealed class ExportTests
         Assert.Equal(1, summary.GetProperty("placementOmittedWallCount").GetInt32());
         Assert.Equal(0, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
         Assert.Equal(0, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
+    }
+
+    [Fact]
+    public void PlacementExporter_RecoversAnchoredOutdoorClippedSourceBackedExteriorShellClosure()
+    {
+        var result = CreateSourceBackedExteriorShellClosureFallbackResult(
+            [
+                "wall evidence: source-backed shell closure clipped around outdoor rooms page:1:room:11",
+                "wall evidence: source-backed shell closure length 199.266, anchors page:1:wall:35,page:1:wall:47",
+                "wall evidence: source-backed shell closure primitive count 3",
+                "wall evidence: source-backed shell closure start anchors page:1:wall:35",
+                "wall evidence: source-backed shell closure end anchors page:1:wall:47"
+            ]);
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var wall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "page:1:wall-exterior-shell-source-backed:001");
+
+        var topologySpan = Assert.Single(wall.GetProperty("topologySpans").EnumerateArray());
+        Assert.Contains("source-backed-fallback", topologySpan.GetProperty("id").GetString(), StringComparison.Ordinal);
+        Assert.Equal(JsonValueKind.Null, wall.GetProperty("placementOmission").ValueKind);
+        Assert.True(wall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Contains(
+            topologySpan.GetProperty("evidence").EnumerateArray(),
+            evidence => evidence.GetString()?.Contains("source-backed exterior shell closure is placement-ready", StringComparison.OrdinalIgnoreCase) == true);
+
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("placementReadyWallCount").GetInt32());
+        Assert.Equal(0, summary.GetProperty("placementOmittedWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackWallCount").GetInt32());
+        Assert.Equal(1, summary.GetProperty("sourceBackedFallbackTopologySpanCount").GetInt32());
     }
 
     [Fact]

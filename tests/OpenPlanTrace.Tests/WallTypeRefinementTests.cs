@@ -2370,6 +2370,55 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_KeepsMainStructuralDenseEndpointWallDespiteOffAxisClutter()
+    {
+        var wall = ShortUnlayeredInteriorWall("wall-main-dense-endpoint-supported", 100, 100, 167.4, 100) with
+        {
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 2,442 drawing units",
+                "pair score 0,851",
+                "overlap ratio 0,966",
+                "first face merged 11 fragments",
+                "second face merged 6 fragments",
+                "second face healed 11,917 drawing units of gaps; max gap 7,917",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence: strong double-edge wall body"
+            ]
+        };
+        var context = CreateContext("main-structural-dense-endpoint-wall-protection");
+        var neighbors = DenseDetailNeighborWalls().ToArray();
+        context.Walls.Add(wall);
+        context.Walls.AddRange(neighbors);
+        context.WallGraph = SupportedFragmentEndpointGraphFor(wall, WallGraphComponentKind.MainStructural);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.Equal(WallEvidenceCategory.StrongWallBody, retained.Category);
+        Assert.True(retained.PlacementReady);
+        Assert.False(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("dense local detail/stair-like linework", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "0");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_KeepsDenseLocalWallWithExplicitRoomBoundarySupport()
     {
         var wall = ShortUnlayeredInteriorWall("wall-dense-but-room-boundary", 100, 100, 146, 100);

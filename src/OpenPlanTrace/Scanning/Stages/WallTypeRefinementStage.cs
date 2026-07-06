@@ -16,6 +16,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private const double MinTrustedDenseStructuralEndpointPairScore = 0.80;
     private const double MinTrustedDenseStructuralEndpointPairOverlap = 0.98;
     private const int MinTrustedDenseStructuralEndpointCount = 2;
+    private const double MinTrustedMainStructuralDenseEndpointWallLength = 60.0;
+    private const double MaxTrustedMainStructuralDenseEndpointWallLength = 96.0;
+    private const double MinTrustedMainStructuralDenseEndpointPairScore = 0.84;
+    private const double MinTrustedMainStructuralDenseEndpointPairOverlap = 0.95;
+    private const int MinTrustedMainStructuralDenseEndpointCount = 3;
+    private const int MaxTrustedMainStructuralDenseEndpointFaceFragments = 12;
+    private const int MaxTrustedMainStructuralDenseEndpointTotalFaceFragments = 24;
     private const double MinMainStructuralOneEndpointDenseRoomBoundaryLength = 42.0;
     private const double MaxMainStructuralOneEndpointDenseRoomBoundaryLength = 96.0;
     private const double MinMainStructuralOneEndpointDenseRoomBoundaryPairScore = 0.94;
@@ -2492,7 +2499,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 sideEvidence,
                 supportedTopologyEndpointCount,
                 hasGeometricRoomBoundarySupport,
-                offAxisNearbyCount))
+                offAxisNearbyCount)
+            || IsTrustedMainStructuralDenseEndpointPairWall(
+                wall,
+                component,
+                evidence,
+                supportedTopologyEndpointCount,
+                hasDimensionLikeWeakLayer))
         {
             return false;
         }
@@ -2629,6 +2642,62 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
             || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
             || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsTrustedMainStructuralDenseEndpointPairWall(
+        WallSegment wall,
+        WallGraphComponent? component,
+        IReadOnlyList<string> evidence,
+        int supportedTopologyEndpointCount,
+        bool hasDimensionLikeWeakLayer)
+    {
+        if (hasDimensionLikeWeakLayer
+            || wall.WallType != WallType.Interior
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind != WallGraphComponentKind.MainStructural
+            || supportedTopologyEndpointCount < MinTrustedMainStructuralDenseEndpointCount
+            || wall.DrawingLength < MinTrustedMainStructuralDenseEndpointWallLength
+            || wall.DrawingLength > MaxTrustedMainStructuralDenseEndpointWallLength
+            || !TryReadPairScore(evidence, out var pairScore)
+            || pairScore < MinTrustedMainStructuralDenseEndpointPairScore
+            || !TryReadFaceFragmentCounts(evidence, out var faceFragments)
+            || faceFragments.MaxFaceFragmentCount > MaxTrustedMainStructuralDenseEndpointFaceFragments
+            || faceFragments.TotalFaceFragmentCount > MaxTrustedMainStructuralDenseEndpointTotalFaceFragments)
+        {
+            return false;
+        }
+
+        var pairOverlap = wall.PairEvidence?.OverlapRatio
+            ?? (TryReadPairOverlapRatio(evidence, out var parsedOverlapRatio) ? parsedOverlapRatio : 0);
+        if (pairOverlap < MinTrustedMainStructuralDenseEndpointPairOverlap)
+        {
+            return false;
+        }
+
+        if (!evidence.Any(item => item.Contains("supported wall evidence inside exterior envelope", StringComparison.OrdinalIgnoreCase))
+            || !evidence.Any(item => item.Contains("strong double-edge wall body", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return !evidence.Any(item =>
+            item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("object/fixture", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("fixture detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door/opening", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door swing", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door leaf", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("door arc", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("stair", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("outdoor", StringComparison.OrdinalIgnoreCase)
             || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase));
     }
 
