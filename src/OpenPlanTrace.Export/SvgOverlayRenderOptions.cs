@@ -64,6 +64,8 @@ public sealed record SvgOverlayRenderOptions
 
     public bool IncludePlacementWallGraphNodes { get; init; }
 
+    public bool IncludeOmittedWallRiskHighlights { get; init; }
+
     public bool IncludeRoutingLayer { get; init; }
 
     public bool IncludeSourceContext { get; init; }
@@ -146,6 +148,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeReviewOnlyWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true
@@ -176,6 +179,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSuppressedDetailWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true
@@ -206,6 +210,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSuppressedDetailWallTopologySpans = true,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true
@@ -235,6 +240,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeReviewOnlyWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true,

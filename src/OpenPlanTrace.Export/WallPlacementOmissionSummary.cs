@@ -311,6 +311,64 @@ internal static class WallPlacementOmissionSummary
         || string.Equals(code, "repeated_short_detail_review_required", StringComparison.Ordinal)
         || string.Equals(code, "tiny_door_adjacent_topology_suppressed", StringComparison.Ordinal);
 
+    public static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> VisualOmittedWallRisks(
+        PlanScanResult result,
+        int pageNumber,
+        int maxExamples = 12) =>
+        From(
+                result,
+                pageNumber,
+                maxOmittedWallExamples: Math.Max(maxExamples * 3, 24))
+            .OmittedWallExamples
+            .Where(IsVisualOmittedWallRisk)
+            .Take(maxExamples)
+            .ToArray();
+
+    public static bool IsVisualOmittedWallRisk(PlanOverlayWallPlacementOmittedWallExample example)
+    {
+        ArgumentNullException.ThrowIfNull(example);
+
+        if (IsRepresentedWall(example.Code))
+        {
+            return false;
+        }
+
+        if (example.IsPriority)
+        {
+            return true;
+        }
+
+        if (example.Code is
+            "no_clean_topology_spans"
+            or "wall_evidence_review_required"
+            or "fragment_geometry_review"
+            or "fragmented_interior_without_room_boundary_support"
+            or "weak_promoted_fragment_room_boundary_review_required"
+            or "main_structural_semantic_support_review_required"
+            or "secondary_without_room_boundary_support"
+            or "secondary_object_linework_without_room_boundary_support"
+            or "isolated_fragment")
+        {
+            return true;
+        }
+
+        return example.DrawingLength >= 120
+            && example.Confidence >= 0.62
+            && !string.Equals(example.Code, "object_like_linework", StringComparison.Ordinal);
+    }
+
+    public static bool IsSuppressedDetailOmittedWallRisk(PlanOverlayWallPlacementOmittedWallExample example)
+    {
+        ArgumentNullException.ThrowIfNull(example);
+
+        return example.Code is
+            "opening_linked_isolated_fragment_suppressed"
+            or "tiny_door_adjacent_topology_suppressed"
+            or "repeated_short_detail_review_required"
+            or "short_dense_detail_review_required"
+            || example.Evidence.Any(item => item.Contains("opening candidate", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(
         IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> examples,
         int maxRows)

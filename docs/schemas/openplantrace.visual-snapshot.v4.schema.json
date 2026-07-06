@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:openplantrace:schema:visual-snapshot:v4",
   "title": "OpenPlanTrace Visual Snapshot",
-  "description": "Schema for compact visual QA snapshots emitted beside OpenPlanTrace SVG overlays. The snapshot records page-coordinate frames, overlay artifact links, detector layer counts, bounds, confidence summaries, coverage, wall placement omission summaries, and visual-review issues for repeatable scanner QA.",
+  "description": "Schema for compact visual QA snapshots emitted beside OpenPlanTrace SVG overlays. The snapshot records page-coordinate frames, overlay artifact links, detector layer counts, bounds, confidence summaries, coverage, wall placement omission summaries, omitted-wall risk highlight layers, and visual-review issues for repeatable scanner QA.",
   "type": "object",
   "additionalProperties": true,
   "x-openplantrace-schemaVersion": "openplantrace.visual-snapshot.v4",

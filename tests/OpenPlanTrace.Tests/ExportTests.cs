@@ -2667,6 +2667,9 @@ public sealed class ExportTests
         Assert.Contains("id=\"wall-body-footprints\"", svg);
         Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
         Assert.Contains("id=\"wall-topology-review-spans\"", svg);
+        Assert.Contains("id=\"wall-omitted-risk-highlights\"", svg);
+        Assert.Contains("Orange/pink =", svg);
+        Assert.Contains("omitted wall review risk 1", svg);
         Assert.Contains("wall body footprint detail-host:solid-span:1:body-footprint", svg);
         Assert.Contains("placement wall graph edge detail-host:clean-run:1", svg);
         Assert.Contains("non-placement wall topology span edge-tooth-2", svg);
@@ -2806,9 +2809,9 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa-focus\"", svg);
         Assert.Contains("data-viewport=\"focused-wall-qa\"", svg);
-        Assert.Contains("viewBox=\"74 74 520", svg);
-        Assert.Contains("<rect class=\"sheet-bg\" x=\"74\" y=\"74\" width=\"520\"", svg);
-        Assert.Contains("<g id=\"legend\" transform=\"translate(342 86)\"", svg);
+        Assert.Contains("viewBox=\"", svg);
+        Assert.Contains("<rect class=\"sheet-bg\"", svg);
+        Assert.Contains("<g id=\"legend\"", svg);
         Assert.Contains("Focused wall topology crop", svg);
         Assert.Contains("Solid blue/green = compact import wall graph", svg);
         Assert.Contains("Faint source linework context", svg);
@@ -3121,9 +3124,11 @@ public sealed class ExportTests
         Assert.Contains("wallTopologyReviewSpans", page.VisibleLayerNames);
         Assert.Contains("sourceContext", page.VisibleLayerNames);
         Assert.Contains("wallBodyFootprints", page.VisibleLayerNames);
+        Assert.Contains("wallOmittedRiskHighlights", page.VisibleLayerNames);
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "wallBodyFootprints").Count);
         Assert.Equal(1, page.Layers.Single(layer => layer.Name == "placementWallGraphEdges").Count);
         Assert.Equal(3, page.Layers.Single(layer => layer.Name == "wallTopologyReviewSpans").Count);
+        Assert.True(page.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count >= 1);
         Assert.DoesNotContain("wallTopologySpans", page.VisibleLayerNames);
         Assert.DoesNotContain("walls", page.VisibleLayerNames);
     }

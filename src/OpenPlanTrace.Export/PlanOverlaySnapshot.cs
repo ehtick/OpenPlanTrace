@@ -196,6 +196,7 @@ public sealed record PlanOverlayPageSnapshot(
         Add(options.IncludeWallGraphRepairs, "wallGraphRepairs");
         Add(options.IncludePlacementWallGraph, "placementWallGraphEdges");
         Add(options.IncludePlacementWallGraphNodes, "placementWallGraphNodes");
+        Add(options.IncludeOmittedWallRiskHighlights, "wallOmittedRiskHighlights");
         Add(options.IncludeWalls, "walls");
         Add(options.IncludeWallNodes, "wallNodes");
         Add(options.IncludeRooms, "rooms");
@@ -359,6 +360,19 @@ public sealed record PlanOverlayPageSnapshot(
                     .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
         }
 
+        if (options.IncludeOmittedWallRiskHighlights)
+        {
+            var omittedWallRisks = OmittedWallRiskHighlights(result, pageNumber, options);
+            yield return Layer(
+                "wallOmittedRiskHighlights",
+                omittedWallRisks,
+                OmittedWallRiskBounds,
+                item => new Confidence(item.Confidence),
+                omittedWallRisks
+                    .GroupBy(item => item.Code, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
+        }
+
         var visibleTopologySpans = WallTopologySpanVisibility.BuildVisibleTopologySpans(result, pageNumber, options);
         yield return Layer(
             "wallTopologySpans",
@@ -508,6 +522,26 @@ public sealed record PlanOverlayPageSnapshot(
         var width = Math.Abs(edge.CenterLine.End.X - edge.CenterLine.Start.X);
         var height = Math.Abs(edge.CenterLine.End.Y - edge.CenterLine.Start.Y);
         return new PlanRect(minX, minY, width, height);
+    }
+
+    private static PlanOverlayWallPlacementOmittedWallExample[] OmittedWallRiskHighlights(
+        PlanScanResult result,
+        int pageNumber,
+        SvgOverlayRenderOptions options) =>
+        WallPlacementOmissionSummary
+            .VisualOmittedWallRisks(result, pageNumber)
+            .Where(risk => options.IncludeSuppressedDetailWallTopologySpans
+                || !WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(risk))
+            .ToArray();
+
+    private static PlanRect OmittedWallRiskBounds(PlanOverlayWallPlacementOmittedWallExample example)
+    {
+        var minX = Math.Min(example.CenterLine.Start.X, example.CenterLine.End.X);
+        var minY = Math.Min(example.CenterLine.Start.Y, example.CenterLine.End.Y);
+        var maxX = Math.Max(example.CenterLine.Start.X, example.CenterLine.End.X);
+        var maxY = Math.Max(example.CenterLine.Start.Y, example.CenterLine.End.Y);
+        var padding = example.IsPriority ? 4.0 : 2.5;
+        return new PlanRect(minX, minY, maxX - minX, maxY - minY).Inflate(padding);
     }
 
     private static PlanOverlayLayerSnapshot BuildLayer<T>(

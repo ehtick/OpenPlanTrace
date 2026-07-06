@@ -2248,6 +2248,11 @@ h1 {
   fill: rgba(166, 95, 0, 0.045);
 }
 
+.visual-snapshot-layer.wallOmittedRiskHighlights {
+  stroke: #d92d20;
+  fill: rgba(249, 115, 22, 0.075);
+}
+
 .visual-snapshot-layer.rooms {
   stroke: var(--green);
   fill: rgba(63, 143, 87, 0.05);

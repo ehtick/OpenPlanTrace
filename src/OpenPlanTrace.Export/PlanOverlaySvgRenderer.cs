@@ -109,6 +109,11 @@ public static class PlanOverlaySvgRenderer
             .placement-wall-graph-node { fill: #ffffff; stroke: #111827; stroke-width: 0.78; vector-effect: non-scaling-stroke; }
             .placement-wall-graph-node-junction { fill: #eef6ff; stroke: #075ecf; stroke-width: 0.92; }
             .placement-wall-graph-node-endpoint { fill: #f7fff9; stroke: #087a45; }
+            .wall-omitted-risk { fill: rgba(249, 115, 22, 0.08); stroke: #f97316; stroke-width: 1.35; stroke-dasharray: 3 2.5; vector-effect: non-scaling-stroke; }
+            .wall-omitted-risk-priority { fill: rgba(217, 45, 32, 0.11); stroke: #d92d20; stroke-width: 1.75; }
+            .wall-omitted-risk-line { stroke: #f97316; stroke-width: 2.05; stroke-linecap: round; fill: none; vector-effect: non-scaling-stroke; }
+            .wall-omitted-risk-priority-line { stroke: #d92d20; stroke-width: 2.45; }
+            .wall-omitted-risk-label { font: 700 9px Segoe UI, Arial, sans-serif; fill: #7a271a; paint-order: stroke; stroke: #ffffff; stroke-width: 2.5; stroke-linejoin: round; }
             .node { fill: rgba(255,255,255,0.65); stroke: #b82f42; stroke-width: 0.42; vector-effect: non-scaling-stroke; }
             .room { fill: rgba(63, 143, 87, 0.075); stroke: #3f8f57; stroke-width: 0.95; vector-effect: non-scaling-stroke; }
             .room-cluster { fill: rgba(47, 125, 104, 0.035); stroke: #2f7d68; stroke-width: 1; stroke-dasharray: 9 6; vector-effect: non-scaling-stroke; }
@@ -494,6 +499,11 @@ public static class PlanOverlaySvgRenderer
             }
         }
 
+        if (options.IncludeOmittedWallRiskHighlights)
+        {
+            AppendOmittedWallRiskHighlights(builder, result, page, options);
+        }
+
         if (options.IncludeWalls)
         {
             builder.AppendLine("""<g id="walls">""");
@@ -622,9 +632,14 @@ public static class PlanOverlaySvgRenderer
         var cleanTopologyBounds = PlanRect.Union(
             WallTopologySpanVisibility.BuildVisibleTopologySpans(result, page.Number, options)
                 .Select(span => span.Bounds));
-        if (!cleanTopologyBounds.IsEmpty)
+        var omittedRiskBounds = PlanRect.Union(
+            OmittedWallRiskHighlights(result, page.Number, options)
+                .Select(OmittedWallRiskBounds));
+        var wallQaBounds = PlanRect.Union(new[] { cleanTopologyBounds, omittedRiskBounds }
+            .Where(bounds => !bounds.IsEmpty));
+        if (!wallQaBounds.IsEmpty)
         {
-            return FinalizeFocusedBounds(cleanTopologyBounds, pageBounds, options);
+            return FinalizeFocusedBounds(wallQaBounds, pageBounds, options);
         }
 
         var floorplanRegionBounds = PlanRect.Union(
@@ -784,6 +799,12 @@ public static class PlanOverlaySvgRenderer
                 rows.Add(options.IncludeSuppressedDetailWallTopologySpans
                     ? "Dashed amber/purple = review and suppressed candidates"
                     : "Dashed amber = review-only wall candidates");
+            }
+
+            if (options.IncludeOmittedWallRiskHighlights)
+            {
+                var riskCount = OmittedWallRiskHighlights(result, page.Number, options).Count;
+                rows.Add($"Orange/pink = {riskCount} omitted wall review risks");
             }
 
             if (!options.IncludeSuppressedDetailWallTopologySpans)
@@ -1279,6 +1300,77 @@ public static class PlanOverlaySvgRenderer
     {
         var directions = node.Directions.Count == 0 ? "none" : string.Join(", ", node.Directions);
         return $"placement wall graph node {node.Id}; {node.Kind}; degree {node.Degree}; directions {directions}";
+    }
+
+    private static void AppendOmittedWallRiskHighlights(
+        StringBuilder builder,
+        PlanScanResult result,
+        PlanPage page,
+        SvgOverlayRenderOptions options)
+    {
+        var risks = OmittedWallRiskHighlights(result, page.Number, options);
+        if (risks.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine("""<g id="wall-omitted-risk-highlights" aria-label="Top omitted wall review risks">""");
+        for (var index = 0; index < risks.Count; index++)
+        {
+            var risk = risks[index];
+            var bounds = OmittedWallRiskBounds(risk);
+            var labelPoint = OmittedWallRiskLabelPoint(risk, bounds);
+            var title = OmittedWallRiskTitle(risk, index + 1);
+            var rectClass = risk.IsPriority ? "wall-omitted-risk wall-omitted-risk-priority" : "wall-omitted-risk";
+            var lineClass = risk.IsPriority ? "wall-omitted-risk-line wall-omitted-risk-priority-line" : "wall-omitted-risk-line";
+            builder.AppendLine($"""<rect class="{rectClass}" x="{N(bounds.X)}" y="{N(bounds.Y)}" width="{N(bounds.Width)}" height="{N(bounds.Height)}"><title>{Esc(title)}</title></rect>""");
+            builder.AppendLine($"""<line class="{lineClass}" x1="{N(risk.CenterLine.Start.X)}" y1="{N(risk.CenterLine.Start.Y)}" x2="{N(risk.CenterLine.End.X)}" y2="{N(risk.CenterLine.End.Y)}"><title>{Esc(title)}</title></line>""");
+            builder.AppendLine($"""<text class="wall-omitted-risk-label" x="{N(labelPoint.X)}" y="{N(labelPoint.Y)}" text-anchor="middle"><title>{Esc(title)}</title>risk {index + 1}</text>""");
+        }
+
+        builder.AppendLine("</g>");
+    }
+
+    private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> OmittedWallRiskHighlights(
+        PlanScanResult result,
+        int pageNumber,
+        SvgOverlayRenderOptions options) =>
+        options.IncludeOmittedWallRiskHighlights
+            ? WallPlacementOmissionSummary
+                .VisualOmittedWallRisks(result, pageNumber)
+                .Where(risk => options.IncludeSuppressedDetailWallTopologySpans
+                    || !WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(risk))
+                .ToArray()
+            : Array.Empty<PlanOverlayWallPlacementOmittedWallExample>();
+
+    private static PlanRect OmittedWallRiskBounds(PlanOverlayWallPlacementOmittedWallExample risk)
+    {
+        var minX = Math.Min(risk.CenterLine.Start.X, risk.CenterLine.End.X);
+        var minY = Math.Min(risk.CenterLine.Start.Y, risk.CenterLine.End.Y);
+        var maxX = Math.Max(risk.CenterLine.Start.X, risk.CenterLine.End.X);
+        var maxY = Math.Max(risk.CenterLine.Start.Y, risk.CenterLine.End.Y);
+        var padding = risk.IsPriority ? 4.0 : 2.5;
+        return new PlanRect(minX, minY, maxX - minX, maxY - minY).Inflate(padding);
+    }
+
+    private static PlanPoint OmittedWallRiskLabelPoint(
+        PlanOverlayWallPlacementOmittedWallExample risk,
+        PlanRect bounds)
+    {
+        var x = (risk.CenterLine.Start.X + risk.CenterLine.End.X) / 2.0;
+        var y = (risk.CenterLine.Start.Y + risk.CenterLine.End.Y) / 2.0;
+        var offset = risk.IsPriority ? 7.5 : 6.5;
+        return bounds.Width >= bounds.Height
+            ? new PlanPoint(x, bounds.Top - offset)
+            : new PlanPoint(bounds.Right + offset, y);
+    }
+
+    private static string OmittedWallRiskTitle(
+        PlanOverlayWallPlacementOmittedWallExample risk,
+        int index)
+    {
+        var evidence = risk.Evidence.Count == 0 ? "none" : string.Join(" | ", risk.Evidence);
+        return $"omitted wall review risk {index}; wall {risk.WallId}; {risk.Label}; code {risk.Code}; {risk.WallType}; {risk.DetectionKind}; confidence {N(risk.Confidence)}; length {N(risk.DrawingLength)} drawing units; topology spans {risk.TopologySpanCount}; source primitives {risk.SourcePrimitiveCount}; evidence {evidence}";
     }
 
     private static string RoutingObstacleCssClass(RoutingObstacleKind kind) =>
