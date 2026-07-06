@@ -562,6 +562,53 @@ public sealed class WallPairReconstructionTests
     }
 
     [Fact]
+    public async Task ScanAsync_BridgesLongStructuralWallFaceGapsIntoSingleWall()
+    {
+        var document = new PlanDocument(
+            "long-fragmented-double-line-wall",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(520, 280),
+                    new PlanPrimitive[]
+                    {
+                        WallFace("outer-long-a", new PlanPoint(80, 100), new PlanPoint(160, 100)),
+                        WallFace("outer-long-b", new PlanPoint(176, 100), new PlanPoint(260, 100)),
+                        WallFace("outer-long-c", new PlanPoint(276, 100), new PlanPoint(360, 100)),
+                        WallFace("inner-long-a", new PlanPoint(80, 110), new PlanPoint(160, 110)),
+                        WallFace("inner-long-b", new PlanPoint(176, 110), new PlanPoint(260, 110)),
+                        WallFace("inner-long-c", new PlanPoint(276, 110), new PlanPoint(360, 110))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            document,
+            new ScannerOptions
+            {
+                MaxWallFragmentGap = 6,
+                MaxLongWallFragmentGap = 18
+            });
+
+        var wall = Assert.Single(result.Walls);
+        Assert.Equal(WallDetectionKind.ParallelLinePair, wall.DetectionKind);
+        Assert.InRange(wall.CenterLine.Start.X, 79.99, 80.01);
+        Assert.InRange(wall.CenterLine.End.X, 359.99, 360.01);
+        Assert.Equal(6, wall.SourcePrimitiveIds.Count);
+        var pairEvidence = Assert.IsType<WallPairEvidence>(wall.PairEvidence);
+        Assert.Equal(3, pairEvidence.FirstFaceFragmentCount);
+        Assert.Equal(3, pairEvidence.SecondFaceFragmentCount);
+        Assert.Contains("outer-long-a", pairEvidence.FirstFaceSourcePrimitiveIds);
+        Assert.Contains("inner-long-c", pairEvidence.SecondFaceSourcePrimitiveIds);
+        Assert.Contains(wall.Evidence, item => item.Contains("first face healed 32", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(wall.Evidence, item => item.Contains("second face healed 32", StringComparison.OrdinalIgnoreCase));
+
+        var diagnostic = Assert.Single(result.Diagnostics.Messages.Where(message => message.Code == "walls.fragments.merged"));
+        Assert.Equal("18", diagnostic.Properties["maxLongWallFragmentGap"]);
+        Assert.Equal("2", diagnostic.Properties["gapHealedRunCount"]);
+    }
+
+    [Fact]
     public async Task ScanAsync_MergesNonOrthogonalWallFragmentsIntoAngledWallRun()
     {
         var document = new PlanDocument(

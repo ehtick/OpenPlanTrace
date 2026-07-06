@@ -315,8 +315,10 @@ The default model input is RGB `224x224` in NCHW layout with ImageNet normalizat
 Tune wall-fragment cleanup for heavily fragmented vector exports:
 
 ```powershell
-dotnet run --project .\tools\OpenPlanTrace.Cli\OpenPlanTrace.Cli.csproj -- scan .\sample.dxf --out-dir .\scan-output --min-wall-fragment 4 --max-wall-fragment-gap 6
+dotnet run --project .\tools\OpenPlanTrace.Cli\OpenPlanTrace.Cli.csproj -- scan .\sample.dxf --out-dir .\scan-output --min-wall-fragment 4 --max-wall-fragment-gap 6 --max-long-wall-fragment-gap 10
 ```
+
+Use `--max-long-wall-fragment-gap` to tune larger gap healing for long orthogonal wall-face runs while keeping the normal `--max-wall-fragment-gap` conservative for short detail fragments.
 
 Override layer classification when a CAD/PDF uses project-specific layer names:
 

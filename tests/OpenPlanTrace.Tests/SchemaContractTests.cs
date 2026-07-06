@@ -3143,6 +3143,8 @@ public sealed class SchemaContractTests
                 MinWallLength = 24,
                 MinWallFragmentLength = 4,
                 MaxWallFragmentGap = 6,
+                MaxLongWallFragmentGap = 10,
+                MinLongWallFragmentMergeLength = 36,
                 MaxWallCandidateSeedsPerPage = 15000,
                 WallMergeTolerance = 2.5,
                 WallSnapTolerance = 3,

@@ -6145,6 +6145,8 @@ internal static class OpenPlanTraceCli
         AddNonNegativeMessage("batch scannerOptions", "minWallLength", options.MinWallLength, messages);
         AddNonNegativeMessage("batch scannerOptions", "minWallFragmentLength", options.MinWallFragmentLength, messages);
         AddNonNegativeMessage("batch scannerOptions", "maxWallFragmentGap", options.MaxWallFragmentGap, messages);
+        AddNonNegativeMessage("batch scannerOptions", "maxLongWallFragmentGap", options.MaxLongWallFragmentGap, messages);
+        AddNonNegativeMessage("batch scannerOptions", "minLongWallFragmentMergeLength", options.MinLongWallFragmentMergeLength, messages);
         AddNonNegativeMessage("batch scannerOptions", "maxWallCandidateSeedsPerPage", options.MaxWallCandidateSeedsPerPage, messages);
         AddNonNegativeMessage("batch scannerOptions", "wallMergeTolerance", options.WallMergeTolerance, messages);
         AddNonNegativeMessage("batch scannerOptions", "wallSnapTolerance", options.WallSnapTolerance, messages);
@@ -9716,6 +9718,8 @@ internal static class OpenPlanTraceCli
             MinWallLength = parsed.MinWallLength ?? 24,
             MinWallFragmentLength = parsed.MinWallFragmentLength ?? 4,
             MaxWallFragmentGap = parsed.MaxWallFragmentGap ?? 6,
+            MaxLongWallFragmentGap = parsed.MaxLongWallFragmentGap ?? 10,
+            MinLongWallFragmentMergeLength = parsed.MinLongWallFragmentMergeLength ?? 36,
             MaxWallCandidateSeedsPerPage = parsed.MaxWallCandidateSeedsPerPage ?? 15000,
             WallMergeTolerance = parsed.WallMergeTolerance ?? 2.5,
             WallSnapTolerance = parsed.WallSnapTolerance ?? 3,
@@ -9848,6 +9852,8 @@ internal static class OpenPlanTraceCli
             MinWallLength = parsed.MinWallLength ?? 24,
             MinWallFragmentLength = parsed.MinWallFragmentLength ?? 4,
             MaxWallFragmentGap = parsed.MaxWallFragmentGap ?? 6,
+            MaxLongWallFragmentGap = parsed.MaxLongWallFragmentGap ?? 10,
+            MinLongWallFragmentMergeLength = parsed.MinLongWallFragmentMergeLength ?? 36,
             MaxWallCandidateSeedsPerPage = parsed.MaxWallCandidateSeedsPerPage ?? 15000,
             WallMergeTolerance = parsed.WallMergeTolerance ?? 2.5,
             WallSnapTolerance = parsed.WallSnapTolerance ?? 3,
@@ -9875,6 +9881,8 @@ internal static class OpenPlanTraceCli
             MinWallLength = parsed.MinWallLength ?? 24,
             MinWallFragmentLength = parsed.MinWallFragmentLength ?? 4,
             MaxWallFragmentGap = parsed.MaxWallFragmentGap ?? 6,
+            MaxLongWallFragmentGap = parsed.MaxLongWallFragmentGap ?? 10,
+            MinLongWallFragmentMergeLength = parsed.MinLongWallFragmentMergeLength ?? 36,
             MaxWallCandidateSeedsPerPage = parsed.MaxWallCandidateSeedsPerPage ?? 15000,
             WallMergeTolerance = parsed.WallMergeTolerance ?? 2.5,
             WallSnapTolerance = parsed.WallSnapTolerance ?? 3,
@@ -10509,6 +10517,8 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --min-wall-length <n>     Override scanner wall length threshold");
         Console.WriteLine("  --min-wall-fragment <n>   Override shortest wall fragment accepted for merging");
         Console.WriteLine("  --max-wall-fragment-gap <n> Override maximum gap healed between wall fragments");
+        Console.WriteLine("  --max-long-wall-fragment-gap <n> Override larger gap healed only between long structural wall fragments");
+        Console.WriteLine("  --min-long-wall-fragment-merge-length <n> Override minimum long fragment anchor length");
         Console.WriteLine("  --max-wall-candidates <n> Cap wall candidate seeds per page for very dense vector PDFs");
         Console.WriteLine("  --wall-snap <n>           Override wall graph snap tolerance");
         Console.WriteLine("  --wall-merge <n>          Override wall merge tolerance");
@@ -10572,6 +10582,8 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --min-wall-length <n>     Override scanner wall length threshold");
         Console.WriteLine("  --min-wall-fragment <n>   Override shortest wall fragment accepted for merging");
         Console.WriteLine("  --max-wall-fragment-gap <n> Override maximum gap healed between wall fragments");
+        Console.WriteLine("  --max-long-wall-fragment-gap <n> Override larger gap healed only between long structural wall fragments");
+        Console.WriteLine("  --min-long-wall-fragment-merge-length <n> Override minimum long fragment anchor length");
         Console.WriteLine("  --max-wall-candidates <n> Cap wall candidate seeds per page for very dense vector PDFs");
         Console.WriteLine("  --wall-snap <n>           Override wall graph snap tolerance");
         Console.WriteLine("  --wall-merge <n>          Override wall merge tolerance");
@@ -10639,6 +10651,8 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --min-wall-length <n>     Override scanner wall length threshold");
         Console.WriteLine("  --min-wall-fragment <n>   Override shortest wall fragment accepted for merging");
         Console.WriteLine("  --max-wall-fragment-gap <n> Override maximum gap healed between wall fragments");
+        Console.WriteLine("  --max-long-wall-fragment-gap <n> Override larger gap healed only between long structural wall fragments");
+        Console.WriteLine("  --min-long-wall-fragment-merge-length <n> Override minimum long fragment anchor length");
         Console.WriteLine("  --max-wall-candidates <n> Cap wall candidate seeds per page for very dense vector PDFs");
         Console.WriteLine("  --wall-snap <n>           Override wall graph snap tolerance");
         Console.WriteLine("  --wall-merge <n>          Override wall merge tolerance");
@@ -10886,6 +10900,8 @@ internal static class OpenPlanTraceCli
         parsed.MinWallLength ??= options.MinWallLength;
         parsed.MinWallFragmentLength ??= options.MinWallFragmentLength;
         parsed.MaxWallFragmentGap ??= options.MaxWallFragmentGap;
+        parsed.MaxLongWallFragmentGap ??= options.MaxLongWallFragmentGap;
+        parsed.MinLongWallFragmentMergeLength ??= options.MinLongWallFragmentMergeLength;
         parsed.MaxWallCandidateSeedsPerPage ??= options.MaxWallCandidateSeedsPerPage;
         parsed.WallMergeTolerance ??= options.WallMergeTolerance;
         parsed.WallSnapTolerance ??= options.WallSnapTolerance;
@@ -12060,6 +12076,10 @@ internal sealed class ScanArguments : IVisualAiCliArguments
 
     public double? MaxWallFragmentGap { get; set; }
 
+    public double? MaxLongWallFragmentGap { get; set; }
+
+    public double? MinLongWallFragmentMergeLength { get; set; }
+
     public int? MaxWallCandidateSeedsPerPage { get; set; }
 
     public double? WallSnapTolerance { get; set; }
@@ -12221,6 +12241,12 @@ internal sealed class ScanArguments : IVisualAiCliArguments
                     break;
                 case "--max-wall-fragment-gap":
                     parsed.MaxWallFragmentGap = ReadDouble(args, ref index, arg);
+                    break;
+                case "--max-long-wall-fragment-gap":
+                    parsed.MaxLongWallFragmentGap = ReadDouble(args, ref index, arg);
+                    break;
+                case "--min-long-wall-fragment-merge-length":
+                    parsed.MinLongWallFragmentMergeLength = ReadDouble(args, ref index, arg);
                     break;
                 case "--max-wall-candidates":
                     parsed.MaxWallCandidateSeedsPerPage = ReadInt(args, ref index, arg);
@@ -12426,6 +12452,10 @@ internal sealed class BatchArguments : IVisualAiCliArguments
 
     public double? MaxWallFragmentGap { get; set; }
 
+    public double? MaxLongWallFragmentGap { get; set; }
+
+    public double? MinLongWallFragmentMergeLength { get; set; }
+
     public int? MaxWallCandidateSeedsPerPage { get; set; }
 
     public double? WallSnapTolerance { get; set; }
@@ -12567,6 +12597,12 @@ internal sealed class BatchArguments : IVisualAiCliArguments
                     break;
                 case "--max-wall-fragment-gap":
                     parsed.MaxWallFragmentGap = ReadDouble(args, ref index, arg);
+                    break;
+                case "--max-long-wall-fragment-gap":
+                    parsed.MaxLongWallFragmentGap = ReadDouble(args, ref index, arg);
+                    break;
+                case "--min-long-wall-fragment-merge-length":
+                    parsed.MinLongWallFragmentMergeLength = ReadDouble(args, ref index, arg);
                     break;
                 case "--max-wall-candidates":
                     parsed.MaxWallCandidateSeedsPerPage = ReadInt(args, ref index, arg);
@@ -13525,6 +13561,10 @@ internal sealed class BenchmarkArguments
 
     public double? MaxWallFragmentGap { get; set; }
 
+    public double? MaxLongWallFragmentGap { get; set; }
+
+    public double? MinLongWallFragmentMergeLength { get; set; }
+
     public int? MaxWallCandidateSeedsPerPage { get; set; }
 
     public double? WallSnapTolerance { get; set; }
@@ -13576,6 +13616,12 @@ internal sealed class BenchmarkArguments
                     break;
                 case "--max-wall-fragment-gap":
                     parsed.MaxWallFragmentGap = ReadDouble(args, ref index, arg);
+                    break;
+                case "--max-long-wall-fragment-gap":
+                    parsed.MaxLongWallFragmentGap = ReadDouble(args, ref index, arg);
+                    break;
+                case "--min-long-wall-fragment-merge-length":
+                    parsed.MinLongWallFragmentMergeLength = ReadDouble(args, ref index, arg);
                     break;
                 case "--max-wall-candidates":
                     parsed.MaxWallCandidateSeedsPerPage = ReadInt(args, ref index, arg);

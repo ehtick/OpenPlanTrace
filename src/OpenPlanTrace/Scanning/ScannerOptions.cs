@@ -10,6 +10,10 @@ public sealed record ScannerOptions
 
     public double MaxWallFragmentGap { get; init; } = 6;
 
+    public double MaxLongWallFragmentGap { get; init; } = 10;
+
+    public double MinLongWallFragmentMergeLength { get; init; } = 36;
+
     public int MaxWallCandidateSeedsPerPage { get; init; } = 15000;
 
     public int MaxDimensionLineCandidatesPerPage { get; init; } = 3000;

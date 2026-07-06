@@ -58,6 +58,10 @@ public sealed record BatchScannerOptions
 
     public double? MaxWallFragmentGap { get; init; }
 
+    public double? MaxLongWallFragmentGap { get; init; }
+
+    public double? MinLongWallFragmentMergeLength { get; init; }
+
     public int? MaxWallCandidateSeedsPerPage { get; init; }
 
     public double? WallMergeTolerance { get; init; }

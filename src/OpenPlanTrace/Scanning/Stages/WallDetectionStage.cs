@@ -419,6 +419,7 @@ internal sealed class WallDetectionStage : IPipelineStage
                         ["gapHealedRunCount"] = healedRuns.ToString(),
                         ["shortSeedCount"] = seeds.Count(seed => seed.Segment.Length < context.Options.MinWallLength).ToString(),
                         ["maxWallFragmentGap"] = context.Options.MaxWallFragmentGap.ToString("0.###"),
+                        ["maxLongWallFragmentGap"] = context.Options.MaxLongWallFragmentGap.ToString("0.###"),
                         ["sourceRegionId"] = mainRegion.Id
                     });
             }
@@ -4322,11 +4323,7 @@ internal sealed class WallDetectionStage : IPipelineStage
 
         foreach (var run in runs)
         {
-            var match = merged.FirstOrDefault(existing =>
-                existing.Orientation == run.Orientation
-                && Math.Abs(existing.Coordinate - run.Coordinate) <= options.WallMergeTolerance
-                && run.Start <= existing.End + Math.Max(options.WallMergeTolerance, options.MaxWallFragmentGap)
-                && run.End >= existing.Start - Math.Max(options.WallMergeTolerance, options.MaxWallFragmentGap));
+            var match = merged.FirstOrDefault(existing => CanMergeAxisRuns(existing, run, options));
 
             if (match is null)
             {
@@ -4360,11 +4357,7 @@ internal sealed class WallDetectionStage : IPipelineStage
 
         foreach (var run in runs)
         {
-            var match = merged.FirstOrDefault(existing =>
-                DirectionAngleDelta(existing.Direction, run.Direction) <= options.GeometryTolerance.AngleRadians
-                && Math.Abs(existing.NormalCoordinate - run.NormalCoordinate) <= options.WallMergeTolerance
-                && run.Start <= existing.End + Math.Max(options.WallMergeTolerance, options.MaxWallFragmentGap)
-                && run.End >= existing.Start - Math.Max(options.WallMergeTolerance, options.MaxWallFragmentGap));
+            var match = merged.FirstOrDefault(existing => CanMergeNonAxisRuns(existing, run, options));
 
             if (match is null)
             {
@@ -4383,6 +4376,76 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         return merged.Where(run => run.End - run.Start >= options.MinWallLength);
+    }
+
+    private static bool CanMergeAxisRuns(AxisRun existing, AxisRun run, ScannerOptions options)
+    {
+        if (existing.Orientation != run.Orientation
+            || Math.Abs(existing.Coordinate - run.Coordinate) > options.WallMergeTolerance)
+        {
+            return false;
+        }
+
+        var gapTolerance = FragmentMergeGapTolerance(
+            existing.Length,
+            run.Length,
+            existing.FragmentCount + run.FragmentCount,
+            HasStrongWallLayerEvidence(existing.LayerEvidence) || HasStrongWallLayerEvidence(run.LayerEvidence),
+            options);
+        return run.Start <= existing.End + gapTolerance
+            && run.End >= existing.Start - gapTolerance;
+    }
+
+    private static bool CanMergeNonAxisRuns(NonAxisRun existing, NonAxisRun run, ScannerOptions options)
+    {
+        if (DirectionAngleDelta(existing.Direction, run.Direction) > options.GeometryTolerance.AngleRadians
+            || Math.Abs(existing.NormalCoordinate - run.NormalCoordinate) > options.WallMergeTolerance)
+        {
+            return false;
+        }
+
+        var gapTolerance = Math.Max(options.WallMergeTolerance, options.MaxWallFragmentGap);
+        return run.Start <= existing.End + gapTolerance
+            && run.End >= existing.Start - gapTolerance;
+    }
+
+    private static double FragmentMergeGapTolerance(
+        double firstLength,
+        double secondLength,
+        int combinedFragmentCount,
+        bool hasStrongWallLayerEvidence,
+        ScannerOptions options)
+    {
+        var baseTolerance = Math.Max(options.WallMergeTolerance, options.MaxWallFragmentGap);
+        var longWallGapTolerance = Math.Max(baseTolerance, options.MaxLongWallFragmentGap);
+        if (longWallGapTolerance <= baseTolerance)
+        {
+            return baseTolerance;
+        }
+
+        if (!hasStrongWallLayerEvidence)
+        {
+            if (combinedFragmentCount > 12)
+            {
+                return baseTolerance;
+            }
+
+            longWallGapTolerance = Math.Min(
+                longWallGapTolerance,
+                Math.Max(baseTolerance, options.MaxWallFragmentGap * 1.5));
+        }
+
+        var shorter = Math.Min(firstLength, secondLength);
+        var longer = Math.Max(firstLength, secondLength);
+        if (shorter < options.MinWallLength * 0.5
+            || longer < options.MinLongWallFragmentMergeLength)
+        {
+            return baseTolerance;
+        }
+
+        var combinedLength = Math.Max(1, firstLength + secondLength);
+        var ratioLimitedTolerance = combinedLength * 0.18;
+        return Math.Max(baseTolerance, Math.Min(longWallGapTolerance, ratioLimitedTolerance));
     }
 
     private static double ResolveThickness(double strokeWidth, ScannerOptions options) =>
