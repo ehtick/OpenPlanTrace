@@ -366,7 +366,21 @@ internal static class WallPlacementOmissionSummary
             or "tiny_door_adjacent_topology_suppressed"
             or "repeated_short_detail_review_required"
             or "short_dense_detail_review_required"
-            || example.Evidence.Any(item => item.Contains("opening candidate", StringComparison.OrdinalIgnoreCase));
+            || example.Evidence.Any(item => item.Contains("opening candidate", StringComparison.OrdinalIgnoreCase))
+            || IsShortSurfacePatternOmittedWallRisk(example);
+    }
+
+    private static bool IsShortSurfacePatternOmittedWallRisk(PlanOverlayWallPlacementOmittedWallExample example)
+    {
+        if (example.DrawingLength > 80.0)
+        {
+            return false;
+        }
+
+        return example.Evidence.Any(item =>
+            item.Contains("non-structural surface/detail pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("surface/detail pattern", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase));
     }
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(

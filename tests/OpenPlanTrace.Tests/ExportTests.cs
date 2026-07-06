@@ -2734,6 +2734,48 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void SvgRenderer_WallQaFocusProfileSuppressesDetailOmittedRiskHighlights()
+    {
+        var result = WithOpeningLinkedOneEndpointFragment(CreateDenseMinorRoutingDetailResult());
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
+
+        Assert.DoesNotContain("opening-linked-fragment", svg);
+
+        var snapshot = PlanOverlaySnapshot.From(
+            result,
+            new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
+        var page = Assert.Single(snapshot.Pages);
+        var recallSnapshot = PlanOverlaySnapshot.From(
+            result,
+            new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaRecall));
+        var recallPage = Assert.Single(recallSnapshot.Pages);
+        Assert.True(
+            page.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count
+            < recallPage.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count);
+    }
+
+    [Fact]
+    public void SvgRenderer_WallQaRecallProfileKeepsSuppressedDetailOmittedRiskHighlights()
+    {
+        var result = WithOpeningLinkedOneEndpointFragment(CreateDenseMinorRoutingDetailResult());
+
+        var svg = PlanOverlaySvgRenderer.RenderPage(
+            result,
+            1,
+            SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaRecall));
+
+        Assert.Contains("id=\"wall-omitted-risk-highlights\"", svg);
+        Assert.Contains("opening-linked-fragment", svg);
+        Assert.Contains("Orange/pink =", svg);
+    }
+
+    [Fact]
     public void SvgRenderer_WallQaProfileSuppressesSourceContextWhenBackgroundImageIsPresent()
     {
         var result = CreateDenseMinorRoutingDetailResult();
@@ -2873,6 +2915,31 @@ public sealed class ExportTests
         Assert.Equal("fragmented_pair_review_required", firstOmission.Code);
         Assert.True(firstOmission.IsPriority);
         Assert.Equal(1, page.WallPlacement.OmissionCounts["fragmented_pair_review_required"]);
+    }
+
+    [Fact]
+    public void WallPlacementOmissionSummary_ClassifiesShortSurfacePatternRisksAsSuppressedVisualNoise()
+    {
+        var example = new PlanOverlayWallPlacementOmittedWallExample(
+            "surface-pattern-wall-risk",
+            1,
+            "short_parallel_pair_review_required",
+            "short paired reviews",
+            true,
+            nameof(WallType.Exterior),
+            nameof(WallDetectionKind.ParallelLinePair),
+            0.88,
+            32,
+            PlanRectSnapshot.From(new PlanRect(10, 10, 32, 4)),
+            LineExport.From(new PlanLineSegment(new PlanPoint(10, 12), new PlanPoint(42, 12))),
+            0,
+            1,
+            ["wall overlaps non-structural surface/detail pattern page:1:surface-pattern:002 at wall overlap ratio 1"]);
+
+        var longExample = example with { DrawingLength = 120 };
+
+        Assert.True(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(example));
+        Assert.False(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(longExample));
     }
 
     [Fact]
