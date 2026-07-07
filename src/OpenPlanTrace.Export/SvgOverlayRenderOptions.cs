@@ -70,6 +70,8 @@ public sealed record SvgOverlayRenderOptions
 
     public bool IncludeSourceContext { get; init; }
 
+    public bool IncludeExcludedPlacementGeometry { get; init; } = true;
+
     public bool RequirePlacementReadyStructuralWallTopologySpans { get; init; }
 
     public int MaxSourceContextPrimitives { get; init; } = 12000;
@@ -149,6 +151,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSuppressedDetailWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeExcludedPlacementGeometry = false,
                 IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
@@ -242,6 +245,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSuppressedDetailWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeExcludedPlacementGeometry = false,
                 IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,

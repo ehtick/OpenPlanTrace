@@ -419,6 +419,15 @@ public static class PlanOverlaySvgRenderer
             {
                 componentByWallId.TryGetValue(footprint.WallId, out var component);
                 wallEvidenceAssessments.TryGetValue(footprint.WallId, out var assessment);
+                if (!PlacementGeometryVisibility.ShouldShowWallBodyFootprint(
+                        footprint,
+                        component,
+                        assessment,
+                        options))
+                {
+                    continue;
+                }
+
                 var title = WallBodyFootprintTitle(footprint, component, assessment);
                 AppendPolygon(
                     builder,
@@ -480,7 +489,10 @@ public static class PlanOverlaySvgRenderer
             var placement = PlanPlacementExport.From(result);
             var placementWallsById = placement.Walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
             builder.AppendLine("""<g id="placement-wall-graph-edges" aria-label="Exported placement wall graph edges">""");
-            foreach (var edge in placement.WallGraph.Edges.Where(edge => edge.PageNumber == page.Number && edge.CenterLine is not null))
+            foreach (var edge in placement.WallGraph.Edges.Where(edge =>
+                         edge.PageNumber == page.Number
+                         && edge.CenterLine is not null
+                         && PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(edge, options)))
             {
                 placementWallsById.TryGetValue(edge.WallId, out var wall);
                 var title = PlacementWallGraphEdgeTitle(edge, wall);
@@ -862,7 +874,7 @@ public static class PlanOverlaySvgRenderer
                 : $"{repairCandidateCount} wall graph repairs hidden ({blockingRepairCandidateCount} blocking)",
             placementWallGraph is null
                 ? "exported wall graph hidden"
-                : $"{placementWallGraph.Edges.Count(edge => edge.PageNumber == page.Number)} exported wall graph edges",
+                : $"{VisiblePlacementWallGraphEdgeCount(placementWallGraph, page.Number, options)} exported wall graph edges",
             placementWallGraph is null
                 ? "exported wall graph nodes hidden"
                 : $"{placementWallGraph.Nodes.Count(node => node.PageNumber == page.Number)} exported wall graph nodes",
@@ -1163,41 +1175,10 @@ public static class PlanOverlaySvgRenderer
             classes.Add("wall-body-footprint-review");
         }
 
-        var trustedExteriorShellContinuityFragment =
-            WallPlacementReadinessEvaluator.IsTrustedExteriorShellContinuityFragment(
-                footprint.SourceWall,
+        if (PlacementGeometryVisibility.IsExcludedWallBodyFootprint(
+                footprint,
                 component,
-                evidenceAssessment);
-        var trustedRoomBoundaryIsolatedFragment =
-            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedFragment(
-                footprint.SourceWall,
-                component,
-                evidenceAssessment);
-        var trustedRoomBoundaryIsolatedExteriorWall =
-            WallPlacementReadinessEvaluator.IsTrustedRoomBoundaryIsolatedExteriorWall(
-                footprint.SourceWall,
-                component,
-                evidenceAssessment);
-        var trustedRecoveredRoomBoundaryObjectLikeWall =
-            WallPlacementReadinessEvaluator.IsTrustedRecoveredRoomBoundaryObjectLikeWall(
-                footprint.SourceWall,
-                component,
-                evidenceAssessment);
-        var trustedObjectLikeLongCleanFragmentInterior =
-            WallPlacementContextGuards.IsTrustedObjectLikeLongCleanFragmentInteriorWallBody(
-                footprint.SourceWall,
-                component,
-                evidenceAssessment);
-
-        if ((WallEvidenceExportHelpers.IsExcludedFromStructuralTopology(component, evidenceAssessment)
-                && !trustedRecoveredRoomBoundaryObjectLikeWall
-                && !trustedObjectLikeLongCleanFragmentInterior)
-            || (!trustedExteriorShellContinuityFragment
-                && !trustedRoomBoundaryIsolatedFragment
-                && !trustedRoomBoundaryIsolatedExteriorWall
-                && !trustedRecoveredRoomBoundaryObjectLikeWall
-                && !trustedObjectLikeLongCleanFragmentInterior
-                && !WallTopologySpanVisibility.IsPlacementReadyStructuralSpan(component, evidenceAssessment)))
+                evidenceAssessment))
         {
             classes.Add("wall-body-footprint-excluded");
         }
@@ -1410,10 +1391,33 @@ public static class PlanOverlaySvgRenderer
     private static int WallBodyFootprintCount(
         PlanScanResult result,
         int pageNumber,
-        SvgOverlayRenderOptions options) =>
-        WallBodyFootprintBuilder
+        SvgOverlayRenderOptions options)
+    {
+        var componentByWallId = BuildWallComponentLookup(result.WallGraph.Components);
+        var wallEvidenceAssessments = WallEvidenceExportHelpers.BuildAssessmentLookup(result.WallEvidenceMap);
+        return WallBodyFootprintBuilder
             .FromPlacementSolidSpans(result, WallTopologySpanVisibility.BuildVisibleTopologySpans(result, pageNumber, options))
-            .Count(footprint => footprint.PageNumber == pageNumber);
+            .Count(footprint =>
+            {
+                componentByWallId.TryGetValue(footprint.WallId, out var component);
+                wallEvidenceAssessments.TryGetValue(footprint.WallId, out var assessment);
+                return footprint.PageNumber == pageNumber
+                    && PlacementGeometryVisibility.ShouldShowWallBodyFootprint(
+                        footprint,
+                        component,
+                        assessment,
+                        options);
+            });
+    }
+
+    private static int VisiblePlacementWallGraphEdgeCount(
+        PlacementWallGraphExport graph,
+        int pageNumber,
+        SvgOverlayRenderOptions options) =>
+        graph.Edges.Count(edge =>
+            edge.PageNumber == pageNumber
+            && edge.CenterLine is not null
+            && PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(edge, options));
 
     private static int HiddenNonPlacementTopologySpanCount(
         PlanScanResult result,

@@ -66,6 +66,11 @@ public static class WallPlacementReadinessEvaluator
     private const double MinTrustedExteriorShellContinuityFaceSeparationDrawingUnits = 2.0;
     private const double MaxTrustedExteriorShellContinuityFaceSeparationDrawingUnits = 18.0;
     private const int MaxTrustedExteriorShellContinuityFaceFragments = 144;
+    private const double MinTrustedShortExteriorContinuityLengthDrawingUnits = 36.0;
+    private const double MaxTrustedShortExteriorContinuityLengthDrawingUnits = 96.0;
+    private const double MinTrustedShortExteriorContinuityPairScore = 0.72;
+    private const double MinTrustedShortExteriorContinuityOverlapRatio = 0.95;
+    private const int MaxTrustedShortExteriorContinuityFaceFragments = 72;
     private const double MinTrustedTwoSidedRoomIsolatedLengthDrawingUnits = 72.0;
     private const double MinTrustedTwoSidedRoomIsolatedPairScore = 0.90;
     private const double MinTrustedTwoSidedRoomIsolatedOverlapRatio = 0.95;
@@ -325,7 +330,7 @@ public static class WallPlacementReadinessEvaluator
         }
 
         var coordinatePlacementBlockedByShortDenseDetailEvidence =
-            CoordinatePlacementBlockedByShortDenseDetailEvidence(wall, evidenceAssessment);
+            CoordinatePlacementBlockedByShortDenseDetailEvidence(wall, component, evidenceAssessment);
         if (coordinatePlacementBlockedByShortDenseDetailEvidence)
         {
             reasons.Add("short high-density unknown-layer wall/detail candidate requires review before exact placement");
@@ -1310,6 +1315,7 @@ public static class WallPlacementReadinessEvaluator
 
     private static bool CoordinatePlacementBlockedByShortDenseDetailEvidence(
         WallSegment wall,
+        WallGraphComponent? component,
         WallEvidenceWallAssessment? evidenceAssessment)
     {
         if (evidenceAssessment is null
@@ -1335,7 +1341,15 @@ public static class WallPlacementReadinessEvaluator
             .Concat(evidenceAssessment.Evidence)
             .Concat(evidenceAssessment.ScoreBreakdown.PositiveEvidence)
             .Concat(evidenceAssessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(component?.Evidence ?? Array.Empty<string>())
             .ToArray();
+
+        if (wall.WallType == WallType.Exterior
+            && wall.PairEvidence is { } pair
+            && HasTrustedShortExteriorContinuityEvidence(wall, component, evidenceAssessment, pair, evidence))
+        {
+            return false;
+        }
 
         return EvidenceContains(evidence, "layer (unlayered) classified Unknown")
             && EvidenceContainsAny(
@@ -1822,6 +1836,11 @@ public static class WallPlacementReadinessEvaluator
             return false;
         }
 
+        if (HasTrustedShortExteriorContinuityEvidence(wall, component, evidenceAssessment, pair, evidence))
+        {
+            return false;
+        }
+
         if (HasTrustedOneSidedRoomBackedThinExteriorEvidence(wall, component, evidenceAssessment, pair, evidence))
         {
             return false;
@@ -1853,6 +1872,62 @@ public static class WallPlacementReadinessEvaluator
                 "local outer boundary",
                 "detected room evidence on one side only",
                 "geometric room boundary support");
+    }
+
+    private static bool HasTrustedShortExteriorContinuityEvidence(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment evidenceAssessment,
+        WallPairEvidence pair,
+        IReadOnlyList<string> evidence)
+    {
+        if (component?.Kind is not (WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural)
+            || component.ExcludedFromStructuralTopology
+            || wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.DrawingLength < MinTrustedShortExteriorContinuityLengthDrawingUnits
+            || wall.DrawingLength > MaxTrustedShortExteriorContinuityLengthDrawingUnits
+            || pair.Score < MinTrustedShortExteriorContinuityPairScore
+            || pair.OverlapRatio < MinTrustedShortExteriorContinuityOverlapRatio
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) > MaxTrustedShortExteriorContinuityFaceFragments
+            || evidenceAssessment.Category != WallEvidenceCategory.StrongWallBody)
+        {
+            return false;
+        }
+
+        if (!EvidenceContains(evidence, "continuity-supported short paired wall body"))
+        {
+            return false;
+        }
+
+        if (!EvidenceContainsAny(
+                evidence,
+                "near detected floorplan/wall envelope",
+                "local outer boundary",
+                "exterior shell",
+                "detected room evidence on one side only",
+                "geometric room boundary support"))
+        {
+            return false;
+        }
+
+        return !EvidenceContainsAny(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "outdoor/terrace room evidence alone",
+            "terrace",
+            "covered entry",
+            "covered-entry",
+            "overbygd",
+            "canopy",
+            "railing",
+            "trim",
+            "glazing",
+            "detail linework",
+            "not trusted",
+            "without shell support",
+            "alone is not trusted");
     }
 
     private static bool HasTrustedOneSidedRoomBackedThinExteriorEvidence(

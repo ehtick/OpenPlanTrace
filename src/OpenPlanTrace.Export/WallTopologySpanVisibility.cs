@@ -88,10 +88,13 @@ internal static class WallTopologySpanVisibility
     private const double MinSourceBackedFallbackFaceSeparationDrawingUnits = 1.5;
     private const double MaxSourceBackedFallbackFaceSeparationDrawingUnits = 24.0;
     private const double MaxSourceBackedFallbackExistingCoverageRatio = 0.68;
+    private const double MaxTrustedExteriorSourceBackedFallbackExistingCoverageRatio = 0.94;
+    private const double MaxTrustedInteriorSourceBackedFallbackExistingCoverageRatio = 0.88;
     private const double MinLongSourceBackedFallbackWallLengthDrawingUnits = 120.0;
     private const int MinTrustedClippedSourceBackedExteriorShellClosurePrimitiveCount = 3;
     private const double MinTrustedShortExteriorSourceBackedFallbackWallLengthDrawingUnits = 36.0;
     private const double MinTrustedShortExteriorSourceBackedFallbackPairScore = 0.88;
+    private const double MinContinuitySupportedShortExteriorSourceBackedFallbackPairScore = 0.72;
     private const double MinTrustedShortExteriorSourceBackedFallbackOverlapRatio = 0.95;
     private const double MinTrustedRoomBoundaryShortExteriorSourceBackedFallbackWallLengthDrawingUnits = 30.0;
     private const double MinTrustedRoomBoundaryShortExteriorSourceBackedFallbackConfidence = 0.86;
@@ -817,7 +820,11 @@ internal static class WallTopologySpanVisibility
                 wall,
                 cleanSpans,
                 context);
-            if (((coverageRatio >= MaxSourceBackedFallbackExistingCoverageRatio || representedByExistingCleanSpan)
+            var existingCoverageLimit = SourceBackedFallbackExistingCoverageLimit(
+                wall,
+                component,
+                assessment);
+            if (((coverageRatio >= existingCoverageLimit || representedByExistingCleanSpan)
                     && !canRecoverUnsafeCleanProjection)
                     && !canRecoverRejectedObjectLikeBoundaryRecall
                 || !ShouldBuildSourceBackedFallbackSpan(wall, context, openings))
@@ -843,6 +850,99 @@ internal static class WallTopologySpanVisibility
             .ThenBy(span => span.Bounds.X)
             .ThenBy(span => span.WallId, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static double SourceBackedFallbackExistingCoverageLimit(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment)
+    {
+        if (!IsTrustedPartialSourceBackedFallbackWall(wall, component, assessment))
+        {
+            return MaxSourceBackedFallbackExistingCoverageRatio;
+        }
+
+        return wall.WallType == WallType.Exterior
+            ? MaxTrustedExteriorSourceBackedFallbackExistingCoverageRatio
+            : MaxTrustedInteriorSourceBackedFallbackExistingCoverageRatio;
+    }
+
+    private static bool IsTrustedPartialSourceBackedFallbackWall(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment)
+    {
+        if (assessment is null
+            || component is null
+            || component.ExcludedFromStructuralTopology
+            || component.Kind is not (WallGraphComponentKind.MainStructural or WallGraphComponentKind.SecondaryStructural)
+            || wall.CenterLine.Length < MinSourceBackedFallbackWallLengthDrawingUnits
+            || ResolveDominantOrthogonalOrientation(wall.CenterLine) == PlacementRunOrientation.Unknown
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject)
+        {
+            return false;
+        }
+
+        if (HasTrustedPartialSourceBackedFallbackBlockerEvidence(wall, component, assessment))
+        {
+            return false;
+        }
+
+        if (wall.WallType == WallType.Exterior)
+        {
+            return assessment.Category is WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.MediumWallBody
+                or WallEvidenceCategory.RecoveredWallBody;
+        }
+
+        return wall.WallType == WallType.Interior
+            && (assessment.Category is WallEvidenceCategory.StrongWallBody
+                or WallEvidenceCategory.RecoveredWallBody
+                || (component.Kind == WallGraphComponentKind.MainStructural
+                    && wall.DrawingLength >= MinLongSourceBackedFallbackWallLengthDrawingUnits
+                    && assessment.Category == WallEvidenceCategory.MediumWallBody));
+    }
+
+    private static bool HasTrustedPartialSourceBackedFallbackBlockerEvidence(
+        WallSegment wall,
+        WallGraphComponent component,
+        WallEvidenceWallAssessment assessment)
+    {
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(component.Evidence)
+            .ToArray();
+
+        return ContainsAnyEvidence(
+            evidence,
+            "outdoor covered-area boundary",
+            "unpaired outdoor covered-area boundary",
+            "covered-area boundary",
+            "covered area",
+            "covered-entry",
+            "covered entry",
+            "overbygd",
+            "canopy",
+            "terrace boundary",
+            "terrace detail",
+            "railing",
+            "surface pattern",
+            "surface/detail",
+            "object/fixture",
+            "fixture detail",
+            "repeated short detail",
+            "door/opening",
+            "door swing",
+            "door leaf",
+            "door arc",
+            "stair-like linework",
+            "non-wall",
+            "dimension annotation");
     }
 
     private static bool ShouldBuildSourceBackedFallbackSpan(
@@ -1370,8 +1470,6 @@ internal static class WallTopologySpanVisibility
             || wall.DrawingLength >= MinSourceBackedFallbackWallLengthDrawingUnits
             || wall.DetectionKind != WallDetectionKind.ParallelLinePair
             || wall.PairEvidence is not { } pair
-            || pair.Score < MinTrustedShortExteriorSourceBackedFallbackPairScore
-            || pair.OverlapRatio < MinTrustedShortExteriorSourceBackedFallbackOverlapRatio
             || pair.FaceSeparation > MaxSourceBackedFallbackFaceSeparationDrawingUnits
             || !assessment.PlacementReady
             || assessment.RequiresReview
@@ -1394,6 +1492,8 @@ internal static class WallTopologySpanVisibility
             ContainsEvidence(evidence, "filled wall-solid primitive")
             || ContainsEvidence(evidence, "filled closed vector wall body")
             || ContainsEvidence(evidence, "strong double-edge wall body");
+        var hasContinuitySupportedShortPair =
+            ContainsEvidence(evidence, "continuity-supported short paired wall body");
         var hasExteriorSupport =
             ContainsEvidence(evidence, "wall type exterior")
             || ContainsEvidence(evidence, "exterior shell")
@@ -1409,6 +1509,15 @@ internal static class WallTopologySpanVisibility
             || ContainsEvidence(evidence, "detected room evidence on both sides")
             || ContainsEvidence(evidence, "shared by room adjacency boundary");
         if (!hasSolidWallBodyEvidence || !hasExteriorSupport)
+        {
+            return false;
+        }
+
+        var minPairScore = hasContinuitySupportedShortPair
+            ? MinContinuitySupportedShortExteriorSourceBackedFallbackPairScore
+            : MinTrustedShortExteriorSourceBackedFallbackPairScore;
+        if (pair.Score < minPairScore
+            || pair.OverlapRatio < MinTrustedShortExteriorSourceBackedFallbackOverlapRatio)
         {
             return false;
         }

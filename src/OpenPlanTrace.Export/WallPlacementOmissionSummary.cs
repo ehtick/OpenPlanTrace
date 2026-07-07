@@ -120,6 +120,8 @@ public sealed record PlanOverlayWallPlacementOmittedWallExample(
 
 internal static class WallPlacementOmissionSummary
 {
+    private const int MaxOmittedWallExampleEvidenceItems = 16;
+
     private static readonly string[] PriorityOmissionCodes =
     [
         "fragmented_pair_review_required",
@@ -371,7 +373,9 @@ internal static class WallPlacementOmissionSummary
             or "repeated_short_detail_review_required"
             or "short_dense_detail_review_required"
             || example.Evidence.Any(item => item.Contains("opening candidate", StringComparison.OrdinalIgnoreCase))
-            || IsShortSurfacePatternOmittedWallRisk(example);
+            || IsShortSurfacePatternOmittedWallRisk(example)
+            || IsShortDenseDetailOmittedWallRisk(example)
+            || IsShortDimensionLikeIsolatedFragmentOmittedWallRisk(example);
     }
 
     private static bool IsShortSurfacePatternOmittedWallRisk(PlanOverlayWallPlacementOmittedWallExample example)
@@ -385,6 +389,37 @@ internal static class WallPlacementOmissionSummary
             item.Contains("non-structural surface/detail pattern", StringComparison.OrdinalIgnoreCase)
             || item.Contains("surface/detail pattern", StringComparison.OrdinalIgnoreCase)
             || item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsShortDenseDetailOmittedWallRisk(PlanOverlayWallPlacementOmittedWallExample example)
+    {
+        if (example.DrawingLength > 80.0)
+        {
+            return false;
+        }
+
+        return example.Evidence.Any(item =>
+            item.Contains("dense local detail", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("dimension-like weak layer", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("classified Dimension", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-area boundary", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("outdoor covered-area boundary", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsShortDimensionLikeIsolatedFragmentOmittedWallRisk(
+        PlanOverlayWallPlacementOmittedWallExample example)
+    {
+        if (!string.Equals(example.Code, "isolated_fragment", StringComparison.Ordinal)
+            || example.DrawingLength > 80.0)
+        {
+            return false;
+        }
+
+        return example.Evidence.Any(item =>
+            item.Contains("layer (unlayered) classified Dimension", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("layer evidence: contains dimension-like text", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("dimension-like text", StringComparison.OrdinalIgnoreCase));
     }
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> TopOmittedWallExamples(
@@ -424,7 +459,7 @@ internal static class WallPlacementOmissionSummary
             LineExport.From(wall.CenterLine),
             topologySpans.Count,
             wall.SourcePrimitiveIds.Count,
-            omission.Evidence.Take(4).ToArray());
+            omission.Evidence.Take(MaxOmittedWallExampleEvidenceItems).ToArray());
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> OmittedWallExamplesFromPlacementWalls(
         IReadOnlyList<PlacementWallExport> placementWalls,
@@ -451,7 +486,7 @@ internal static class WallPlacementOmissionSummary
             wall.CenterLine,
             wall.TopologySpans.Count,
             wall.SourcePrimitiveIds.Count,
-            omission.Evidence.Take(4).ToArray());
+            omission.Evidence.Take(MaxOmittedWallExampleEvidenceItems).ToArray());
     }
 
     private static IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions(

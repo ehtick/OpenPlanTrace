@@ -339,13 +339,18 @@ public sealed record PlanOverlayPageSnapshot(
 
         if (placementExport is not null)
         {
+            var placementGraphEdges = placementExport.WallGraph.Edges
+                .Where(item =>
+                    item.PageNumber == pageNumber
+                    && item.CenterLine is not null
+                    && PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(item, options))
+                .ToArray();
             yield return Layer(
                 "placementWallGraphEdges",
-                placementExport.WallGraph.Edges.Where(item => item.PageNumber == pageNumber && item.CenterLine is not null),
+                placementGraphEdges,
                 PlacementWallGraphEdgeBounds,
                 item => new Confidence(item.Confidence),
-                placementExport.WallGraph.Edges
-                    .Where(item => item.PageNumber == pageNumber && item.CenterLine is not null)
+                placementGraphEdges
                     .GroupBy(item => item.ExcludedFromStructuralTopology ? "Excluded" : "PlacementReady")
                     .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
 
@@ -380,8 +385,23 @@ public sealed record PlanOverlayPageSnapshot(
             item => item.Bounds,
             item => item.Confidence);
 
+        var componentByWallId = result.WallGraph.Components
+            .SelectMany(component => component.WallIds.Select(wallId => new { wallId, component }))
+            .GroupBy(item => item.wallId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First().component, StringComparer.Ordinal);
+        var wallEvidenceAssessments = WallEvidenceExportHelpers.BuildAssessmentLookup(result.WallEvidenceMap);
         var wallBodyFootprints = WallBodyFootprintBuilder.FromPlacementSolidSpans(result, visibleTopologySpans)
-            .Where(item => item.PageNumber == pageNumber)
+            .Where(item =>
+            {
+                componentByWallId.TryGetValue(item.WallId, out var component);
+                wallEvidenceAssessments.TryGetValue(item.WallId, out var assessment);
+                return item.PageNumber == pageNumber
+                    && PlacementGeometryVisibility.ShouldShowWallBodyFootprint(
+                        item,
+                        component,
+                        assessment,
+                        options);
+            })
             .ToArray();
         yield return Layer(
             "wallBodyFootprints",

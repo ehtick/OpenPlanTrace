@@ -2613,6 +2613,51 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void SvgRenderer_WallQaProfilesHideExcludedPlacementGeometry()
+    {
+        var excludedEdge = new PlacementWallGraphEdgeExport(
+            "excluded-edge",
+            1,
+            "node-a",
+            "node-b",
+            "excluded-wall",
+            null,
+            null,
+            true,
+            null,
+            null,
+            null,
+            null,
+            100,
+            null,
+            4,
+            null,
+            null,
+            0.8,
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            ["synthetic excluded edge"]);
+        var readyEdge = excludedEdge with
+        {
+            Id = "ready-edge",
+            ExcludedFromStructuralTopology = false
+        };
+
+        var wallQaOptions = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQa);
+        var wallQaFocusOptions = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus);
+        var wallQaReviewOptions = SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaReview);
+
+        Assert.False(wallQaOptions.IncludeExcludedPlacementGeometry);
+        Assert.False(wallQaFocusOptions.IncludeExcludedPlacementGeometry);
+        Assert.True(wallQaReviewOptions.IncludeExcludedPlacementGeometry);
+        Assert.False(PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(excludedEdge, wallQaOptions));
+        Assert.False(PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(excludedEdge, wallQaFocusOptions));
+        Assert.True(PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(excludedEdge, wallQaReviewOptions));
+        Assert.True(PlacementGeometryVisibility.ShouldShowPlacementGraphEdge(readyEdge, wallQaOptions));
+    }
+
+    [Fact]
     public void SvgRenderer_WallQaProfileHidesTrustedExceptionSpansFromCleanLayer()
     {
         var result = WithTrustedExteriorShellContinuityFragment(CreateDenseMinorRoutingDetailResult());
@@ -2965,6 +3010,64 @@ public sealed class ExportTests
             ["wall overlaps non-structural surface/detail pattern page:1:surface-pattern:002 at wall overlap ratio 1"]);
 
         var longExample = example with { DrawingLength = 120 };
+
+        Assert.True(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(example));
+        Assert.False(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(longExample));
+    }
+
+    [Fact]
+    public void WallPlacementOmissionSummary_ClassifiesShortDenseDetailRisksAsSuppressedVisualNoise()
+    {
+        var example = new PlanOverlayWallPlacementOmittedWallExample(
+            "dense-detail-wall-risk",
+            1,
+            "wall_evidence_review_required",
+            "wall evidence review",
+            false,
+            nameof(WallType.Interior),
+            nameof(WallDetectionKind.ParallelLinePair),
+            0.84,
+            42,
+            PlanRectSnapshot.From(new PlanRect(10, 10, 42, 4)),
+            LineExport.From(new PlanLineSegment(new PlanPoint(10, 12), new PlanPoint(52, 12))),
+            0,
+            1,
+            [
+                "short unlayered wall candidate sits inside dense local detail/stair-like linework",
+                "dimension-like weak layer True"
+            ]);
+
+        var longExample = example with { DrawingLength = 120 };
+
+        Assert.True(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(example));
+        Assert.False(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(longExample));
+    }
+
+    [Fact]
+    public void WallPlacementOmissionSummary_ClassifiesShortDimensionLikeIsolatedFragmentsAsSuppressedVisualNoise()
+    {
+        var example = new PlanOverlayWallPlacementOmittedWallExample(
+            "dimension-like-isolated-wall-risk",
+            1,
+            "isolated_fragment",
+            "isolated fragments",
+            false,
+            nameof(WallType.Exterior),
+            nameof(WallDetectionKind.ParallelLinePair),
+            0.86,
+            51,
+            PlanRectSnapshot.From(new PlanRect(10, 10, 51, 4)),
+            LineExport.From(new PlanLineSegment(new PlanPoint(10, 12), new PlanPoint(61, 12))),
+            0,
+            57,
+            [
+                "wall belongs to isolated wall graph fragment",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "first face merged 60 fragments"
+            ]);
+
+        var longExample = example with { DrawingLength = 140 };
 
         Assert.True(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(example));
         Assert.False(WallPlacementOmissionSummary.IsSuppressedDetailOmittedWallRisk(longExample));
@@ -3390,6 +3493,11 @@ public sealed class ExportTests
         Assert.Equal(
             "topology_import_blocked",
             endpointWall.GetProperty("placementOmission").GetProperty("code").GetString());
+        var linkedWallIds = JsonStrings(endpointWall
+            .GetProperty("placementOmission")
+            .GetProperty("linkedWallIds"));
+        Assert.Contains("detail-host", linkedWallIds);
+        Assert.DoesNotContain("endpoint-to-wall", linkedWallIds);
     }
 
     [Fact]

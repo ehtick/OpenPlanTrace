@@ -8,6 +8,32 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.09.014] - 2026-07-07
+
+- Improved dimension-like wall-QA risk filtering.
+- Small improvement to isolated-fragment visual tests.
+
+## [0.09.013] - 2026-07-07
+
+- Improved omitted-wall visual risk filtering.
+- Small improvement to wall-QA noise tests.
+
+## [0.09.012] - 2026-07-07
+
+- Improved wall-QA focus visibility.
+- Small improvement to excluded placement geometry tests.
+
+## [0.09.011] - 2026-07-07
+
+- Improved wall omission linked-wall cleanup.
+- Small improvement to topology repair export tests.
+
+## [0.09.010] - 2026-07-07
+
+- Improved partial structural wall fallback recovery.
+- Improved short exterior continuity wall placement.
+- Small improvement to wall placement regression tests.
+
 ## [0.09.009] - 2026-07-06
 
 - Improved dense main-structural wall retention.

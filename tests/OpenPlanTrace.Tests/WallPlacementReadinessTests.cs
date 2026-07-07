@@ -1428,6 +1428,65 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_AllowsShortThinExteriorPairWithStructuralContinuityEvidence()
+    {
+        var wall = Wall("wall:short-thin-continuity-exterior", new Confidence(0.83)) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(140, 100)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            Thickness = 2.735,
+            ThicknessMillimeters = 48,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 98.6325), new PlanPoint(140, 98.6325)),
+                new PlanLineSegment(new PlanPoint(100, 101.3675), new PlanPoint(140, 101.3675)),
+                FaceSeparation: 2.735,
+                OverlapRatio: 1,
+                Score: 0.747,
+                FirstFaceFragmentCount: 15,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: ["face-a"],
+                SecondFaceSourcePrimitiveIds: ["face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "first face merged 15 fragments",
+                "first face collapsed 13 duplicate or near-duplicate wall line primitive(s)",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: continuity-supported short paired wall body; 1 collinear structural continuation wall(s)",
+                "wall evidence: strong double-edge wall body"
+            ],
+            SourcePrimitiveIds = Enumerable.Range(1, 30)
+                .Select(index => $"short-continuity-source-{index:00}")
+                .ToArray()
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.StrongWallBody, placementReady: true) with
+        {
+            Evidence = wall.Evidence
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.True(readiness.ReadyForCoordinatePlacement);
+        Assert.True(readiness.ReadyForMetricPlacement);
+        Assert.False(readiness.RequiresReview);
+        Assert.False(readiness.CoordinatePlacementBlocked);
+        Assert.DoesNotContain(
+            WallPlacementReadinessEvaluator.ThinExteriorFacePairWithoutShellSupportReason,
+            readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_BlocksLongThinExteriorPairWhenOneSidedEvidenceIsOutdoor()
     {
         var wall = Wall("wall:long-thin-outdoor-backed-exterior", Confidence.High) with

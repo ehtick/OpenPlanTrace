@@ -2256,7 +2256,8 @@ public sealed record PlacementWallOmissionExport(
                 return;
             }
 
-            if (trimmed.Contains("wall-graph-repair", StringComparison.OrdinalIgnoreCase)
+            if (IsNonWallRepairLinkToken(trimmed)
+                || trimmed.Contains("wall-graph-repair", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(trimmed, "wall-face", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(trimmed, "wall-body", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(trimmed, "wall-evidence", StringComparison.OrdinalIgnoreCase)
@@ -2273,8 +2274,30 @@ public sealed record PlacementWallOmissionExport(
         }
     }
 
+    private static bool IsNonWallRepairLinkToken(string value)
+    {
+        var normalized = value.Trim().Replace('_', '-');
+        return string.Equals(normalized, "endpoint-to-wall", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "endpoint-to-endpoint", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "endpoint-overrun", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "snap-endpoint-to-wall", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "snap-endpoint-to-endpoint", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "trim-endpoint-overrun", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, nameof(WallGraphRepairCandidateKind.EndpointToWall), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, nameof(WallGraphRepairCandidateKind.EndpointToEndpoint), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, nameof(WallGraphRepairCandidateKind.EndpointOverrun), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, nameof(WallGraphRepairAction.SnapEndpointToWall), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, nameof(WallGraphRepairAction.SnapEndpointToEndpoint), StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, nameof(WallGraphRepairAction.TrimEndpointOverrun), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool LooksLikeWallIdentifier(string value)
     {
+        if (IsNonWallRepairLinkToken(value))
+        {
+            return false;
+        }
+
         if (value.Contains(":wall:", StringComparison.OrdinalIgnoreCase)
             || value.Contains(":wall-evidence-recovered:", StringComparison.OrdinalIgnoreCase)
             || value.Contains(":wall-evidence-recovered-short:", StringComparison.OrdinalIgnoreCase))

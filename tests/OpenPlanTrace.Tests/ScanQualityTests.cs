@@ -1200,6 +1200,152 @@ public sealed class ScanQualityTests
     }
 
     [Fact]
+    public void PlacementExporter_AddsTrustedExteriorFallbackWhenCleanSpanOnlyPartlyCoversWall()
+    {
+        var exteriorWall = SyntheticWall("partly-covered-exterior", 80, 100, 520, 100) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(80, 97), new PlanPoint(520, 97)),
+                new PlanLineSegment(new PlanPoint(80, 103), new PlanPoint(520, 103)),
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.91,
+                FirstFaceFragmentCount: 5,
+                SecondFaceFragmentCount: 5,
+                FirstFaceSourcePrimitiveIds: ["partial-face-a"],
+                SecondFaceSourcePrimitiveIds: ["partial-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 6 drawing units",
+                "pair score 0.91",
+                "overlap ratio 1",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: strong double-edge wall body"
+            ]
+        };
+        var wallGraph = new WallGraph(
+            [SyntheticNode("n1", 80, 100), SyntheticNode("n2", 410, 100)],
+            [SyntheticEdge("e1", "n1", "n2", exteriorWall.Id)],
+            [
+                new WallGraphComponent(
+                    "main-exterior-component",
+                    1,
+                    WallGraphComponentKind.MainStructural,
+                    new PlanRect(77, 97, 446, 12),
+                    [exteriorWall.Id],
+                    ["n1", "n2"],
+                    ["e1"],
+                    [exteriorWall.Id],
+                    exteriorWall.DrawingLength,
+                    Confidence.High,
+                    ["synthetic main exterior shell component"])
+            ]);
+        var result = CreateSyntheticResult(
+            walls: [exteriorWall],
+            wallGraph: wallGraph,
+            wallEvidenceMap: new WallEvidenceMap(
+                [],
+                [],
+                [StrongPairedWallEvidence(exteriorWall, "both endpoints supported by structural context")])) with
+        {
+            Quality = UsableQuality()
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var exportedWall = document.RootElement.GetProperty("walls").EnumerateArray().Single(item =>
+            item.GetProperty("id").GetString() == exteriorWall.Id);
+        var spans = exportedWall.GetProperty("topologySpans").EnumerateArray().ToArray();
+
+        Assert.True(exportedWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, exportedWall.GetProperty("placementOmission").ValueKind);
+        Assert.Contains(spans, span =>
+            span.GetProperty("id").GetString()?.Contains(":source-backed-fallback:", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void PlacementExporter_AddsContinuitySupportedShortThinExteriorFallback()
+    {
+        var exteriorWall = SyntheticWall("short-thin-continuity-exterior", 80, 100, 120, 100) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            Thickness = 2.735,
+            ThicknessMillimeters = 48,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(80, 98.6325), new PlanPoint(120, 98.6325)),
+                new PlanLineSegment(new PlanPoint(80, 101.3675), new PlanPoint(120, 101.3675)),
+                FaceSeparation: 2.735,
+                OverlapRatio: 1,
+                Score: 0.747,
+                FirstFaceFragmentCount: 15,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: ["short-face-a"],
+                SecondFaceSourcePrimitiveIds: ["short-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 2.735 drawing units",
+                "pair score 0.747",
+                "overlap ratio 1",
+                "layer (unlayered) classified Unknown (0,35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: continuity-supported short paired wall body; 1 collinear structural continuation wall(s)",
+                "wall evidence: strong double-edge wall body"
+            ]
+        };
+        var wallGraph = new WallGraph(
+            [],
+            [],
+            [
+                new WallGraphComponent(
+                    "main-exterior-component",
+                    1,
+                    WallGraphComponentKind.MainStructural,
+                    new PlanRect(78, 97, 44, 6),
+                    [exteriorWall.Id],
+                    [],
+                    [],
+                    [exteriorWall.Id],
+                    exteriorWall.DrawingLength,
+                    Confidence.High,
+                    ["synthetic main exterior shell component"])
+            ]);
+        var result = CreateSyntheticResult(
+            walls: [exteriorWall],
+            wallGraph: wallGraph,
+            wallEvidenceMap: new WallEvidenceMap(
+                [],
+                [],
+                [StrongPairedWallEvidence(exteriorWall, "both endpoints supported by structural context") with
+                {
+                    Evidence = exteriorWall.Evidence
+                }])) with
+        {
+            Quality = UsableQuality()
+        };
+
+        var placementJson = PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+        using var document = JsonDocument.Parse(placementJson);
+        var exportedWall = document.RootElement.GetProperty("walls").EnumerateArray().Single(item =>
+            item.GetProperty("id").GetString() == exteriorWall.Id);
+        var spans = exportedWall.GetProperty("topologySpans").EnumerateArray().ToArray();
+
+        Assert.True(exportedWall.GetProperty("reliability").GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, exportedWall.GetProperty("placementOmission").ValueKind);
+        Assert.Contains(spans, span =>
+            span.GetProperty("id").GetString()?.Contains(":source-backed-fallback:", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public void PlacementExporter_BlocksCoveredSecondaryExteriorDetailWithoutRoomBoundarySupport()
     {
         var regions = new[]
