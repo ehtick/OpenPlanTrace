@@ -549,6 +549,8 @@ public sealed class SchemaContractTests
             .EnumerateArray()
             .Select(item => item.GetString())
             .ToArray();
+        Assert.Contains("placement-graph-qa", svgProfiles);
+        Assert.Contains("placement-graph-clean", svgProfiles);
         Assert.Contains("wall-qa-focus", svgProfiles);
         Assert.Contains("wall-qa-review", svgProfiles);
         Assert.Contains("wall-qa-recall", svgProfiles);

@@ -6,6 +6,7 @@ public enum SvgOverlayRenderProfile
     StructuralReview,
     PlacementReview,
     PlacementGraphQa,
+    PlacementGraphClean,
     WallQa,
     WallQaReview,
     WallQaRecall,
@@ -282,6 +283,36 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSourceContext = true,
                 MaxSourceContextPrimitives = 3500
             },
+            SvgOverlayRenderProfile.PlacementGraphClean => new SvgOverlayRenderOptions
+            {
+                Profile = SvgOverlayRenderProfile.PlacementGraphClean,
+                IncludeLegend = false,
+                IncludeDiagnostics = false,
+                IncludeRegions = false,
+                IncludeDimensions = false,
+                IncludeAnnotations = false,
+                IncludeGridAxes = false,
+                IncludeGridBaySpacings = false,
+                IncludeWalls = false,
+                IncludeWallComponents = false,
+                IncludeWallNodes = false,
+                IncludeRooms = false,
+                IncludeRoomClusters = false,
+                IncludeRoomAdjacency = false,
+                IncludeOpenings = false,
+                IncludeObjects = false,
+                IncludeObjectAggregates = false,
+                IncludeSurfacePatterns = false,
+                IncludeWallTopologySpans = false,
+                IncludeWallBodyFootprints = false,
+                IncludeReviewOnlyWallTopologySpans = false,
+                IncludeWallGraphRepairs = false,
+                IncludePlacementWallGraph = true,
+                IncludePlacementWallGraphNodes = false,
+                IncludeRoutingLayer = false,
+                IncludeSourceContext = false,
+                CropToFloorplanContent = true
+            },
             _ => new SvgOverlayRenderOptions()
             {
                 IncludeWallTopologySpans = true,
@@ -321,6 +352,16 @@ public sealed record SvgOverlayRenderOptions
             case "exportedwallgraph":
             case "cleanwallgraph":
                 profile = SvgOverlayRenderProfile.PlacementGraphQa;
+                return true;
+            case "placementgraphclean":
+            case "placementonly":
+            case "placementwallsonly":
+            case "exportedwallsonly":
+            case "finalwallsonly":
+            case "cleanplacementwalls":
+            case "cleanplacementwallsonly":
+            case "cleanwallgraphonly":
+                profile = SvgOverlayRenderProfile.PlacementGraphClean;
                 return true;
             case "wallqa":
             case "wallaccuracy":
@@ -373,6 +414,7 @@ public sealed record SvgOverlayRenderOptions
             SvgOverlayRenderProfile.WallQaRecall => "wall-qa-recall",
             SvgOverlayRenderProfile.WallQaReview => "wall-qa-review",
             SvgOverlayRenderProfile.WallQa => "wall-qa",
+            SvgOverlayRenderProfile.PlacementGraphClean => "placement-graph-clean",
             SvgOverlayRenderProfile.PlacementGraphQa => "placement-graph-qa",
             SvgOverlayRenderProfile.PlacementReview => "placement-review",
             SvgOverlayRenderProfile.StructuralReview => "structural-review",

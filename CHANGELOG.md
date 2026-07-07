@@ -8,6 +8,36 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.09.019] - 2026-07-07
+
+- Improved clean placement graph SVG review profile.
+- Improved visual snapshot SVG profile contract.
+- Small improvement to placement graph profile tests.
+
+## [0.09.018] - 2026-07-07
+
+- Improved contained exterior wall cleanup.
+- Improved recovered perimeter shell duplicate handling.
+- Small improvement to duplicate wall regression tests.
+
+## [0.09.017] - 2026-07-07
+
+- Improved room-boundary exterior shell recovery.
+- Improved decimal evidence parsing for wall recall.
+- Small improvement to inferred shell regression tests.
+
+## [0.09.016] - 2026-07-07
+
+- Improved recovered room-boundary wall snapping.
+- Improved short-overlap structural wall merging.
+- Small improvement to wall placement regression tests.
+
+## [0.09.015] - 2026-07-07
+
+- Improved source-backed wall alignment recall.
+- Improved graph-backed wall placement preference.
+- Small improvement to wall placement regression tests.
+
 ## [0.09.014] - 2026-07-07
 
 - Improved dimension-like wall-QA risk filtering.

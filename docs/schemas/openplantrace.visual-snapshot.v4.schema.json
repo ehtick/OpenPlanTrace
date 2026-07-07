@@ -582,6 +582,8 @@
           "enum": [
             "full",
             "placement-review",
+            "placement-graph-qa",
+            "placement-graph-clean",
             "structural-review",
             "wall-qa",
             "wall-qa-review",

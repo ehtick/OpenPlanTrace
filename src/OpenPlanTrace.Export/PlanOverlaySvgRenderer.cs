@@ -960,7 +960,11 @@ public static class PlanOverlaySvgRenderer
     }
 
     private static string ViewportName(SvgOverlayRenderOptions options) =>
-        options.CropToFloorplanContent ? "focused-wall-qa" : "full-page";
+        options.Profile == SvgOverlayRenderProfile.PlacementGraphClean
+            ? "clean-placement-graph"
+            : options.CropToFloorplanContent
+                ? "focused-wall-qa"
+                : "full-page";
 
     private static string Shorten(string value, int maxLength) =>
         value.Length <= maxLength

@@ -3695,6 +3695,7 @@ public sealed record PlacementWallGraphExport(
     private const double MinTrustedExteriorCornerEndpointPairSnapLengthDrawingUnits = 120.0;
     private const double MinSameAxisResidualEndpointHostLengthRatio = 1.25;
     private const double MinSameAxisResidualEndpointHostOverlapRatio = 0.8;
+    private const double MaxShortOverlapStructuralPlacementGraphContinuationDrawingUnits = 24.0;
     private const double MinDominantPlacementGraphMergeAxisLengthDrawingUnits = 24.0;
     private const double MinDominantPlacementGraphMergeAxisCoverageRatio = 0.6;
     private const double MinTrustedExteriorDominantPlacementGraphMergeAxisCoverageRatio = 0.67;
@@ -4647,6 +4648,8 @@ public sealed record PlacementWallGraphExport(
                 item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase)
                 || item.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase)
                 || item.Contains("trusted long isolated exterior shell", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("recovered wall body aligned to main floorplan perimeter shell", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("geometric room boundary support from reliable room-boundary alignment", StringComparison.OrdinalIgnoreCase)
                 || item.Contains("placement wall graph inline run absorbed source-backed isolated continuation", StringComparison.OrdinalIgnoreCase)))
         {
             return false;
@@ -5014,8 +5017,8 @@ public sealed record PlacementWallGraphExport(
         }
 
         var maxShortOverlap = Math.Max(
-            MinOverlappingStructuralPlacementGraphMergeLengthDrawingUnits,
-            maxThickness * 2.0);
+            MaxShortOverlapStructuralPlacementGraphContinuationDrawingUnits,
+            maxThickness * 4.0);
         return overlap <= maxShortOverlap
             && overlap / Math.Max(shorterLength, 0.001) <= 0.25;
     }
@@ -7578,6 +7581,11 @@ public sealed record PlacementWallGraphExport(
     {
         if (endpointSpan.Orientation != hostSpan.Orientation)
         {
+            if (CanUseSourceBackedRoomBoundaryResidualEndpointSnap(endpointSpan, hostSpan))
+            {
+                return MaxPlacementSharedNodeHostSnapDistanceDrawingUnits;
+            }
+
             if (!CanUseExtendedPerpendicularResidualEndpointSnapTolerance(endpointSpan, hostSpan))
             {
                 return MaxPlacementEndpointOnWallAbsorptionDistanceDrawingUnits;
@@ -7603,6 +7611,26 @@ public sealed record PlacementWallGraphExport(
             maxThickness * 0.75,
             MaxCoincidentPlacementNodeDistanceDrawingUnits,
             maxTolerance);
+    }
+
+    private static bool CanUseSourceBackedRoomBoundaryResidualEndpointSnap(
+        PlacementGraphMergeSpan endpointSpan,
+        PlacementGraphMergeSpan hostSpan)
+    {
+        if (!IsSourceBackedRoomBoundaryResidualSnapWallBody(endpointSpan.Edge))
+        {
+            return false;
+        }
+
+        if (!IsStructuralPlacementGraphComponentKind(hostSpan.Edge.WallComponentKind)
+            && !IsTrustedExteriorShellPlacementGraphMergeContinuation(hostSpan.Edge)
+            && !IsPlacementReadyWallBodyEvidence(hostSpan.Edge))
+        {
+            return false;
+        }
+
+        return !HasHardPlacementGraphResidualEndpointSnapBlocker(endpointSpan.Edge)
+            && !HasHardPlacementGraphResidualEndpointSnapBlocker(hostSpan.Edge);
     }
 
     private static bool CanUseExtendedPerpendicularResidualEndpointSnapTolerance(
@@ -7632,6 +7660,7 @@ public sealed record PlacementWallGraphExport(
         IsStructuralPlacementGraphComponentKind(edge.WallComponentKind)
         || IsTrustedExteriorShellPlacementGraphMergeContinuation(edge)
         || IsTrustedSourceBackedPlacementGraphHost(edge)
+        || IsSourceBackedRoomBoundaryResidualSnapWallBody(edge)
         || IsPlacementReadyWallBodyEvidence(edge);
 
     private static bool IsTrustedResidualEndpointSnapHostWallBody(PlacementWallGraphEdgeExport edge) =>
@@ -7648,6 +7677,40 @@ public sealed record PlacementWallGraphExport(
             || item.Contains("wall type exterior", StringComparison.OrdinalIgnoreCase)
             || item.Contains("room boundary", StringComparison.OrdinalIgnoreCase))
         && !edge.Evidence.Any(IsPlacementGraphDetailOrSurfaceEvidence);
+
+    private static bool IsSourceBackedRoomBoundaryResidualSnapWallBody(PlacementWallGraphEdgeExport edge)
+    {
+        var componentKindAllowsSnap =
+            string.IsNullOrWhiteSpace(edge.WallComponentKind)
+            || string.Equals(edge.WallComponentKind, nameof(WallGraphComponentKind.IsolatedFragment), StringComparison.Ordinal);
+        if (!componentKindAllowsSnap
+            || edge.DrawingLength < MinDominantPlacementGraphMergeAxisLengthDrawingUnits
+            || !edge.Evidence.Any(item => item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase))
+            || HasPlacementGraphDetailOrSurfaceEvidence(edge))
+        {
+            return false;
+        }
+
+        if (edge.Evidence.Any(item =>
+            item.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("terrace", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return edge.Evidence.Any(item =>
+            item.Contains("accepted because medium fragment-merged room boundary has geometric room support", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("accepted because clean isolated room-boundary fragment has structural endpoint support", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("trusted structural endpoint", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("shared by room adjacency boundary", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("detected room evidence on both sides", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static bool CanUseTrustedSourceBackedExteriorResidualEndpointSnap(
         PlacementGraphMergeSpan endpointSpan,

@@ -34,6 +34,7 @@ internal static class WallTopologySpanVisibility
     private const double MinNearContainedDuplicateOverlapRatio = 0.95;
     private const double MaxNearContainedDuplicateOverhangDrawingUnits = 4.0;
     private const double MaxContainedExteriorFragmentAxisDistanceDrawingUnits = 6.0;
+    private const double MaxContainedRecoveredPerimeterExteriorFragmentAxisDistanceDrawingUnits = 8.0;
     private const double MaxContainedExteriorFragmentLengthRatio = 0.55;
     private const double MinContainedExteriorFragmentOverlapRatio = 0.985;
     private const double MaxContainedSourceBackedFallbackAxisDistanceDrawingUnits = 6.0;
@@ -44,6 +45,7 @@ internal static class WallTopologySpanVisibility
     private const double MinExteriorFragmentRepresentedBySourceBackedFallbackOverlapRatio = 0.95;
     private const double MinExteriorFragmentRepresentedBySourceBackedFallbackPairScore = 0.86;
     private const double MinExteriorFragmentRepresentedBySourceBackedFallbackPairOverlapRatio = 0.90;
+    private const double MaxGraphBackedSourceFallbackComparableLengthDeltaDrawingUnits = 12.0;
     private const double MaxRedundantLongSourceBackedExteriorFallbackAxisDistanceDrawingUnits = 9.0;
     private const double MaxRedundantLongSourceBackedExteriorFallbackLengthRatio = 0.92;
     private const double MinRedundantLongSourceBackedExteriorFallbackOverlapRatio = 0.985;
@@ -81,6 +83,8 @@ internal static class WallTopologySpanVisibility
     private const double MinSourceBackedFallbackWallLengthDrawingUnits = 48.0;
     private const double MinTrustedInferredExteriorShellFallbackSourceCoverage = 0.85;
     private const int MinTrustedInferredExteriorShellFallbackSourcePrimitiveCount = 4;
+    private const double MinTrustedRoomBoundaryOnlyInferredExteriorShellFallbackOverlapDrawingUnits = 40.0;
+    private const double MinTrustedRoomBoundaryOnlyInferredExteriorShellFallbackOverlapRatio = 0.80;
     private const double MinSourceBackedFallbackPairScore = 0.70;
     private const double MinSourceBackedFallbackStrictPairScore = 0.74;
     private const double MinSourceBackedFallbackOverlapRatio = 0.72;
@@ -249,13 +253,14 @@ internal static class WallTopologySpanVisibility
             return graphCleanSpans;
         }
 
-        return FinalizeCleanPlacementSpans(
+        var finalized = FinalizeCleanPlacementSpans(
             RecenterRepresentedCleanPlacementSpansToPairedBodyAxes(
                 RegularizeCleanPlacementRuns(
                     SplitCleanTopologyRunsAroundOpenings(combined, openings)),
                 walls,
                 context),
             openings);
+        return RestoreEndpointSnapTargetSourceBackedFallbackSpans(finalized, sourceBackedFallbackSpans);
     }
 
     public static IReadOnlyList<WallGraphTopologySpan> BuildCleanPlacementTopologySpans(
@@ -274,6 +279,38 @@ internal static class WallTopologySpanVisibility
 
     internal static bool IsSourceBackedFallbackTopologySpan(WallGraphTopologySpan span) =>
         span.Id.Contains(":source-backed-fallback:", StringComparison.Ordinal);
+
+    private static IReadOnlyList<WallGraphTopologySpan> RestoreEndpointSnapTargetSourceBackedFallbackSpans(
+        IReadOnlyList<WallGraphTopologySpan> finalized,
+        IReadOnlyList<WallGraphTopologySpan> sourceBackedFallbackSpans)
+    {
+        if (finalized.Count == 0 || sourceBackedFallbackSpans.Count == 0)
+        {
+            return finalized;
+        }
+
+        var finalizedIds = finalized
+            .Select(span => span.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var snapTargetEvidence = finalized
+            .SelectMany(span => span.Evidence)
+            .Where(evidence => evidence.Contains("clean placement endpoint snap", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (snapTargetEvidence.Length == 0)
+        {
+            return finalized;
+        }
+
+        var restore = sourceBackedFallbackSpans
+            .Where(span => !finalizedIds.Contains(span.Id))
+            .Where(IsEndpointSnapCandidatePlacementSpan)
+            .Where(span => !HasSourceBackedPlacementMergeBlockedEvidence(span))
+            .Where(span => snapTargetEvidence.Any(evidence => evidence.Contains(span.Id, StringComparison.Ordinal)))
+            .ToArray();
+        return restore.Length == 0
+            ? finalized
+            : finalized.Concat(restore).ToArray();
+    }
 
     public static IReadOnlyList<WallGraphTopologySpan> BuildRegularizedPlacementTopologySpans(
         PlanScanResult result)
@@ -812,6 +849,11 @@ internal static class WallTopologySpanVisibility
                     wall,
                     component,
                     assessment);
+            var canRecoverRoomBoundaryOnlyInferredExteriorShell =
+                IsTrustedRoomBoundaryOnlyInferredExteriorShellFallback(
+                    wall,
+                    component,
+                    assessment);
             var coverageRatio = CleanPlacementCoverageRatio(
                 wall,
                 cleanSpans,
@@ -827,6 +869,7 @@ internal static class WallTopologySpanVisibility
             if (((coverageRatio >= existingCoverageLimit || representedByExistingCleanSpan)
                     && !canRecoverUnsafeCleanProjection)
                     && !canRecoverRejectedObjectLikeBoundaryRecall
+                    && !canRecoverRoomBoundaryOnlyInferredExteriorShell
                 || !ShouldBuildSourceBackedFallbackSpan(wall, context, openings))
             {
                 continue;
@@ -988,6 +1031,8 @@ internal static class WallTopologySpanVisibility
             IsTrustedSourceBackedExteriorShellClosureFallback(wall, assessment);
         var hasTrustedInferredExteriorShellFallback =
             IsTrustedInferredExteriorShellFallback(wall, component, assessment);
+        var hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback =
+            IsTrustedRoomBoundaryOnlyInferredExteriorShellFallback(wall, component, assessment);
         var hasTrustedShortExteriorWallBody =
             IsTrustedShortExteriorSourceBackedFallbackWallBody(wall, component, assessment);
         var hasTrustedRoomBoundaryShortExteriorWallBody =
@@ -1044,6 +1089,7 @@ internal static class WallTopologySpanVisibility
                 && !trustedExteriorShellRepairSupportedWall
                 && !hasTrustedSourceBackedExteriorShellClosure
                 && !hasTrustedInferredExteriorShellFallback
+                && !hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
@@ -1196,6 +1242,7 @@ internal static class WallTopologySpanVisibility
                 && !trustedExteriorShellRepairSupportedWall
                 && !hasTrustedSourceBackedExteriorShellClosure
                 && !hasTrustedInferredExteriorShellFallback
+                && !hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
@@ -1229,6 +1276,7 @@ internal static class WallTopologySpanVisibility
                 && !trustedExteriorShellRepairSupportedWall
                 && !hasTrustedSourceBackedExteriorShellClosure
                 && !hasTrustedInferredExteriorShellFallback
+                && !hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
@@ -1262,6 +1310,7 @@ internal static class WallTopologySpanVisibility
                 && !trustedExteriorShellRepairSupportedWall
                 && !hasTrustedSourceBackedExteriorShellClosure
                 && !hasTrustedInferredExteriorShellFallback
+                && !hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
@@ -1306,6 +1355,7 @@ internal static class WallTopologySpanVisibility
                 && !trustedExteriorShellRepairSupportedWall
                 && !hasTrustedSourceBackedExteriorShellClosure
                 && !hasTrustedInferredExteriorShellFallback
+                && !hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
                 && !hasTrustedShortExteriorWallBody
                 && !hasTrustedRoomBoundaryShortExteriorWallBody
                 && !hasTrustedShortRecoveredRoomBoundary
@@ -1347,6 +1397,7 @@ internal static class WallTopologySpanVisibility
             && !trustedExteriorShellRepairSupportedWall
             && !hasTrustedSourceBackedExteriorShellClosure
             && !hasTrustedInferredExteriorShellFallback
+            && !hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
             && !hasTrustedShortExteriorWallBody
             && !hasTrustedRoomBoundaryShortExteriorWallBody
             && !hasTrustedShortRecoveredRoomBoundary
@@ -1390,6 +1441,7 @@ internal static class WallTopologySpanVisibility
             || hasTrustedRoomReferencedPlacementReadyPair
             || hasTrustedSourceBackedExteriorShellClosure
             || hasTrustedInferredExteriorShellFallback
+            || hasTrustedRoomBoundaryOnlyInferredExteriorShellFallback
             || hasTrustedShortExteriorWallBody
             || hasTrustedRoomBoundaryShortExteriorWallBody
             || hasTrustedShortRecoveredRoomBoundary
@@ -1436,7 +1488,59 @@ internal static class WallTopologySpanVisibility
             return false;
         }
 
-        return !ContainsAnyEvidence(
+        return !HasInferredExteriorShellFallbackBlocker(evidence);
+    }
+
+    private static bool IsTrustedRoomBoundaryOnlyInferredExteriorShellFallback(
+        WallSegment wall,
+        WallGraphComponent? component,
+        WallEvidenceWallAssessment? assessment)
+    {
+        if (assessment is null
+            || wall.WallType != WallType.Exterior
+            || wall.DetectionKind != WallDetectionKind.SingleLine
+            || wall.DrawingLength < MinSourceBackedFallbackWallLengthDrawingUnits
+            || wall.SourcePrimitiveIds.Count > 0
+            || assessment.Category != WallEvidenceCategory.RecoveredWallBody
+            || !assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || ResolveDominantOrthogonalOrientation(wall.CenterLine) == PlacementRunOrientation.Unknown
+            || component?.ExcludedFromStructuralTopology == true
+            || component?.Kind is WallGraphComponentKind.ObjectLikeIsland or WallGraphComponentKind.IsolatedFragment)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(component?.Evidence ?? Array.Empty<string>())
+            .ToArray();
+        if (!ContainsEvidence(evidence, "inferred exterior shell wall from indoor room boundary with outside on opposite side")
+            || !ContainsEvidence(evidence, "exterior-shell inference room")
+            || ContainsEvidence(evidence, "exterior-shell inference source-line support coverage"))
+        {
+            return false;
+        }
+
+        var overlap = MaxEvidenceNumberAfter(evidence, "overlap length ");
+        if (overlap is null
+            || overlap.Value < MinTrustedRoomBoundaryOnlyInferredExteriorShellFallbackOverlapDrawingUnits
+            || overlap.Value / Math.Max(wall.DrawingLength, 0.001)
+                < MinTrustedRoomBoundaryOnlyInferredExteriorShellFallbackOverlapRatio)
+        {
+            return false;
+        }
+
+        return !HasInferredExteriorShellFallbackBlocker(evidence);
+    }
+
+    private static bool HasInferredExteriorShellFallbackBlocker(IReadOnlyList<string> evidence)
+    {
+        return ContainsAnyEvidence(
             evidence,
             "surface pattern",
             "non-structural surface",
@@ -2327,11 +2431,26 @@ internal static class WallTopologySpanVisibility
         }
 
         var end = start;
-        while (end < evidence.Length
-               && (char.IsDigit(evidence[end])
-                   || evidence[end] is '.' or ','))
+        while (end < evidence.Length)
         {
-            end++;
+            var current = evidence[end];
+            if (char.IsDigit(current))
+            {
+                end++;
+                continue;
+            }
+
+            if (current is '.' or ','
+                && end > start
+                && char.IsDigit(evidence[end - 1])
+                && end + 1 < evidence.Length
+                && char.IsDigit(evidence[end + 1]))
+            {
+                end++;
+                continue;
+            }
+
+            break;
         }
 
         if (end <= start)
@@ -3099,6 +3218,8 @@ internal static class WallTopologySpanVisibility
                 assessment);
         var trustedSourceBackedExteriorShellClosure =
             IsTrustedSourceBackedExteriorShellClosureFallback(wall, assessment);
+        var trustedRoomBoundaryOnlyInferredExteriorShellFallback =
+            IsTrustedRoomBoundaryOnlyInferredExteriorShellFallback(wall, component, assessment);
         var trustedShortExteriorWallBody =
             IsTrustedShortExteriorSourceBackedFallbackWallBody(wall, component, assessment);
         var trustedRoomBoundaryShortExteriorWallBody =
@@ -3170,6 +3291,10 @@ internal static class WallTopologySpanVisibility
         else if (trustedSourceBackedExteriorShellClosure)
         {
             evidence.Add("source-backed fallback accepted because source-backed exterior shell closure is placement-ready");
+        }
+        else if (trustedRoomBoundaryOnlyInferredExteriorShellFallback)
+        {
+            evidence.Add("source-backed fallback accepted because inferred exterior shell has strong room-boundary support without source-line coverage");
         }
         else if (IsTrustedInferredExteriorShellFallback(wall, component, assessment))
         {
@@ -4197,7 +4322,7 @@ internal static class WallTopologySpanVisibility
 
         var candidates = spans
             .Where(IsAxisAlignedPlacementSpan)
-            .Where(span => !IsSourceBackedFallbackSpan(span))
+            .Where(IsEndpointSnapCandidatePlacementSpan)
             .ToArray();
         if (candidates.Length <= 1)
         {
@@ -4291,7 +4416,7 @@ internal static class WallTopologySpanVisibility
                 || span.Id == target.Id
                 || span.PageNumber != target.PageNumber
                 || target.DrawingLength < MinCleanRunLengthDrawingUnits
-                || IsSourceBackedFallbackSpan(target))
+                || !IsEndpointSnapCandidatePlacementSpan(target))
             {
                 continue;
             }
@@ -4353,6 +4478,16 @@ internal static class WallTopologySpanVisibility
         PlacementRunOrientation second) =>
         first == PlacementRunOrientation.Horizontal && second == PlacementRunOrientation.Vertical
         || first == PlacementRunOrientation.Vertical && second == PlacementRunOrientation.Horizontal;
+
+    private static bool IsEndpointSnapCandidatePlacementSpan(WallGraphTopologySpan span)
+    {
+        if (!IsSourceBackedFallbackSpan(span))
+        {
+            return true;
+        }
+
+        return IsTrustedSourceBackedFallbackPlacementMergeSpan(span);
+    }
 
     private static double IntervalOverrun(double value, double min, double max)
     {
@@ -5230,11 +5365,15 @@ internal static class WallTopologySpanVisibility
         WallGraphTopologySpan second)
     {
         if (first.WallId == second.WallId
-            || IsSourceBackedFallbackSpan(first)
-            || IsSourceBackedFallbackSpan(second)
             || ResolveAxisOrientation(first.CenterLine) != ResolveAxisOrientation(second.CenterLine)
             || Math.Abs(AxisCoordinate(first) - AxisCoordinate(second))
                 > MaxOverlappingCollinearMergeAxisDistanceDrawingUnits)
+        {
+            return false;
+        }
+
+        if ((IsSourceBackedFallbackSpan(first) || IsSourceBackedFallbackSpan(second))
+            && !CanMergeOverlappingSourceBackedPlacementSpans(first, second))
         {
             return false;
         }
@@ -5253,6 +5392,74 @@ internal static class WallTopologySpanVisibility
 
         var shorterLength = Math.Max(Math.Min(first.DrawingLength, second.DrawingLength), 0.001);
         return overlap / shorterLength < MinContainedDuplicateOverlapRatio;
+    }
+
+    private static bool CanMergeOverlappingSourceBackedPlacementSpans(
+        WallGraphTopologySpan first,
+        WallGraphTopologySpan second)
+    {
+        if (!IsTrustedSourceBackedFallbackPlacementMergeSpan(first)
+            || !IsTrustedSourceBackedFallbackPlacementMergeSpan(second))
+        {
+            return false;
+        }
+
+        var firstWallType = first.SourceWall?.WallType ?? WallType.Unknown;
+        var secondWallType = second.SourceWall?.WallType ?? WallType.Unknown;
+        if (firstWallType == WallType.Unknown
+            || secondWallType == WallType.Unknown
+            || firstWallType != secondWallType)
+        {
+            return false;
+        }
+
+        return !HasSourceBackedPlacementMergeBlockedEvidence(first)
+            && !HasSourceBackedPlacementMergeBlockedEvidence(second);
+    }
+
+    private static bool IsTrustedSourceBackedFallbackPlacementMergeSpan(WallGraphTopologySpan span)
+    {
+        if (!IsSourceBackedFallbackSpan(span))
+        {
+            return true;
+        }
+
+        return span.SourceWall?.WallType switch
+        {
+            WallType.Exterior => IsTrustedExteriorPlacementRunBridgeSpan(span),
+            WallType.Interior => IsTrustedInteriorPlacementRunBridgeSpan(span),
+            _ => false
+        };
+    }
+
+    private static bool HasSourceBackedPlacementMergeBlockedEvidence(WallGraphTopologySpan span)
+    {
+        var evidence = (span.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(span.Evidence)
+            .ToArray();
+        return ContainsAnyEvidence(
+            evidence,
+            "covered-area",
+            "covered entry",
+            "covered-entry",
+            "dimension annotation",
+            "door arc",
+            "door leaf",
+            "door swing",
+            "fixture detail",
+            "object/fixture",
+            "opening detail",
+            "overbygd",
+            "railing",
+            "repeated short detail",
+            "stair",
+            "surface pattern",
+            "surface/detail",
+            "terrace detail",
+            "trim/detail",
+            "wall-like linework near anchored opening",
+            "witness/extension",
+            "non-wall");
     }
 
     private static bool MergeWouldOverextendTrustedShortFilledInteriorSource(
@@ -5606,8 +5813,9 @@ internal static class WallTopologySpanVisibility
             var kept = new List<WallGraphTopologySpan>();
             foreach (var span in group
                 .OrderBy(span => IsTopologyBlockedSourceBackedFallbackSpan(span) ? 1 : 0)
-                .ThenByDescending(span => span.DrawingLength)
+                .ThenByDescending(DuplicateSuppressionSortLength)
                 .ThenBy(span => IsSourceBackedFallbackSpan(span) ? 1 : 0)
+                .ThenByDescending(span => span.DrawingLength)
                 .ThenByDescending(span => span.Confidence.Value)
                 .ThenBy(span => span.Id, StringComparer.Ordinal))
             {
@@ -5630,6 +5838,11 @@ internal static class WallTopologySpanVisibility
             .Where(span => !suppressedSpanIds.Contains(span.Id))
             .ToArray();
     }
+
+    private static double DuplicateSuppressionSortLength(WallGraphTopologySpan span) =>
+        IsSourceBackedFallbackSpan(span)
+            ? span.DrawingLength - MaxGraphBackedSourceFallbackComparableLengthDeltaDrawingUnits
+            : span.DrawingLength;
 
     private static bool IsContainedDuplicatePlacementSpan(
         WallGraphTopologySpan candidate,
@@ -5681,6 +5894,11 @@ internal static class WallTopologySpanVisibility
             }
 
             var isTinyContainedSameType = IsTinyContainedSameTypePlacementSpan(candidate, kept, overlapRatio, axisDistance);
+            if (IsDistinctParallelPairedInteriorWallBody(candidate, kept, overlapRatio, axisDistance))
+            {
+                continue;
+            }
+
             if (IsContainedDuplicateOverlapAcceptable(candidate, kept, overlapRatio, axisDistance)
                 || isTinyContainedSameType)
             {
@@ -5723,6 +5941,34 @@ internal static class WallTopologySpanVisibility
         }
 
         return false;
+    }
+
+    private static bool IsDistinctParallelPairedInteriorWallBody(
+        WallGraphTopologySpan candidate,
+        WallGraphTopologySpan kept,
+        double overlapRatio,
+        double axisDistance)
+    {
+        if (candidate.SourceWall?.WallType != WallType.Interior
+            || kept.SourceWall?.WallType != WallType.Interior
+            || IsSourceBackedFallbackSpan(candidate)
+            || IsSourceBackedFallbackSpan(kept)
+            || candidate.SourceWallGraphEdgeIds.Count == 0
+            || kept.SourceWallGraphEdgeIds.Count == 0
+            || HasSharedSourceReference(candidate.SourcePrimitiveIds, kept.SourcePrimitiveIds)
+            || overlapRatio < MinNearContainedDuplicateOverlapRatio
+            || axisDistance <= MaxContainedDuplicateAxisDistanceDrawingUnits
+            || axisDistance > Math.Max(candidate.Thickness, kept.Thickness)
+            || candidate.SourceWall.PairEvidence is not { Score: >= 0.85, OverlapRatio: >= 0.85 }
+            || kept.SourceWall.PairEvidence is not { Score: >= 0.85, OverlapRatio: >= 0.85 })
+        {
+            return false;
+        }
+
+        var candidateEvidence = candidate.SourceWall.Evidence.Concat(candidate.Evidence).ToArray();
+        var keptEvidence = kept.SourceWall.Evidence.Concat(kept.Evidence).ToArray();
+        return ContainsEvidence(candidateEvidence, "strong double-edge wall body")
+            && ContainsEvidence(keptEvidence, "strong double-edge wall body");
     }
 
     private static bool IsSyntheticExteriorShellMaskingTrustedInteriorPlacementSpan(
@@ -5795,13 +6041,18 @@ internal static class WallTopologySpanVisibility
         double overlapRatio,
         double axisDistance)
     {
-        if (axisDistance > MaxContainedExteriorFragmentAxisDistanceDrawingUnits
+        var representedByRecoveredPerimeterShell = IsFilledWallSolidContainedInRecoveredPerimeterShell(candidate, kept);
+        var maxAxisDistance = representedByRecoveredPerimeterShell
+            ? MaxContainedRecoveredPerimeterExteriorFragmentAxisDistanceDrawingUnits
+            : MaxContainedExteriorFragmentAxisDistanceDrawingUnits;
+        if (axisDistance > maxAxisDistance
             || overlapRatio < MinContainedExteriorFragmentOverlapRatio
             || candidate.DrawingLength <= 0.001
             || kept.DrawingLength <= 0.001
             || candidate.DrawingLength > kept.DrawingLength * MaxContainedExteriorFragmentLengthRatio
             || (!HasContainedExteriorFragmentNoiseEvidence(candidate)
-                && !IsFilledWallSolidContainedInNoisyLongExteriorRun(candidate, kept)))
+                && !IsFilledWallSolidContainedInNoisyLongExteriorRun(candidate, kept)
+                && !representedByRecoveredPerimeterShell))
         {
             return false;
         }
@@ -5809,6 +6060,48 @@ internal static class WallTopologySpanVisibility
         var overhang = Math.Max(0, AxisMin(kept.CenterLine) - AxisMin(candidate.CenterLine))
             + Math.Max(0, AxisMax(candidate.CenterLine) - AxisMax(kept.CenterLine));
         return overhang <= NearContainedDuplicateOverhangTolerance(candidate, kept);
+    }
+
+    private static bool IsFilledWallSolidContainedInRecoveredPerimeterShell(
+        WallGraphTopologySpan candidate,
+        WallGraphTopologySpan kept)
+    {
+        var candidateEvidence = (candidate.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(candidate.Evidence)
+            .ToArray();
+        if (!ContainsEvidence(candidateEvidence, "filled wall-solid primitive"))
+        {
+            return false;
+        }
+
+        var keptEvidence = (kept.SourceWall?.Evidence ?? Array.Empty<string>())
+            .Concat(kept.Evidence)
+            .ToArray();
+        if (!ContainsEvidence(keptEvidence, "recovered wall body aligned to main floorplan perimeter shell")
+            || !ContainsEvidence(keptEvidence, "geometric room boundary support from reliable room-boundary alignment"))
+        {
+            return false;
+        }
+
+        return !ContainsAnyEvidence(
+                candidateEvidence.Concat(keptEvidence),
+                "surface pattern",
+                "surface/detail",
+                "object/fixture",
+                "fixture detail",
+                "repeated short detail",
+                "covered-area",
+                "covered entry",
+                "covered-entry",
+                "overbygd",
+                "canopy",
+                "terrace",
+                "railing",
+                "stair",
+                "door swing",
+                "door leaf",
+                "door arc",
+                "dimension annotation");
     }
 
     private static bool HasContainedExteriorFragmentNoiseEvidence(WallGraphTopologySpan span)
@@ -5915,11 +6208,12 @@ internal static class WallTopologySpanVisibility
     {
         var candidateWallType = candidate.SourceWall?.WallType ?? WallType.Unknown;
         var keptWallType = kept.SourceWall?.WallType ?? WallType.Unknown;
+        var lengthOverrun = candidate.DrawingLength - kept.DrawingLength;
         if (candidateWallType != keptWallType
             || candidateWallType == WallType.Unknown
             || IsTopologyBlockedSourceBackedFallbackSpan(candidate)
             || IsTopologyBlockedSourceBackedFallbackSpan(kept)
-            || candidate.DrawingLength > kept.DrawingLength)
+            || lengthOverrun > MaxGraphBackedSourceFallbackComparableLengthDeltaDrawingUnits)
         {
             return false;
         }
@@ -5945,10 +6239,73 @@ internal static class WallTopologySpanVisibility
             return true;
         }
 
+        if (CanRepresentNearEquivalentSourceBackedFallbackWithGraphSpan(
+                candidate,
+                kept,
+                overlapRatio,
+                axisDistance,
+                lengthOverrun))
+        {
+            return true;
+        }
+
         return axisDistance <= MaxContainedSourceBackedFallbackAxisDistanceDrawingUnits
             && overlapRatio >= MinContainedSourceBackedFallbackOverlapRatio
             && candidate.DrawingLength <= kept.DrawingLength * MaxContainedSourceBackedFallbackLengthRatio
             && ContainsEvidence(candidate.Evidence, "source-backed fallback accepted");
+    }
+
+    private static bool CanRepresentNearEquivalentSourceBackedFallbackWithGraphSpan(
+        WallGraphTopologySpan candidate,
+        WallGraphTopologySpan kept,
+        double overlapRatio,
+        double axisDistance,
+        double lengthOverrun)
+    {
+        if (!IsSourceBackedFallbackSpan(candidate)
+            || IsSourceBackedFallbackSpan(kept)
+            || kept.SourceWallGraphEdgeIds.Count == 0
+            || candidate.SourceWall?.PairEvidence is not { } pair
+            || lengthOverrun < -MaxGraphBackedSourceFallbackComparableLengthDeltaDrawingUnits
+            || axisDistance > MaxContainedSourceBackedFallbackAxisDistanceDrawingUnits
+            || axisDistance >= pair.FaceSeparation * 0.90
+            || overlapRatio < MinContainedSourceBackedFallbackOverlapRatio)
+        {
+            return false;
+        }
+
+        var candidateEvidence = candidate.Evidence
+            .Concat(candidate.SourceWall?.Evidence ?? Array.Empty<string>())
+            .ToArray();
+        if (ContainsAnyEvidence(
+                candidateEvidence,
+                "clean placement interior run bridge",
+                "clean placement multi-source bridge"))
+        {
+            return false;
+        }
+
+        if (!ContainsEvidence(candidateEvidence, "source-backed fallback accepted")
+            || ContainsAnyEvidence(
+                candidateEvidence,
+                "blocked graph repair",
+                "covered-area",
+                "covered entry",
+                "covered-entry",
+                "door leaf",
+                "door swing",
+                "fixture detail",
+                "object/fixture",
+                "overbygd",
+                "railing",
+                "repeated short detail",
+                "surface pattern",
+                "terrace"))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool CanRepresentExteriorFragmentWithTrustedSourceBackedFallback(
