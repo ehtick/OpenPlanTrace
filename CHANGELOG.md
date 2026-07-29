@@ -8,6 +8,14 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.013] - 2026-07-29
+
+- Improved cross-domain wall recall.
+- Recovered complete room-separating walls over partial fallback fragments.
+- Prevented fixture-sized room loops from promoting object lines.
+- Improved structural solver decision diagnostics.
+- Improved walls-only verification across all difficulty tiers.
+
 ## [0.11.012] - 2026-07-29
 
 - Recovered solver-selected walls with review evidence.

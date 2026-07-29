@@ -12,6 +12,7 @@ internal static class StructuralWallRunReadinessEvaluator
         }
 
         var hasStrongWallBody = candidates.Any(candidate => candidate.HasIndependentWallBodyEvidence);
+        var hasCrossDomainWallBody = candidates.Any(candidate => candidate.HasCrossDomainWallBodyEvidence);
         var hasContextOnlyNegative = candidates.Any(candidate =>
             HasStrongSignal(candidate, StructuralEvidenceSignalKind.ContextOnlyBoundary));
         var hasUnsupportedGeometryNegative = candidates.Any(candidate =>
@@ -73,6 +74,7 @@ internal static class StructuralWallRunReadinessEvaluator
         var blockingContextOnlyNegative =
             hasContextOnlyNegative
             && !hasStrongWallBody
+            && !hasCrossDomainWallBody
             && !contextBoundaryCorroboratedByOpening;
         var blockingStrongNegative =
             blockingIntrinsicNegative
@@ -91,6 +93,7 @@ internal static class StructuralWallRunReadinessEvaluator
                 || candidate.Origins.HasFlag(StructuralCandidateOrigin.ExteriorShell)));
         var ready = !blockingStrongNegative
             && (hasStrongWallBody
+                || hasCrossDomainWallBody
                 || hasAcceptedAxisAlignedMediumBody
                 || hasSupportedRecovery);
         var reasons = new List<string>();
@@ -114,6 +117,10 @@ internal static class StructuralWallRunReadinessEvaluator
         {
             reasons.Add("independent strong wall-body evidence outweighs outdoor or conflicted room context");
         }
+        else if (hasContextOnlyNegative && hasCrossDomainWallBody)
+        {
+            reasons.Add("wall-body, coherent topology, and opposite-room evidence outweigh provisional room context");
+        }
         else if (hasStrongNegative)
         {
             reasons.Add(
@@ -123,6 +130,10 @@ internal static class StructuralWallRunReadinessEvaluator
         if (hasStrongWallBody)
         {
             reasons.Add("independent strong wall-body evidence supports coordinate placement");
+        }
+        else if (hasCrossDomainWallBody)
+        {
+            reasons.Add("cross-domain wall-body evidence supports coordinate placement");
         }
         else if (hasAcceptedAxisAlignedMediumBody)
         {

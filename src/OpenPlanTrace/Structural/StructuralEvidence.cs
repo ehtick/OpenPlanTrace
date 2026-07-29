@@ -131,6 +131,42 @@ public sealed record StructuralWallCandidate(
             signal.Kind == StructuralEvidenceSignalKind.WallBody
             && signal.Weight >= 0.30);
 
+    public bool HasAcceptedPlacementReadyWallBodyEvidence =>
+        WasAcceptedByPreliminaryPipeline
+        && !Signals.Any(signal =>
+            signal.Kind is StructuralEvidenceSignalKind.ReviewWall
+                or StructuralEvidenceSignalKind.RejectedWall
+            && signal.Weight < 0)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.AcceptedWall
+            && signal.Weight > 0)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.WallBody
+            && signal.Weight >= 0.16);
+
+    public bool HasCrossDomainWallBodyEvidence =>
+        HasAcceptedPlacementReadyWallBodyEvidence
+        && Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
+        && Origins.HasFlag(StructuralCandidateOrigin.RoomBoundary)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.ExistingGraph
+            && signal.Weight > 0)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.StructuralTerritory
+            && signal.Weight > 0)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.OppositeRoomBoundary
+            && signal.Weight >= 0.08)
+        && !Signals.Any(signal =>
+            signal.Weight <= -0.45
+            && signal.Kind is
+                StructuralEvidenceSignalKind.DoorOrOpeningSymbol
+                    or StructuralEvidenceSignalKind.SurfacePattern
+                    or StructuralEvidenceSignalKind.RepeatedDetailPattern
+                    or StructuralEvidenceSignalKind.DimensionOrAnnotation
+                    or StructuralEvidenceSignalKind.ObjectOrFixture
+                    or StructuralEvidenceSignalKind.UnsupportedOblique);
+
     public bool HasStrongRepeatedDetailEvidence =>
         Signals.Any(signal =>
             signal.Kind == StructuralEvidenceSignalKind.RepeatedDetailPattern
@@ -144,6 +180,7 @@ public sealed record StructuralWallCandidate(
                 or StructuralEvidenceSignalKind.WallBodyThicknessOutlier
             && signal.Weight <= -0.45)
         || (!HasIndependentWallBodyEvidence
+            && !HasCrossDomainWallBodyEvidence
             && !Origins.HasFlag(StructuralCandidateOrigin.OpeningHost)
             && Signals.Any(signal =>
                 signal.Kind == StructuralEvidenceSignalKind.ContextOnlyBoundary

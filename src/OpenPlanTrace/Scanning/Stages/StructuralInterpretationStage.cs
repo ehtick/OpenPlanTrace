@@ -59,6 +59,11 @@ internal sealed class StructuralInterpretationStage : IPipelineStage
             .Where(decision => decision.Decision == StructuralWallDecisionKind.Selected)
             .Select(decision => decision.CandidateId)
             .ToHashSet(StringComparer.Ordinal);
+        var decisionsByCandidateId = solution.CandidateDecisions
+            .ToDictionary(decision => decision.CandidateId, StringComparer.Ordinal);
+        var objective = new StructuralObjective(
+            graph,
+            context.Options.StructuralSolver);
         var strongNegativeSelected = graph.WallCandidates
             .Where(candidate => selectedCandidateIds.Contains(candidate.Id))
             .Where(candidate => candidate.HasStrongNegativeEvidence)
@@ -124,7 +129,40 @@ internal sealed class StructuralInterpretationStage : IPipelineStage
                     strongNegativeCandidates
                         .Take(80)
                         .Select(candidate =>
-                            $"{candidate.Id}|decision={solution.CandidateDecisions.FirstOrDefault(decision => string.Equals(decision.CandidateId, candidate.Id, StringComparison.Ordinal))?.Decision}|absolute={candidate.HasAbsoluteBlockingEvidence}|score={candidate.UnaryScore:0.###}|origins={candidate.Origins}|signals={string.Join(",", candidate.Signals.Where(signal => signal.IsStrongBlockingSemanticNegative).Select(signal => $"{signal.Kind}:{signal.Weight:0.###}"))}")),
+                        {
+                            decisionsByCandidateId.TryGetValue(candidate.Id, out var decision);
+                            var selectionDelta = selectedCandidateIds.Contains(candidate.Id)
+                                ? 0
+                                : objective.ToggleDelta(
+                                    candidate.Id,
+                                    selectedCandidateIds,
+                                    add: true);
+                            var selectedRelations = graph.Relations
+                                .Where(relation =>
+                                    string.Equals(
+                                        relation.FirstCandidateId,
+                                        candidate.Id,
+                                        StringComparison.Ordinal)
+                                    || string.Equals(
+                                        relation.SecondCandidateId,
+                                        candidate.Id,
+                                        StringComparison.Ordinal))
+                                .Select(relation => (
+                                    Relation: relation,
+                                    OtherId: string.Equals(
+                                        relation.FirstCandidateId,
+                                        candidate.Id,
+                                        StringComparison.Ordinal)
+                                            ? relation.SecondCandidateId
+                                            : relation.FirstCandidateId))
+                                .Where(item => selectedCandidateIds.Contains(item.OtherId))
+                                .OrderBy(item => item.Relation.Kind)
+                                .ThenBy(item => item.OtherId, StringComparer.Ordinal)
+                                .Select(item =>
+                                    $"{item.Relation.Kind}:{item.Relation.Weight:0.###}:{item.Relation.IsHardConstraint}:{item.OtherId}")
+                                .ToArray();
+                            return $"{candidate.Id}|decision={decision?.Decision}|absolute={candidate.HasAbsoluteBlockingEvidence}|score={candidate.UnaryScore:0.###}|selectionDelta={selectionDelta:0.###}|origins={candidate.Origins}|signals={string.Join(",", candidate.Signals.Where(signal => signal.IsStrongBlockingSemanticNegative).Select(signal => $"{signal.Kind}:{signal.Weight:0.###}"))}|selectedRelations={string.Join(",", selectedRelations)}|reasons={string.Join("/", decision?.Reasons ?? Array.Empty<string>())}";
+                        })),
                 ["strongNegativeSelectedDetails"] = string.Join(
                     ";",
                     strongNegativeSelected

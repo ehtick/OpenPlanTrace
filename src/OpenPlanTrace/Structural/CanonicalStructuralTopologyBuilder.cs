@@ -71,7 +71,8 @@ internal static class CanonicalStructuralTopologyBuilder
         StructuralWallCandidate candidate) =>
         candidate.HasAbsoluteBlockingEvidence
         || (candidate.HasStrongNegativeEvidence
-            && !candidate.HasIndependentWallBodyEvidence);
+            && !candidate.HasIndependentWallBodyEvidence
+            && !candidate.HasCrossDomainWallBodyEvidence);
 
     private static StructuralWallRun BuildRun(
         IReadOnlyList<StructuralWallCandidate> candidates,

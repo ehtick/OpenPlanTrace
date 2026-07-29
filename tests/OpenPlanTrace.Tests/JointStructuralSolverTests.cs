@@ -951,6 +951,317 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void EvidenceGraph_CorroboratesAcceptedMediumWallBetweenOppositeProvisionalRooms()
+    {
+        var wall = Wall(
+            "accepted-provisional-room-partition",
+            new PlanLineSegment(new PlanPoint(60, 0), new PlanPoint(60, 80)),
+            Confidence.High) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior
+        };
+        var leftRoom = new RoomRegion(
+            "provisional-left-room",
+            1,
+            new PlanRect(0, 0, 60, 80),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(60, 0),
+                new PlanPoint(60, 80),
+                new PlanPoint(0, 80)
+            ],
+            [wall.Id],
+            Confidence.High);
+        var rightRoom = new RoomRegion(
+            "provisional-right-room",
+            1,
+            new PlanRect(60, 0, 60, 80),
+            [
+                new PlanPoint(60, 0),
+                new PlanPoint(120, 0),
+                new PlanPoint(120, 80),
+                new PlanPoint(60, 80)
+            ],
+            [wall.Id],
+            Confidence.High);
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                acceptedWalls: [wall],
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [AcceptedAssessment(wall, WallEvidenceCategory.MediumWallBody)],
+                    SourceCandidateWallCount: 1),
+                wallGraph: WallGraphFor(
+                    [wall],
+                    WallGraphComponentKind.MainStructural,
+                    excludedFromStructuralTopology: false),
+                rooms: [leftRoom, rightRoom]));
+
+        var candidate = Assert.Single(
+            graph.WallCandidates,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.Contains(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.ContextOnlyBoundary
+                && signal.Weight <= -0.45);
+        Assert.Contains(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.OppositeRoomBoundary
+                && signal.Description.Contains(
+                    "opposite provisional room interiors",
+                    StringComparison.OrdinalIgnoreCase));
+        Assert.True(candidate.HasCrossDomainWallBodyEvidence);
+        Assert.False(candidate.HasAbsoluteBlockingEvidence);
+
+        var solution = JointStructuralSolver.Solve(graph);
+        var run = Assert.Single(
+            solution.WallRuns,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.True(run.Reliability.ReadyForCoordinatePlacement);
+        Assert.False(run.Reliability.RequiresReview);
+        Assert.Contains(
+            run.Reliability.Reasons,
+            reason => reason.Contains("cross-domain", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void JointSolver_PrefersLongCrossDomainWallOverContainedRecoveredFallback()
+    {
+        var wall = Wall(
+            "long-cross-domain-partition",
+            new PlanLineSegment(new PlanPoint(60, 0), new PlanPoint(60, 80)),
+            new Confidence(0.81)) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior
+        };
+        var recovered = Wall(
+            "contained-recovered-partition",
+            new PlanLineSegment(new PlanPoint(60, 0), new PlanPoint(60, 30)),
+            new Confidence(0.91)) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = ["primitive:long-cross-domain-partition"],
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(59, 0), new PlanPoint(59, 30)),
+                new PlanLineSegment(new PlanPoint(61, 0), new PlanPoint(61, 30)),
+                FaceSeparation: 2,
+                OverlapRatio: 1,
+                Score: 0.91,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: ["primitive:contained-recovered:first"],
+                SecondFaceSourcePrimitiveIds: ["primitive:contained-recovered:second"])
+        };
+        var leftRoom = new RoomRegion(
+            "dominance-left-room",
+            1,
+            new PlanRect(0, 0, 60, 80),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(60, 0),
+                new PlanPoint(60, 80),
+                new PlanPoint(0, 80)
+            ],
+            [wall.Id, recovered.Id],
+            Confidence.High);
+        var rightRoom = new RoomRegion(
+            "dominance-right-room",
+            1,
+            new PlanRect(60, 0, 60, 80),
+            [
+                new PlanPoint(60, 0),
+                new PlanPoint(120, 0),
+                new PlanPoint(120, 80),
+                new PlanPoint(60, 80)
+            ],
+            [wall.Id, recovered.Id],
+            Confidence.High);
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall, recovered],
+                acceptedWalls: [wall, recovered],
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [
+                        AcceptedAssessment(wall, WallEvidenceCategory.MediumWallBody),
+                        AcceptedAssessment(recovered, WallEvidenceCategory.RecoveredWallBody)
+                    ],
+                    SourceCandidateWallCount: 2),
+                wallGraph: WallGraphFor(
+                    [wall, recovered],
+                    WallGraphComponentKind.MainStructural,
+                    excludedFromStructuralTopology: false),
+                rooms: [leftRoom, rightRoom]));
+
+        var solution = JointStructuralSolver.Solve(graph);
+        var wallCandidate = Assert.Single(
+            graph.WallCandidates,
+            candidate => candidate.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        var recoveredCandidate = Assert.Single(
+            graph.WallCandidates,
+            candidate => candidate.SourceWallIds.Contains(recovered.Id, StringComparer.Ordinal));
+        Assert.True(wallCandidate.HasCrossDomainWallBodyEvidence);
+        Assert.Contains(
+            solution.CandidateDecisions,
+            decision =>
+                decision.CandidateId == wallCandidate.Id
+                && decision.Decision == StructuralWallDecisionKind.Selected);
+        Assert.Contains(
+            solution.CandidateDecisions,
+            decision =>
+                decision.CandidateId == recoveredCandidate.Id
+                && decision.Decision == StructuralWallDecisionKind.Rejected
+                && decision.Reasons.Any(reason =>
+                    reason.Contains(wallCandidate.Id, StringComparison.Ordinal)));
+        var run = Assert.Single(
+            solution.WallRuns,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.Equal(80, run.DrawingLength, precision: 6);
+        Assert.DoesNotContain(recovered.Id, run.SourceWallIds);
+    }
+
+    [Fact]
+    public void EvidenceGraph_DoesNotCorroborateAcceptedMediumWallWhenProvisionalRoomsShareOneSide()
+    {
+        var wall = Wall(
+            "accepted-one-sided-provisional-boundary",
+            new PlanLineSegment(new PlanPoint(0, 0), new PlanPoint(0, 80)),
+            Confidence.High) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior
+        };
+        var firstRoom = new RoomRegion(
+            "first-one-sided-room",
+            1,
+            new PlanRect(0, 0, 60, 80),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(60, 0),
+                new PlanPoint(60, 80),
+                new PlanPoint(0, 80)
+            ],
+            [wall.Id],
+            Confidence.High);
+        var secondRoom = new RoomRegion(
+            "second-one-sided-room",
+            1,
+            new PlanRect(0, 0, 80, 80),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(80, 0),
+                new PlanPoint(80, 80),
+                new PlanPoint(0, 80)
+            ],
+            [wall.Id],
+            Confidence.High);
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                acceptedWalls: [wall],
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [AcceptedAssessment(wall, WallEvidenceCategory.MediumWallBody)],
+                    SourceCandidateWallCount: 1),
+                wallGraph: WallGraphFor(
+                    [wall],
+                    WallGraphComponentKind.MainStructural,
+                    excludedFromStructuralTopology: false),
+                rooms: [firstRoom, secondRoom]));
+
+        var candidate = Assert.Single(
+            graph.WallCandidates,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.DoesNotContain(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.OppositeRoomBoundary);
+        Assert.False(candidate.HasCrossDomainWallBodyEvidence);
+        Assert.True(candidate.HasAbsoluteBlockingEvidence);
+        Assert.DoesNotContain(
+            JointStructuralSolver.Solve(graph).WallRuns,
+            run => run.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void EvidenceGraph_DoesNotCorroborateAcceptedMediumWallBetweenTinyProvisionalLoops()
+    {
+        var wall = Wall(
+            "accepted-fixture-edge",
+            new PlanLineSegment(new PlanPoint(0, 25.5), new PlanPoint(25.5, 25.5)),
+            Confidence.High) with
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior
+        };
+        var upperLoop = new RoomRegion(
+            "tiny-upper-loop",
+            1,
+            new PlanRect(0, 0, 25.5, 25.5),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(25.5, 0),
+                new PlanPoint(25.5, 25.5),
+                new PlanPoint(0, 25.5)
+            ],
+            [wall.Id],
+            Confidence.High)
+        {
+            AreaSquareMeters = 0.2
+        };
+        var lowerLoop = new RoomRegion(
+            "tiny-lower-loop",
+            1,
+            new PlanRect(0, 25.5, 25.5, 25.5),
+            [
+                new PlanPoint(0, 25.5),
+                new PlanPoint(25.5, 25.5),
+                new PlanPoint(25.5, 51),
+                new PlanPoint(0, 51)
+            ],
+            [wall.Id],
+            Confidence.High)
+        {
+            AreaSquareMeters = 0.2
+        };
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                acceptedWalls: [wall],
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [AcceptedAssessment(wall, WallEvidenceCategory.MediumWallBody)],
+                    SourceCandidateWallCount: 1),
+                wallGraph: WallGraphFor(
+                    [wall],
+                    WallGraphComponentKind.MainStructural,
+                    excludedFromStructuralTopology: false),
+                rooms: [upperLoop, lowerLoop]));
+
+        var candidate = Assert.Single(
+            graph.WallCandidates,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.Contains(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.ContextOnlyBoundary);
+        Assert.DoesNotContain(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.OppositeRoomBoundary);
+        Assert.False(candidate.HasCrossDomainWallBodyEvidence);
+        Assert.True(candidate.HasAbsoluteBlockingEvidence);
+        Assert.DoesNotContain(
+            JointStructuralSolver.Solve(graph).WallRuns,
+            run => run.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void JointSolver_MarksStrongWallBodyReadyDespiteLegacyRepresentationBookkeeping()
     {
         var wall = Wall(

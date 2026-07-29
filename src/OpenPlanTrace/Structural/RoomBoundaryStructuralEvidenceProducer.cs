@@ -3,6 +3,8 @@ namespace OpenPlanTrace;
 internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEvidenceProducer
 {
     private const double MinimumCredibleUnknownRoomAreaSquareMeters = 1.5;
+    private const double MinimumProvisionalRoomNormalDepthInWallThicknesses = 8.0;
+    private const double MinimumProvisionalRoomFallbackAreaScale = 0.5;
     private const double MinimumSemanticAreaMatchRatio = 0.50;
     private const double MaximumSemanticAreaMatchRatio = 1.45;
 
@@ -164,6 +166,7 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                         trustedRoomIds,
                         roomsById,
                         context.Options,
+                        requireCredibleProvisionalRooms: false,
                         out var firstRoomId,
                         out var secondRoomId))
                 {
@@ -176,6 +179,33 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                             "source-linked room interiors lie on opposite sides of the wall axis",
                             candidate.SourcePrimitiveIds.Order(StringComparer.Ordinal).ToArray()));
                 }
+            }
+
+            var allRoomIds = trustedRoomIds
+                .Concat(contextOnlyRoomIds)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            if (trustedRoomIds.Length < 2
+                && allRoomIds.Length >= 2
+                && candidate.HasAcceptedPlacementReadyWallBodyEvidence
+                && TryFindOppositeRoomPair(
+                    candidate,
+                    allRoomIds,
+                    roomsById,
+                    context.Options,
+                    requireCredibleProvisionalRooms: true,
+                    out var provisionalFirstRoomId,
+                    out var provisionalSecondRoomId))
+            {
+                candidate.AddSignal(
+                    new StructuralEvidenceSignal(
+                        $"signal:{candidate.Id}:opposite-provisional-room-boundary",
+                        StructuralEvidenceSignalKind.OppositeRoomBoundary,
+                        0.10,
+                        $"{provisionalFirstRoomId},{provisionalSecondRoomId}",
+                        "accepted wall body lies between geometrically opposite provisional room interiors",
+                        candidate.SourcePrimitiveIds.Order(StringComparer.Ordinal).ToArray()));
             }
 
             if (contextOnlyRoomIds.Length > 0
@@ -243,6 +273,7 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
         IReadOnlyList<string> trustedRoomIds,
         IReadOnlyDictionary<string, RoomRegion> roomsById,
         StructuralSolverOptions options,
+        bool requireCredibleProvisionalRooms,
         out string firstRoomId,
         out string secondRoomId)
     {
@@ -255,6 +286,12 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
             candidate.Thickness / 2.0);
         var roomSides = trustedRoomIds
             .Where(roomsById.ContainsKey)
+            .Where(roomId =>
+                !requireCredibleProvisionalRooms
+                || IsCredibleProvisionalRoomForWall(
+                    roomsById[roomId],
+                    candidate,
+                    options))
             .Select(roomId => (
                 RoomId: roomId,
                 SignedDistance:
@@ -280,6 +317,35 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
         }
 
         return false;
+    }
+
+    private static bool IsCredibleProvisionalRoomForWall(
+        RoomRegion room,
+        StructuralCandidateRegistry.CandidateDraft candidate,
+        StructuralSolverOptions options)
+    {
+        if (room.AreaSquareMeters is > 0)
+        {
+            return room.AreaSquareMeters >= MinimumCredibleUnknownRoomAreaSquareMeters;
+        }
+
+        var normal = StructuralGeometry.UnitNormal(candidate.CenterLine);
+        var normalDepth =
+            (Math.Abs(normal.X) * room.Bounds.Width)
+            + (Math.Abs(normal.Y) * room.Bounds.Height);
+        var minimumNormalDepth = Math.Max(
+            candidate.Thickness * MinimumProvisionalRoomNormalDepthInWallThicknesses,
+            options.AxisTolerance * 4.0);
+        if (normalDepth < minimumNormalDepth)
+        {
+            return false;
+        }
+
+        var minimumDrawingArea =
+            candidate.CenterLine.Length
+            * minimumNormalDepth
+            * MinimumProvisionalRoomFallbackAreaScale;
+        return room.DrawingArea >= minimumDrawingArea;
     }
 
     private static void AddRoomBoundarySignal(

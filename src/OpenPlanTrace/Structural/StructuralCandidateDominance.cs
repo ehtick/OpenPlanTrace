@@ -99,7 +99,7 @@ internal static class StructuralCandidateDominance
             .Where(candidate =>
                 candidate.IsEligible
                 && candidate.WasAcceptedByPreliminaryPipeline
-                && candidate.HasIndependentWallBodyEvidence
+                && HasDominatingWallBodyEvidence(candidate)
                 && !HasBlockingSemanticEvidence(candidate))
             .OrderByDescending(candidate => candidate.DrawingLength)
             .ThenByDescending(DominanceQuality)
@@ -270,7 +270,7 @@ internal static class StructuralCandidateDominance
             || !represented.IsEligible
             || dominator.PageNumber != represented.PageNumber
             || !dominator.WasAcceptedByPreliminaryPipeline
-            || !dominator.HasIndependentWallBodyEvidence
+            || !HasDominatingWallBodyEvidence(dominator)
             || HasBlockingSemanticEvidence(dominator)
             || !CompatibleWallTypes(dominator.WallType, represented.WallType)
             || dominator.UnaryScore
@@ -347,18 +347,28 @@ internal static class StructuralCandidateDominance
         StructuralWallCandidate dominated,
         StructuralSolverOptions options)
     {
+        var replacesContainedRecoveredFallback =
+            ReplacesContainedRecoveredFallback(
+                dominator,
+                dominated);
+        var maximumScoreDeficit = replacesContainedRecoveredFallback
+            ? Math.Max(options.MaximumDominantWallScoreDeficit, 1.25)
+            : options.MaximumDominantWallScoreDeficit;
+        var maximumConfidenceDeficit = replacesContainedRecoveredFallback
+            ? Math.Max(options.MaximumDominantWallConfidenceDeficit, 0.20)
+            : options.MaximumDominantWallConfidenceDeficit;
         if (!dominator.IsEligible
             || !dominated.IsEligible
             || dominator.PageNumber != dominated.PageNumber
             || !dominator.WasAcceptedByPreliminaryPipeline
-            || !dominator.HasIndependentWallBodyEvidence
+            || !HasDominatingWallBodyEvidence(dominator)
             || HasBlockingSemanticEvidence(dominator)
             || dominator.DrawingLength
             < dominated.DrawingLength * options.MinimumDominantWallLengthRatio
             || dominator.UnaryScore
-            < dominated.UnaryScore - options.MaximumDominantWallScoreDeficit
+            < dominated.UnaryScore - maximumScoreDeficit
             || dominator.Confidence.Value
-            < dominated.Confidence.Value - options.MaximumDominantWallConfidenceDeficit)
+            < dominated.Confidence.Value - maximumConfidenceDeficit)
         {
             return null;
         }
@@ -392,10 +402,43 @@ internal static class StructuralCandidateDominance
             : null;
     }
 
+    private static bool ReplacesContainedRecoveredFallback(
+        StructuralWallCandidate dominator,
+        StructuralWallCandidate dominated)
+    {
+        if (!dominator.HasCrossDomainWallBodyEvidence
+            || !dominated.Origins.HasFlag(StructuralCandidateOrigin.RecoveredWall)
+            || dominator.DrawingLength < dominated.DrawingLength * 1.75
+            || !dominator.SourceWallComponentIds
+                .Intersect(
+                    dominated.SourceWallComponentIds,
+                    StringComparer.Ordinal)
+                .Any()
+            || !dominator.SourcePrimitiveIds
+                .Intersect(
+                    dominated.SourcePrimitiveIds,
+                    StringComparer.Ordinal)
+                .Any())
+        {
+            return false;
+        }
+
+        return dominated.SourceOpeningIds.All(openingId =>
+            dominator.SourceOpeningIds.Contains(
+                openingId,
+                StringComparer.Ordinal));
+    }
+
+    private static bool HasDominatingWallBodyEvidence(StructuralWallCandidate candidate) =>
+        candidate.HasIndependentWallBodyEvidence
+        || candidate.HasCrossDomainWallBodyEvidence;
+
     private static bool HasBlockingSemanticEvidence(StructuralWallCandidate candidate) =>
         candidate.Signals.Any(signal =>
             signal.Weight < 0
-            && BlockingSignalKinds.Contains(signal.Kind));
+            && BlockingSignalKinds.Contains(signal.Kind)
+            && !(candidate.HasCrossDomainWallBodyEvidence
+                && signal.Kind == StructuralEvidenceSignalKind.ContextOnlyBoundary));
 
     private static int CompareDominators(
         StructuralWallCandidate first,

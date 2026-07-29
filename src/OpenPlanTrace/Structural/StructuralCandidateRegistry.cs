@@ -172,6 +172,17 @@ internal sealed class StructuralCandidateRegistry
                 signal.Kind == StructuralEvidenceSignalKind.WallBody
                 && signal.Weight >= 0.30);
 
+        public bool HasAcceptedPlacementReadyWallBodyEvidence =>
+            WasAcceptedByPreliminaryPipeline
+            && !HasReviewWallEvidence
+            && !HasRejectedWallEvidence
+            && _signals.Values.Any(signal =>
+                signal.Kind == StructuralEvidenceSignalKind.AcceptedWall
+                && signal.Weight > 0)
+            && _signals.Values.Any(signal =>
+                signal.Kind == StructuralEvidenceSignalKind.WallBody
+                && signal.Weight >= 0.16);
+
         public bool HasRejectedWallEvidence =>
             _signals.Values.Any(signal =>
                 signal.Kind == StructuralEvidenceSignalKind.RejectedWall
