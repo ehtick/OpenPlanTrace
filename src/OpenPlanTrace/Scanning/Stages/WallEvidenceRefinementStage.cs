@@ -162,6 +162,14 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
             requiresReview = true;
             evidence.Add(pairedObjectEvidence);
         }
+        else if (TryClassifyCappedCircularServiceSymbolNoise(wall, context, out var cappedServiceEvidence))
+        {
+            category = WallEvidenceCategory.ObjectOrFixtureDetail;
+            confidence = new Confidence(Math.Min(0.96, Math.Max(wall.Confidence.Value, 0.82)));
+            rejected = true;
+            requiresReview = true;
+            evidence.Add(cappedServiceEvidence);
+        }
         else if (TryClassifyStructurallySupportedPairedAnnotationWallReview(wall, context, out var pairedAnnotationWallEvidence))
         {
             category = WallEvidenceCategory.MediumWallBody;
@@ -1371,6 +1379,176 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
 
         evidence = $"wall evidence: rejected as paired object/fixture/service linework from {string.Join("/", objectCategories)} layer category before strong-wall acceptance";
         return true;
+    }
+
+    private static bool TryClassifyCappedCircularServiceSymbolNoise(
+        WallSegment wall,
+        ScanContext context,
+        out string evidence)
+    {
+        evidence = string.Empty;
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is not { } pair
+            || IsWallLayerBacked(wall, context)
+            || wall.Evidence.Any(item =>
+                item.Contains("filled closed vector wall body", StringComparison.OrdinalIgnoreCase)
+                || item.Contains("filled wall-solid primitive", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var maximumLength = Math.Max(
+            context.Options.MaxOpeningGap * 1.25,
+            context.Options.DefaultWallThickness * 16.0);
+        var aspectRatio = wall.DrawingLength / Math.Max(pair.FaceSeparation, 0.001);
+        if (wall.DrawingLength < Math.Max(context.Options.MinWallLength, 18.0)
+            || wall.DrawingLength > maximumLength
+            || aspectRatio is < 1.5 or > 8.0
+            || pair.Score < 0.82
+            || pair.OverlapRatio < 0.85
+            || pair.FirstFaceFragmentCount > 2
+            || pair.SecondFaceFragmentCount > 2)
+        {
+            return false;
+        }
+
+        var cache = GetPrimitiveCache(context);
+        if (!HasCappedPairEnds(wall, pair, context, cache, out var capSourceIds)
+            || !TryFindCircularEndpointSymbol(
+                wall,
+                pair,
+                context,
+                cache,
+                out var circularSymbol))
+        {
+            return false;
+        }
+
+        var structuralEndpointSupportCount = CountStructuralEndpointSupport(
+            wall.CenterLine,
+            wall.PageNumber,
+            context.WallCandidates,
+            context.Options);
+        if (structuralEndpointSupportCount > 1)
+        {
+            return false;
+        }
+
+        evidence = string.Format(
+            CultureInfo.InvariantCulture,
+            "wall evidence: rejected as compact capped parallel-face service/object symbol with circular endpoint {0}; cap primitives {1}; structural endpoint support {2}",
+            circularSymbol.SourceId,
+            string.Join("/", capSourceIds),
+            structuralEndpointSupportCount);
+        return true;
+    }
+
+    private static bool HasCappedPairEnds(
+        WallSegment wall,
+        WallPairEvidence pair,
+        ScanContext context,
+        WallEvidencePrimitiveCache cache,
+        out IReadOnlyList<string> capSourceIds)
+    {
+        capSourceIds = Array.Empty<string>();
+        var excludedSourceIds = pair.FirstFaceSourcePrimitiveIds
+            .Concat(pair.SecondFaceSourcePrimitiveIds)
+            .ToHashSet(StringComparer.Ordinal);
+        var candidates = cache.LineSegmentsForPage(wall.PageNumber)
+            .Where(item => !excludedSourceIds.Contains(item.SourceId))
+            .Where(item => IsPairEndCap(item.Segment, wall.CenterLine, pair, context.Options))
+            .ToArray();
+        var startCap = candidates
+            .Where(item => IsPairEndCapAt(item.Segment, wall.CenterLine.Start, pair, context.Options))
+            .OrderBy(item => item.Segment.DistanceToPoint(wall.CenterLine.Start))
+            .ThenBy(item => item.SourceId, StringComparer.Ordinal)
+            .FirstOrDefault();
+        var endCap = candidates
+            .Where(item =>
+                !string.Equals(item.SourceId, startCap.SourceId, StringComparison.Ordinal)
+                && IsPairEndCapAt(item.Segment, wall.CenterLine.End, pair, context.Options))
+            .OrderBy(item => item.Segment.DistanceToPoint(wall.CenterLine.End))
+            .ThenBy(item => item.SourceId, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(startCap.SourceId)
+            || string.IsNullOrWhiteSpace(endCap.SourceId))
+        {
+            return false;
+        }
+
+        capSourceIds = new[] { startCap.SourceId, endCap.SourceId };
+        return true;
+    }
+
+    private static bool IsPairEndCap(
+        PlanLineSegment cap,
+        PlanLineSegment centerLine,
+        WallPairEvidence pair,
+        ScannerOptions options)
+    {
+        var perpendicularDeviation = Math.Abs(
+            StructuralGeometry.AngleDifference(cap, centerLine) - (Math.PI / 2.0));
+        var lengthTolerance = Math.Max(1.0, options.GeometryTolerance.Distance * 2.0);
+        return perpendicularDeviation <= Math.PI / 12.0
+            && cap.Length >= Math.Max(0.5, pair.FaceSeparation * 0.55)
+            && cap.Length <= pair.FaceSeparation * 1.80 + lengthTolerance;
+    }
+
+    private static bool IsPairEndCapAt(
+        PlanLineSegment cap,
+        PlanPoint centerEndpoint,
+        WallPairEvidence pair,
+        ScannerOptions options)
+    {
+        var tolerance = Math.Max(
+            options.GeometryTolerance.Distance * 2.0,
+            Math.Max(1.0, pair.FaceSeparation * 0.35));
+        var firstEndpoint = NearestEndpoint(pair.FirstFaceLine, centerEndpoint);
+        var secondEndpoint = NearestEndpoint(pair.SecondFaceLine, centerEndpoint);
+        return cap.DistanceToPoint(centerEndpoint) <= tolerance
+            && cap.DistanceToPoint(firstEndpoint) <= tolerance
+            && cap.DistanceToPoint(secondEndpoint) <= tolerance;
+    }
+
+    private static PlanPoint NearestEndpoint(
+        PlanLineSegment line,
+        PlanPoint target) =>
+        line.Start.DistanceTo(target) <= line.End.DistanceTo(target)
+            ? line.Start
+            : line.End;
+
+    private static bool TryFindCircularEndpointSymbol(
+        WallSegment wall,
+        WallPairEvidence pair,
+        ScanContext context,
+        WallEvidencePrimitiveCache cache,
+        out CachedCircularSymbol symbol)
+    {
+        var maximumSymbolSize = Math.Max(
+            pair.FaceSeparation * 3.0,
+            context.Options.DefaultWallThickness * 2.5);
+        var maximumEndpointDistance = Math.Max(
+            pair.FaceSeparation * 2.25,
+            context.Options.WallSnapTolerance * 2.0);
+        symbol = cache.CircularSymbolsForPage(wall.PageNumber)
+            .Where(item =>
+                item.Bounds.Width >= pair.FaceSeparation * 0.45
+                && item.Bounds.Height >= pair.FaceSeparation * 0.45
+                && item.Bounds.Width <= maximumSymbolSize
+                && item.Bounds.Height <= maximumSymbolSize)
+            .Select(item => new
+            {
+                Symbol = item,
+                Distance = Math.Min(
+                    item.Bounds.Center.DistanceTo(wall.CenterLine.Start),
+                    item.Bounds.Center.DistanceTo(wall.CenterLine.End))
+            })
+            .Where(item => item.Distance <= maximumEndpointDistance)
+            .OrderBy(item => item.Distance)
+            .ThenBy(item => item.Symbol.SourceId, StringComparer.Ordinal)
+            .Select(item => item.Symbol)
+            .FirstOrDefault();
+        return !string.IsNullOrWhiteSpace(symbol.SourceId);
     }
 
     private static bool TryClassifyPairedDimensionOrAnnotationNoise(
@@ -3466,24 +3644,34 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
     private sealed class WallEvidencePrimitiveCache
     {
         private readonly IReadOnlyDictionary<int, IReadOnlyList<CachedDoorArc>> _doorArcsByPage;
+        private readonly IReadOnlyDictionary<int, IReadOnlyList<CachedLineSegment>> _lineSegmentsByPage;
+        private readonly IReadOnlyDictionary<int, IReadOnlyList<CachedCircularSymbol>> _circularSymbolsByPage;
         private readonly IReadOnlyDictionary<int, IReadOnlyDictionary<string, IReadOnlyList<LayerCategory>>> _layerCategoriesBySourceIdByPage;
 
         private WallEvidencePrimitiveCache(
             IReadOnlyDictionary<int, IReadOnlyList<CachedDoorArc>> doorArcsByPage,
+            IReadOnlyDictionary<int, IReadOnlyList<CachedLineSegment>> lineSegmentsByPage,
+            IReadOnlyDictionary<int, IReadOnlyList<CachedCircularSymbol>> circularSymbolsByPage,
             IReadOnlyDictionary<int, IReadOnlyDictionary<string, IReadOnlyList<LayerCategory>>> layerCategoriesBySourceIdByPage)
         {
             _doorArcsByPage = doorArcsByPage;
+            _lineSegmentsByPage = lineSegmentsByPage;
+            _circularSymbolsByPage = circularSymbolsByPage;
             _layerCategoriesBySourceIdByPage = layerCategoriesBySourceIdByPage;
         }
 
         public static WallEvidencePrimitiveCache Create(ScanContext context)
         {
             var doorArcsByPage = new Dictionary<int, IReadOnlyList<CachedDoorArc>>();
+            var lineSegmentsByPage = new Dictionary<int, IReadOnlyList<CachedLineSegment>>();
+            var circularSymbolsByPage = new Dictionary<int, IReadOnlyList<CachedCircularSymbol>>();
             var layerCategoriesBySourceIdByPage = new Dictionary<int, IReadOnlyDictionary<string, IReadOnlyList<LayerCategory>>>();
 
             foreach (var page in context.Document.Pages)
             {
                 var doorArcs = new List<CachedDoorArc>();
+                var lineSegments = new List<CachedLineSegment>();
+                var circularSymbols = new List<CachedCircularSymbol>();
                 var layerCategories = new Dictionary<string, List<LayerCategory>>(StringComparer.Ordinal);
 
                 for (var index = 0; index < page.Primitives.Count; index++)
@@ -3502,22 +3690,44 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
                     {
                         doorArcs.Add(new CachedDoorArc(sourceId, arc));
                     }
+
+                    AddLineSegments(sourceId, primitive, lineSegments);
+                    if (TryCreateCircularSymbol(sourceId, primitive, out var circularSymbol))
+                    {
+                        circularSymbols.Add(circularSymbol);
+                    }
                 }
 
                 doorArcsByPage[page.Number] = doorArcs.ToArray();
+                lineSegmentsByPage[page.Number] = lineSegments.ToArray();
+                circularSymbolsByPage[page.Number] = circularSymbols.ToArray();
                 layerCategoriesBySourceIdByPage[page.Number] = layerCategories.ToDictionary(
                     pair => pair.Key,
                     pair => (IReadOnlyList<LayerCategory>)pair.Value.ToArray(),
                     StringComparer.Ordinal);
             }
 
-            return new WallEvidencePrimitiveCache(doorArcsByPage, layerCategoriesBySourceIdByPage);
+            return new WallEvidencePrimitiveCache(
+                doorArcsByPage,
+                lineSegmentsByPage,
+                circularSymbolsByPage,
+                layerCategoriesBySourceIdByPage);
         }
 
         public IReadOnlyList<CachedDoorArc> DoorArcsForPage(int pageNumber) =>
             _doorArcsByPage.TryGetValue(pageNumber, out var doorArcs)
                 ? doorArcs
                 : Array.Empty<CachedDoorArc>();
+
+        public IReadOnlyList<CachedLineSegment> LineSegmentsForPage(int pageNumber) =>
+            _lineSegmentsByPage.TryGetValue(pageNumber, out var lineSegments)
+                ? lineSegments
+                : Array.Empty<CachedLineSegment>();
+
+        public IReadOnlyList<CachedCircularSymbol> CircularSymbolsForPage(int pageNumber) =>
+            _circularSymbolsByPage.TryGetValue(pageNumber, out var circularSymbols)
+                ? circularSymbols
+                : Array.Empty<CachedCircularSymbol>();
 
         public IEnumerable<LayerCategory> SourceLayerCategories(WallSegment wall)
         {
@@ -3537,7 +3747,111 @@ internal sealed class WallEvidenceRefinementStage : IPipelineStage
                 }
             }
         }
+
+        private static void AddLineSegments(
+            string sourceId,
+            PlanPrimitive primitive,
+            ICollection<CachedLineSegment> destination)
+        {
+            switch (primitive)
+            {
+                case LinePrimitive line:
+                    destination.Add(new CachedLineSegment(sourceId, line.Segment));
+                    break;
+                case PolylinePrimitive polyline:
+                    for (var index = 1; index < polyline.Points.Count; index++)
+                    {
+                        destination.Add(
+                            new CachedLineSegment(
+                                sourceId,
+                                new PlanLineSegment(
+                                    polyline.Points[index - 1],
+                                    polyline.Points[index])));
+                    }
+
+                    if (polyline.Closed && polyline.Points.Count > 2)
+                    {
+                        destination.Add(
+                            new CachedLineSegment(
+                                sourceId,
+                                new PlanLineSegment(
+                                    polyline.Points[^1],
+                                    polyline.Points[0])));
+                    }
+
+                    break;
+                case RectanglePrimitive rectangle:
+                    destination.Add(new CachedLineSegment(
+                        sourceId,
+                        new PlanLineSegment(rectangle.Bounds.LeftTop(), rectangle.Bounds.RightTop())));
+                    destination.Add(new CachedLineSegment(
+                        sourceId,
+                        new PlanLineSegment(rectangle.Bounds.RightTop(), rectangle.Bounds.RightBottom())));
+                    destination.Add(new CachedLineSegment(
+                        sourceId,
+                        new PlanLineSegment(rectangle.Bounds.RightBottom(), rectangle.Bounds.LeftBottom())));
+                    destination.Add(new CachedLineSegment(
+                        sourceId,
+                        new PlanLineSegment(rectangle.Bounds.LeftBottom(), rectangle.Bounds.LeftTop())));
+                    break;
+            }
+        }
+
+        private static bool TryCreateCircularSymbol(
+            string sourceId,
+            PlanPrimitive primitive,
+            out CachedCircularSymbol symbol)
+        {
+            symbol = default;
+            if (primitive is ArcPrimitive arc
+                && Math.Abs(arc.SweepAngleRadians) >= Math.PI * 1.50)
+            {
+                symbol = new CachedCircularSymbol(sourceId, arc.Bounds);
+                return true;
+            }
+
+            if (primitive is not PolylinePrimitive { Closed: true } polyline
+                || polyline.Points.Count < 6
+                || polyline.Bounds.IsEmpty)
+            {
+                return false;
+            }
+
+            var bounds = polyline.Bounds;
+            var aspectRatio = bounds.Width / Math.Max(bounds.Height, 0.001);
+            if (aspectRatio is < 0.65 or > 1.55)
+            {
+                return false;
+            }
+
+            var radii = polyline.Points
+                .Select(point => point.DistanceTo(bounds.Center))
+                .Where(radius => radius > 0.001)
+                .ToArray();
+            if (radii.Length < 6)
+            {
+                return false;
+            }
+
+            var meanRadius = radii.Average();
+            var maximumDeviation = radii.Max(radius => Math.Abs(radius - meanRadius));
+            if (maximumDeviation > meanRadius * 0.22)
+            {
+                return false;
+            }
+
+            symbol = new CachedCircularSymbol(sourceId, bounds);
+            return true;
+        }
     }
+
+    private readonly record struct CachedLineSegment(
+        string SourceId,
+        PlanLineSegment Segment);
+
+    private readonly record struct CachedCircularSymbol(
+        string SourceId,
+        PlanRect Bounds);
 
     private readonly record struct PrimitiveLineCandidate(
         string SourceId,

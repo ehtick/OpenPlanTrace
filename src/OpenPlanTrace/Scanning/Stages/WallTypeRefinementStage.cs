@@ -1360,7 +1360,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return true;
         }
 
-        if (HasTrustedExteriorShellSupport(evidence))
+        if (ExteriorWallSupportEvidence.HasTrustedSupport(wall, assessment, evidence))
         {
             return false;
         }
@@ -1381,15 +1381,6 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         return (localBoundaryOnly && weakOrUnknownLayer && uncertainEvidenceCategory)
             || uncertainGeometry;
     }
-
-    private static bool HasTrustedExteriorShellSupport(IEnumerable<string> evidence) =>
-        evidence.Any(item =>
-            !item.Contains("not trusted", StringComparison.OrdinalIgnoreCase)
-            && !item.Contains("without shell support", StringComparison.OrdinalIgnoreCase)
-            && !item.Contains("alone is not", StringComparison.OrdinalIgnoreCase)
-            && (item.Contains("exterior shell", StringComparison.OrdinalIgnoreCase)
-                || item.Contains("wall-like layer", StringComparison.OrdinalIgnoreCase)
-                || item.Contains("trusted benchmark", StringComparison.OrdinalIgnoreCase)));
 
     private static bool TryPromoteTrustedLongExteriorShellWallEvidence(
         WallSegment wall,
@@ -3283,7 +3274,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             || pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount < 24
             || !IsDimensionLikeWeakLayerEvidence(evidence)
             || !EvidenceContainsAny(evidence, "wall type interior", "supported wall evidence inside exterior envelope")
-            || HasTrustedExteriorShellSupport(evidence)
+            || ExteriorWallSupportEvidence.HasExplicitTrustedSupport(evidence)
             || !TryReadHealedFaceGapTotals(evidence, out var healedGaps))
         {
             return false;

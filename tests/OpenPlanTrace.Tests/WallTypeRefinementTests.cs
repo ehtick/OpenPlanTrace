@@ -168,6 +168,89 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DoesNotTreatGenericMediumEvidenceAsExteriorShellSupport()
+    {
+        var wall = new WallSegment(
+            "wall-outdoor-room-fill-outline",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 300)),
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Exterior,
+            SourcePrimitiveIds = ["filled-room-outline", "room-outline-stroke"],
+            Evidence =
+            [
+                "single wall-length vector run",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: medium wall body from wall-like layer, length, or structural context"
+            ]
+        };
+        var terrace = new RoomRegion(
+            "terrace-on-one-side",
+            1,
+            new PlanRect(106, 80, 120, 240),
+            [
+                new PlanPoint(106, 80),
+                new PlanPoint(226, 80),
+                new PlanPoint(226, 320),
+                new PlanPoint(106, 320)
+            ],
+            Array.Empty<string>(),
+            Confidence.High)
+        {
+            UseKind = RoomUseKind.Outdoor
+        };
+        var assessment = new WallEvidenceWallAssessment(
+            wall.Id,
+            wall.PageNumber,
+            wall.Bounds,
+            WallEvidenceCategory.MediumWallBody,
+            wall.Confidence,
+            PlacementReady: true,
+            RequiresReview: false,
+            RejectedAsNoise: false,
+            wall.SourcePrimitiveIds,
+            wall.Evidence)
+        {
+            Decision = WallEvidenceDecision.Accept,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.42,
+                NegativeScore: 0,
+                DecisionScore: 0.42,
+                PairSupportScore: 0.22,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.20,
+                RecoverySupportScore: 0,
+                NoisePenalty: 0,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence: ["medium wall-body geometry", "both endpoints supported by structural context"],
+                NegativeEvidence: Array.Empty<string>())
+        };
+        var context = CreateContext("outdoor-room-fill-outline");
+        context.Walls.Add(wall);
+        context.Rooms.Add(terrace);
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            [assessment],
+            SourceCandidateWallCount: 1);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var refined = Assert.Single(context.Walls);
+        Assert.Equal(WallType.Unknown, refined.WallType);
+        Assert.Contains(
+            refined.Evidence,
+            item => item.Contains("outdoor/terrace room evidence alone", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("not trusted as exterior", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_PromotesTrustedRecoveredPerimeterShellToExterior()
     {
         var wall = RecoveredWallBody("wall-recovered-perimeter-shell", 52, 100, 52, 300);

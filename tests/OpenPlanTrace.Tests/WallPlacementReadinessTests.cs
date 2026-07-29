@@ -1354,6 +1354,61 @@ public sealed class WallPlacementReadinessTests
     }
 
     [Fact]
+    public void Evaluate_BlocksRawOneSidedOutdoorMediumOutlineWithoutPhysicalShellSupport()
+    {
+        var wall = Wall("wall:raw-outdoor-room-outline", Confidence.High) with
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Exterior,
+            PairEvidence = null,
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: medium wall body from wall-like layer, length, or structural context",
+                "wall type refined exterior: detected room evidence on one side is outdoor/terrace space"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.MainStructural,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: true) with
+        {
+            Decision = WallEvidenceDecision.Accept,
+            Evidence = wall.Evidence,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.42,
+                NegativeScore: 0,
+                DecisionScore: 0.42,
+                PairSupportScore: 0.22,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.20,
+                RecoverySupportScore: 0,
+                NoisePenalty: 0,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence: ["medium wall-body geometry", "both endpoints supported by structural context"],
+                NegativeEvidence: Array.Empty<string>())
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains(
+            "outdoor/terrace room evidence alone is not trusted as exterior wall placement support",
+            readiness.Reasons);
+    }
+
+    [Fact]
     public void Evaluate_AllowsOutdoorBoundaryEvidenceWhenShellSupportIsExplicit()
     {
         var wall = Wall("wall:trusted-outdoor-shell-boundary", Confidence.High) with

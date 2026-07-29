@@ -207,6 +207,33 @@ public sealed class OpeningSemanticsTests
     }
 
     [Fact]
+    public async Task ScanAsync_DoesNotTreatClosedShortRectangleAsWindowTicks()
+    {
+        var document = new PlanDocument(
+            "closed-short-rectangle",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(600, 400),
+                    new PlanPrimitive[]
+                    {
+                        Wall("rectangle-face-a", new PlanPoint(100, 97), new PlanPoint(130, 97)),
+                        Wall("rectangle-face-b", new PlanPoint(100, 103), new PlanPoint(130, 103)),
+                        ShortLine("rectangle-end-a", "A-WALL", new PlanPoint(100, 97), new PlanPoint(100, 103)),
+                        ShortLine("rectangle-end-b", "A-WALL", new PlanPoint(130, 97), new PlanPoint(130, 103))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.DoesNotContain(
+            result.Openings,
+            opening => opening.Evidence.Any(item =>
+                item.Contains("paired perpendicular opening ticks", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
     public async Task ScanAsync_DetectsHingedDoorArcOnContinuousWall()
     {
         var document = new PlanDocument(

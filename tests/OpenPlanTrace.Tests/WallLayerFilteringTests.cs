@@ -1772,6 +1772,176 @@ public sealed class WallLayerFilteringTests
     }
 
     [Fact]
+    public async Task WallEvidenceRefinement_RejectsCappedCircularServiceSymbolWithOneStructuralEndpoint()
+    {
+        var firstFace = new PlanLineSegment(new PlanPoint(140, 185), new PlanPoint(165, 185));
+        var secondFace = new PlanLineSegment(new PlanPoint(140, 191), new PlanPoint(165, 191));
+        var document = new PlanDocument(
+            "wall-evidence-capped-circular-service-symbol",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(320, 260),
+                    new PlanPrimitive[]
+                    {
+                        Line("host-wall", "A-WALL", new PlanPoint(140, 100), new PlanPoint(140, 230)),
+                        Line("service-face-a", "A-DIMS", firstFace.Start, firstFace.End),
+                        Line("service-face-b", "A-DIMS", secondFace.Start, secondFace.End),
+                        Line("service-cap-start", "A-DIMS", firstFace.Start, secondFace.Start),
+                        Line("service-cap-end", "A-DIMS", firstFace.End, secondFace.End),
+                        ClosedCircle("service-circle", "A-DIMS", new PlanPoint(170, 188), 5)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                EnableWallEvidenceNoiseRejection = true,
+                MinWallLength = 18
+            })
+        {
+            LayerAnalysis = new PlanLayerAnalysis(new[]
+            {
+                Layer("A-WALL", LayerCategory.Wall, Confidence.High),
+                Layer("A-DIMS", LayerCategory.Dimension, Confidence.High)
+            })
+        };
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host",
+            1,
+            new PlanLineSegment(new PlanPoint(140, 100), new PlanPoint(140, 230)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-wall" },
+            Evidence = new[] { "test structural wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-capped-circular-service-symbol",
+            1,
+            new PlanLineSegment(new PlanPoint(140, 188), new PlanPoint(165, 188)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            SourcePrimitiveIds = new[] { "service-face-a", "service-face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.95,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: new[] { "service-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "service-face-b" }),
+            Evidence = new[] { "test compact capped service symbol" }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Contains(context.Walls, wall => wall.Id == "wall-host");
+        Assert.DoesNotContain(
+            context.Walls,
+            wall => wall.Id == "wall-capped-circular-service-symbol");
+        var rejected = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == "wall-capped-circular-service-symbol");
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, rejected.Category);
+        Assert.Equal(WallEvidenceDecision.Reject, rejected.Decision);
+        Assert.True(rejected.RejectedAsNoise);
+        Assert.Contains(
+            rejected.Evidence,
+            item => item.Contains(
+                "compact capped parallel-face service/object symbol with circular endpoint",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallEvidenceRefinement_KeepsShortCappedWallWithoutCircularServiceMarker()
+    {
+        var firstFace = new PlanLineSegment(new PlanPoint(140, 185), new PlanPoint(165, 185));
+        var secondFace = new PlanLineSegment(new PlanPoint(140, 191), new PlanPoint(165, 191));
+        var document = new PlanDocument(
+            "wall-evidence-short-capped-wall-without-service-marker",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(320, 260),
+                    new PlanPrimitive[]
+                    {
+                        Line("host-wall", "A-WALL", new PlanPoint(140, 100), new PlanPoint(140, 230)),
+                        Line("short-wall-face-a", "A-DIMS", firstFace.Start, firstFace.End),
+                        Line("short-wall-face-b", "A-DIMS", secondFace.Start, secondFace.End),
+                        Line("short-wall-cap-start", "A-DIMS", firstFace.Start, secondFace.Start),
+                        Line("short-wall-cap-end", "A-DIMS", firstFace.End, secondFace.End)
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                EnableWallEvidenceNoiseRejection = true,
+                MinWallLength = 18
+            })
+        {
+            LayerAnalysis = new PlanLayerAnalysis(new[]
+            {
+                Layer("A-WALL", LayerCategory.Wall, Confidence.High),
+                Layer("A-DIMS", LayerCategory.Dimension, Confidence.High)
+            })
+        };
+        context.WallCandidates.Add(new WallSegment(
+            "wall-host",
+            1,
+            new PlanLineSegment(new PlanPoint(140, 100), new PlanPoint(140, 230)),
+            4,
+            Confidence.High)
+        {
+            SourcePrimitiveIds = new[] { "host-wall" },
+            Evidence = new[] { "test structural wall" }
+        });
+        context.WallCandidates.Add(new WallSegment(
+            "wall-short-capped-return",
+            1,
+            new PlanLineSegment(new PlanPoint(140, 188), new PlanPoint(165, 188)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            SourcePrimitiveIds = new[] { "short-wall-face-a", "short-wall-face-b" },
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.95,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds: new[] { "short-wall-face-a" },
+                SecondFaceSourcePrimitiveIds: new[] { "short-wall-face-b" }),
+            Evidence = new[] { "test short capped wall return" }
+        });
+
+        await new WallEvidenceRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Contains(context.Walls, wall => wall.Id == "wall-short-capped-return");
+        var assessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            item => item.WallId == "wall-short-capped-return");
+        Assert.Equal(WallEvidenceCategory.MediumWallBody, assessment.Category);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+        Assert.False(assessment.RejectedAsNoise);
+        Assert.Contains(
+            assessment.Evidence,
+            item => item.Contains(
+                "dimension/text/grid-layer paired wall body has structural endpoint support",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallEvidenceRefinement_KeepsStructurallySupportedDimensionLikePairForRoomRefinement()
     {
         var firstFace = new PlanLineSegment(new PlanPoint(140, 185), new PlanPoint(340, 185));
@@ -2187,6 +2357,28 @@ public sealed class WallLayerFilteringTests
             SourceId = sourceId,
             Layer = "A-DOOR",
             Source = Source(sourceId, "POLYLINE", "A-DOOR")
+        };
+
+    private static PolylinePrimitive ClosedCircle(
+        string sourceId,
+        string layer,
+        PlanPoint center,
+        double radius) =>
+        new(
+            Enumerable.Range(0, 12)
+                .Select(index =>
+                {
+                    var angle = Math.PI * 2.0 * index / 12.0;
+                    return new PlanPoint(
+                        center.X + (Math.Cos(angle) * radius),
+                        center.Y + (Math.Sin(angle) * radius));
+                })
+                .ToArray(),
+            Closed: true)
+        {
+            SourceId = sourceId,
+            Layer = layer,
+            Source = Source(sourceId, "POLYLINE", layer)
         };
 
     private static LinePrimitive UnlayeredLine(string sourceId, PlanPoint start, PlanPoint end) =>

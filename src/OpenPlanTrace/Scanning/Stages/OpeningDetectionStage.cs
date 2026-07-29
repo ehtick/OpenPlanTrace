@@ -242,6 +242,15 @@ internal sealed class OpeningDetectionStage : IPipelineStage
                     continue;
                 }
 
+                if (!HasOpeningHostContinuation(
+                    wall,
+                    previous.Along,
+                    next.Along,
+                    context.Options))
+                {
+                    continue;
+                }
+
                 var centerLine = OpeningLineFromProjection(wall.Wall.CenterLine, previous.Along, next.Along);
                 if (HasNearbyOpening(context.Openings, page.Number, centerLine, context.Options))
                 {
@@ -996,6 +1005,24 @@ internal sealed class OpeningDetectionStage : IPipelineStage
 
         return first.Line.Segment.Bounds.Intersects(wall.Wall.Bounds.Inflate(options.WallSnapTolerance))
             && second.Line.Segment.Bounds.Intersects(wall.Wall.Bounds.Inflate(options.WallSnapTolerance));
+    }
+
+    private static bool HasOpeningHostContinuation(
+        AxisWall wall,
+        double firstAlong,
+        double secondAlong,
+        ScannerOptions options)
+    {
+        var start = Math.Min(firstAlong, secondAlong);
+        var end = Math.Max(firstAlong, secondAlong);
+        var minimumContinuation = Math.Max(
+            4.0,
+            Math.Max(
+                options.WallSnapTolerance * 2.0,
+                wall.Wall.Thickness * 0.75));
+        var before = Math.Max(0, start);
+        var after = Math.Max(0, wall.Wall.CenterLine.Length - end);
+        return before >= minimumContinuation || after >= minimumContinuation;
     }
 
     private static PlanLineSegment OpeningLineFromProjection(PlanLineSegment wallLine, double startDistance, double endDistance)
