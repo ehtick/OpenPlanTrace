@@ -4700,18 +4700,20 @@ public sealed record PlacementWallGraphExport(
     }
 
     private static bool HasHardPlacementGraphRepresentativeDetailEvidence(PlacementWallGraphEdgeExport edge) =>
-        edge.Evidence.Any(item =>
-            item.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("surface/detail", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("wall-like linework near anchored opening", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("terrace detail", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("railing", StringComparison.OrdinalIgnoreCase)
-            || item.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase));
+        edge.Evidence.Any(IsHardPlacementGraphRepresentativeDetailEvidence);
+
+    private static bool IsHardPlacementGraphRepresentativeDetailEvidence(string evidence) =>
+        evidence.Contains("surface pattern", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("surface/detail", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("wall-like linework near anchored opening", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("covered-area", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("covered entry", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("covered-entry", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("overbygd", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("terrace detail", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("repeated short detail", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("railing", StringComparison.OrdinalIgnoreCase)
+        || evidence.Contains("stair-like linework", StringComparison.OrdinalIgnoreCase);
 
     private static double ContainedPlacementGraphEdgeAxisTolerance(
         PlacementGraphMergeSpan candidate,
@@ -7748,6 +7750,11 @@ public sealed record PlacementWallGraphExport(
             return true;
         }
 
+        if (CanUseCrossDomainConfirmedRoomBoundaryResidualEndpointSnap(endpointSpan, hostSpan))
+        {
+            return true;
+        }
+
         if (!IsTrustedResidualEndpointSnapWallBody(endpointSpan.Edge))
         {
             return false;
@@ -7761,6 +7768,44 @@ public sealed record PlacementWallGraphExport(
         return !endpointSpan.Edge.Evidence.Concat(hostSpan.Edge.Evidence)
             .Any(IsPlacementGraphDetailOrSurfaceEvidence);
     }
+
+    private static bool CanUseCrossDomainConfirmedRoomBoundaryResidualEndpointSnap(
+        PlacementGraphMergeSpan endpointSpan,
+        PlacementGraphMergeSpan hostSpan)
+    {
+        if (endpointSpan.Orientation == hostSpan.Orientation
+            || endpointSpan.Length < MinDominantPlacementGraphMergeAxisLengthDrawingUnits
+            || hostSpan.Length < Math.Max(
+                MinDominantPlacementGraphMergeAxisLengthDrawingUnits,
+                endpointSpan.Length * 2.0)
+            || !IsCrossDomainConfirmedSourceBackedRoomBoundaryWallBody(endpointSpan.Edge)
+            || !IsTrustedResidualEndpointSnapHostWallBody(hostSpan.Edge))
+        {
+            return false;
+        }
+
+        return !HasHardPlacementGraphResidualEndpointSnapBlocker(endpointSpan.Edge)
+            && !HasHardPlacementGraphResidualEndpointSnapBlocker(hostSpan.Edge);
+    }
+
+    private static bool IsCrossDomainConfirmedSourceBackedRoomBoundaryWallBody(
+        PlacementWallGraphEdgeExport edge) =>
+        IsStructuralPlacementGraphComponentKind(edge.WallComponentKind)
+        && edge.Evidence.Any(item =>
+            item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("source-backed fallback pair score", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("parallel wall-face pair", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("filled closed vector wall body", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("wall evidence assessment: StrongWallBody / placement-ready", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("structural endpoint support", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("detected room evidence on both sides", StringComparison.OrdinalIgnoreCase))
+        && edge.Evidence.Any(item =>
+            item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsTrustedResidualEndpointSnapWallBody(PlacementWallGraphEdgeExport edge) =>
         IsStructuralPlacementGraphComponentKind(edge.WallComponentKind)
@@ -7841,8 +7886,20 @@ public sealed record PlacementWallGraphExport(
             && !HasHardPlacementGraphResidualEndpointSnapBlocker(hostSpan.Edge);
     }
 
-    private static bool HasHardPlacementGraphResidualEndpointSnapBlocker(PlacementWallGraphEdgeExport edge) =>
-        HasHardPlacementGraphRepresentativeDetailEvidence(edge);
+    private static bool HasHardPlacementGraphResidualEndpointSnapBlocker(PlacementWallGraphEdgeExport edge)
+    {
+        var canOverrideSoftDensityWarning =
+            IsCrossDomainConfirmedSourceBackedRoomBoundaryWallBody(edge);
+        return edge.Evidence.Any(item =>
+            IsHardPlacementGraphRepresentativeDetailEvidence(item)
+            && !(canOverrideSoftDensityWarning
+                && IsSoftDenseDetailResidualEndpointSnapWarning(item)));
+    }
+
+    private static bool IsSoftDenseDetailResidualEndpointSnapWarning(string evidence) =>
+        evidence.Contains(
+            "demoted from placement-ready because short unlayered wall candidate sits inside dense local detail/stair-like linework",
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTrustedSourceBackedPlacementGraphHost(PlacementWallGraphEdgeExport edge) =>
         edge.Evidence.Any(item => item.Contains("source-backed clean placement fallback", StringComparison.OrdinalIgnoreCase))

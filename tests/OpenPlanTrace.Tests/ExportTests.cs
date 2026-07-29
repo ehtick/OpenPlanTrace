@@ -13424,6 +13424,177 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementWallGraphExport_SnapsCrossDomainConfirmedDenseDetailWallBodyOntoStrongHostWall()
+    {
+        var nodes = new[]
+        {
+            SyntheticNode("cross-domain-host-node-top", 200, 40, WallNodeKind.Endpoint),
+            SyntheticNode("cross-domain-host-node-bottom", 200, 260, WallNodeKind.Endpoint),
+            SyntheticNode("cross-domain-boundary-node-left", 120, 140, WallNodeKind.Endpoint),
+            SyntheticNode("cross-domain-boundary-node-near-host", 196.8, 140, WallNodeKind.Endpoint)
+        };
+        var edges = new[]
+        {
+            new WallEdge(
+                "cross-domain-host-edge",
+                1,
+                nodes[0].Id,
+                nodes[1].Id,
+                "cross-domain-host-wall",
+                Confidence.High),
+            new WallEdge(
+                "cross-domain-boundary-edge",
+                1,
+                nodes[2].Id,
+                nodes[3].Id,
+                "cross-domain-boundary-wall",
+                Confidence.High)
+        };
+        var component = new WallGraphComponent(
+            "cross-domain-main-structural-component",
+            1,
+            WallGraphComponentKind.MainStructural,
+            new PlanRect(116, 36, 88, 228),
+            edges.Select(edge => edge.WallId).ToArray(),
+            nodes.Select(node => node.Id).ToArray(),
+            edges.Select(edge => edge.Id).ToArray(),
+            ["cross-domain-host-source", "cross-domain-boundary-source"],
+            296.8,
+            Confidence.High,
+            ["synthetic main structural wall component"]);
+        var spans = new[]
+        {
+            SeparatedPlacementGraphGapSpan(
+                edges[0],
+                new PlanLineSegment(new PlanPoint(200, 40), new PlanPoint(200, 260)),
+                [
+                    "wall type interior: synthetic strong host wall",
+                    "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.94",
+                    "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+                ]),
+            SeparatedPlacementGraphGapSpan(
+                edges[1],
+                new PlanLineSegment(new PlanPoint(120, 140), new PlanPoint(196.8, 140)),
+                [
+                    "source-backed clean placement fallback: wall graph did not provide enough clean topology coverage",
+                    "source-backed fallback accepted because short filled interior wall body has structural endpoint support",
+                    "source-backed fallback pair score 0.917, overlap 1, face separation 9.709 drawing units",
+                    "parallel wall-face pair",
+                    "wall evidence: filled closed vector wall body",
+                    "wall type interior: supported wall evidence inside exterior envelope",
+                    "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.88",
+                    "wall type refined interior: detected room evidence on both sides",
+                    "wall evidence: demoted from placement-ready because short unlayered wall candidate sits inside dense local detail/stair-like linework",
+                    "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+                ])
+        };
+        var componentLookup = component.WallIds.ToDictionary(
+            wallId => wallId,
+            _ => component,
+            StringComparer.Ordinal);
+
+        var export = PlacementWallGraphExport.From(
+            new WallGraph(nodes, edges, [component]),
+            spans,
+            PlanCalibration.Empty,
+            new Dictionary<string, PrimitiveSourceExport>(StringComparer.Ordinal),
+            componentLookup,
+            new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal));
+
+        var boundary = Assert.Single(export.Edges, edge => edge.Id == "cross-domain-boundary-edge");
+
+        Assert.Equal(200, boundary.CenterLine!.End.X, precision: 3);
+        Assert.Empty(export.ResidualEndpointOnHostCandidates);
+        Assert.Contains(
+            boundary.Evidence,
+            item => item.Contains("final residual endpoint snap", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("cross-domain-host-edge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PlacementWallGraphExport_DoesNotSnapCrossDomainConfirmedWallBodyWithHardSurfaceEvidence()
+    {
+        var nodes = new[]
+        {
+            SyntheticNode("unconfirmed-detail-host-node-top", 200, 40, WallNodeKind.Endpoint),
+            SyntheticNode("unconfirmed-detail-host-node-bottom", 200, 260, WallNodeKind.Endpoint),
+            SyntheticNode("unconfirmed-detail-node-left", 120, 140, WallNodeKind.Endpoint),
+            SyntheticNode("unconfirmed-detail-node-near-host", 196.8, 140, WallNodeKind.Endpoint)
+        };
+        var edges = new[]
+        {
+            new WallEdge(
+                "unconfirmed-detail-host-edge",
+                1,
+                nodes[0].Id,
+                nodes[1].Id,
+                "unconfirmed-detail-host-wall",
+                Confidence.High),
+            new WallEdge(
+                "unconfirmed-detail-edge",
+                1,
+                nodes[2].Id,
+                nodes[3].Id,
+                "unconfirmed-detail-wall",
+                Confidence.Medium)
+        };
+        var component = new WallGraphComponent(
+            "unconfirmed-detail-main-structural-component",
+            1,
+            WallGraphComponentKind.MainStructural,
+            new PlanRect(116, 36, 88, 228),
+            edges.Select(edge => edge.WallId).ToArray(),
+            nodes.Select(node => node.Id).ToArray(),
+            edges.Select(edge => edge.Id).ToArray(),
+            ["unconfirmed-detail-host-source", "unconfirmed-detail-source"],
+            296.8,
+            Confidence.Medium,
+            ["synthetic main structural component containing unresolved detail"]);
+        var spans = new[]
+        {
+            SeparatedPlacementGraphGapSpan(
+                edges[0],
+                new PlanLineSegment(new PlanPoint(200, 40), new PlanPoint(200, 260)),
+                ["wall type interior: synthetic strong host wall"]),
+            SeparatedPlacementGraphGapSpan(
+                edges[1],
+                new PlanLineSegment(new PlanPoint(120, 140), new PlanPoint(196.8, 140)),
+                [
+                    "source-backed clean placement fallback: wall graph did not provide enough clean topology coverage",
+                    "source-backed fallback accepted because short filled interior wall body has structural endpoint support",
+                    "source-backed fallback pair score 0.917, overlap 1, face separation 9.709 drawing units",
+                    "parallel wall-face pair",
+                    "wall evidence: filled closed vector wall body",
+                    "wall type interior: supported wall evidence inside exterior envelope",
+                    "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.88",
+                    "wall type refined interior: detected room evidence on both sides",
+                    "wall evidence: demoted from placement-ready because short unlayered wall candidate sits inside dense local detail/stair-like linework",
+                    "wall evidence: geometric room boundary support from reliable room-boundary alignment",
+                    "wall evidence: overlaps dense non-structural surface pattern"
+                ])
+        };
+        var componentLookup = component.WallIds.ToDictionary(
+            wallId => wallId,
+            _ => component,
+            StringComparer.Ordinal);
+
+        var export = PlacementWallGraphExport.From(
+            new WallGraph(nodes, edges, [component]),
+            spans,
+            PlanCalibration.Empty,
+            new Dictionary<string, PrimitiveSourceExport>(StringComparer.Ordinal),
+            componentLookup,
+            new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal));
+
+        var detail = Assert.Single(export.Edges, edge => edge.Id == "unconfirmed-detail-edge");
+        var residual = Assert.Single(export.ResidualEndpointOnHostCandidates);
+
+        Assert.Equal(196.8, detail.CenterLine!.End.X, precision: 3);
+        Assert.Equal("unconfirmed-detail-edge", residual.EndpointEdgeId);
+        Assert.Equal("unconfirmed-detail-host-edge", residual.HostEdgeId);
+    }
+
+    [Fact]
     public void PlacementWallGraphExport_ReportsResidualEndpointOnHostWallDiagnostics()
     {
         var nodes = new[]

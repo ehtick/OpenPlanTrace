@@ -8,6 +8,13 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.014] - 2026-07-29
+
+- Improved wall endpoint-to-host alignment.
+- Connected confirmed room walls to structural hosts.
+- Reduced residual wall junction gaps.
+- Preserved canonical geometry across all difficulty tiers.
+
 ## [0.11.013] - 2026-07-29
 
 - Improved cross-domain wall recall.
