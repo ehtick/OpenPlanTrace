@@ -12970,6 +12970,125 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementWallGraphExport_AlignsRestoredExteriorBridgeToStrongStructuralBodyAxis()
+    {
+        var protectedEdge = SyntheticPlacementGraphEdge(
+            "protected-exterior-bridge",
+            "protected-exterior-wall",
+            componentKind: null,
+            new PlanLineSegment(new PlanPoint(80, 100), new PlanPoint(360, 100)),
+            thickness: 4,
+            confidence: 0.66,
+            [
+                "wall type exterior: synthetic trusted shell",
+                "clean placement exterior run bridge: synthetic protected continuation"
+            ]);
+        var structuralAnchor = SyntheticPlacementGraphEdge(
+            "strong-filled-body",
+            "strong-filled-wall",
+            nameof(WallGraphComponentKind.SecondaryStructural),
+            new PlanLineSegment(new PlanPoint(230, 103.2), new PlanPoint(364, 103.2)),
+            thickness: 1.5,
+            confidence: 0.92,
+            [
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.92",
+                "wall type interior: synthetic structural wall body",
+                "wall evidence: filled closed vector wall body",
+                "clean placement run centered between paired wall faces using detected paired wall-face midpoint"
+            ]);
+
+        var result = PlacementWallGraphExport.AlignProtectedPlacementGraphTopologyEdgeToStructuralBodyAxis(
+            protectedEdge,
+            [structuralAnchor],
+            out var aligned);
+
+        Assert.True(aligned);
+        Assert.Equal(80, result.CenterLine!.Start.X, precision: 3);
+        Assert.Equal(360, result.CenterLine.End.X, precision: 3);
+        Assert.Equal(103.2, result.CenterLine.Start.Y, precision: 3);
+        Assert.Equal(103.2, result.CenterLine.End.Y, precision: 3);
+        Assert.Contains(
+            result.Evidence,
+            item => item.Contains("aligned restored exterior bridge", StringComparison.OrdinalIgnoreCase)
+                && item.Contains("strong-filled-body", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PlacementWallGraphExport_DoesNotAlignRestoredExteriorBridgeToTinyPartialBody()
+    {
+        var protectedEdge = SyntheticPlacementGraphEdge(
+            "protected-exterior-bridge",
+            "protected-exterior-wall",
+            componentKind: null,
+            new PlanLineSegment(new PlanPoint(80, 100), new PlanPoint(360, 100)),
+            thickness: 4,
+            confidence: 0.66,
+            [
+                "wall type exterior: synthetic trusted shell",
+                "clean placement exterior run bridge: synthetic protected continuation"
+            ]);
+        var tinyAnchor = SyntheticPlacementGraphEdge(
+            "tiny-filled-body",
+            "tiny-filled-wall",
+            nameof(WallGraphComponentKind.SecondaryStructural),
+            new PlanLineSegment(new PlanPoint(330, 103.2), new PlanPoint(365, 103.2)),
+            thickness: 1.5,
+            confidence: 0.92,
+            [
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.92",
+                "wall type interior: synthetic structural wall body",
+                "wall evidence: filled closed vector wall body"
+            ]);
+
+        var result = PlacementWallGraphExport.AlignProtectedPlacementGraphTopologyEdgeToStructuralBodyAxis(
+            protectedEdge,
+            [tinyAnchor],
+            out var aligned);
+
+        Assert.False(aligned);
+        Assert.Equal(100, result.CenterLine!.Start.Y, precision: 3);
+        Assert.Equal(100, result.CenterLine.End.Y, precision: 3);
+    }
+
+    [Fact]
+    public void PlacementWallGraphExport_DoesNotAlignSurfaceDetailProtectedExteriorBridge()
+    {
+        var protectedEdge = SyntheticPlacementGraphEdge(
+            "surface-detail-protected-bridge",
+            "surface-detail-protected-wall",
+            componentKind: null,
+            new PlanLineSegment(new PlanPoint(80, 100), new PlanPoint(360, 100)),
+            thickness: 4,
+            confidence: 0.66,
+            [
+                "wall type exterior: synthetic trusted shell",
+                "clean placement exterior run bridge: synthetic protected continuation",
+                "wall overlaps non-structural surface/detail pattern"
+            ]);
+        var structuralAnchor = SyntheticPlacementGraphEdge(
+            "strong-filled-body",
+            "strong-filled-wall",
+            nameof(WallGraphComponentKind.SecondaryStructural),
+            new PlanLineSegment(new PlanPoint(230, 103.2), new PlanPoint(364, 103.2)),
+            thickness: 1.5,
+            confidence: 0.92,
+            [
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.92",
+                "wall type interior: synthetic structural wall body",
+                "wall evidence: filled closed vector wall body"
+            ]);
+
+        var result = PlacementWallGraphExport.AlignProtectedPlacementGraphTopologyEdgeToStructuralBodyAxis(
+            protectedEdge,
+            [structuralAnchor],
+            out var aligned);
+
+        Assert.False(aligned);
+        Assert.Equal(100, result.CenterLine!.Start.Y, precision: 3);
+        Assert.Equal(100, result.CenterLine.End.Y, precision: 3);
+    }
+
+    [Fact]
     public void PlacementWallGraphExport_SnapsNearbyPerpendicularEndpointsToSharedCorner()
     {
         var nodes = new[]
@@ -22049,6 +22168,39 @@ public sealed class ExportTests
 
     private static WallNode SyntheticNode(string id, double x, double y, WallNodeKind kind) =>
         new(id, 1, new PlanPoint(x, y), kind, 2, Array.Empty<string>(), Confidence.High, ["synthetic wall node"]);
+
+    private static PlacementWallGraphEdgeExport SyntheticPlacementGraphEdge(
+        string id,
+        string wallId,
+        string? componentKind,
+        PlanLineSegment line,
+        double thickness,
+        double confidence,
+        IReadOnlyList<string> evidence) =>
+        new(
+            id,
+            1,
+            $"{id}:start",
+            $"{id}:end",
+            wallId,
+            componentKind is null ? null : $"{wallId}:component",
+            componentKind,
+            false,
+            LineExport.From(line),
+            null,
+            RectExport.From(line.Bounds.Inflate(thickness / 2.0)),
+            null,
+            line.Length,
+            null,
+            thickness,
+            null,
+            null,
+            confidence,
+            [wallId],
+            Array.Empty<string>(),
+            [wallId],
+            [id],
+            evidence);
 
     private static PlanScanResult WithReliableCalibrationAndMeasurement(
         PlanScanResult result,

@@ -6,7 +6,7 @@ The project intentionally does not contain downstream application UI code. It ex
 
 **Project links:** [Architecture](docs/ARCHITECTURE.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
 
-Current alpha version: `0.11.014`.
+Current alpha version: `0.11.015`.
 
 ## Versioning and Changelog
 

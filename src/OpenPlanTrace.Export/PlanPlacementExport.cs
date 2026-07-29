@@ -3735,6 +3735,10 @@ public sealed record PlacementWallGraphExport(
     private const double MaxDominantPlacementGraphMergeAxisBandDistanceDrawingUnits = 2.5;
     private const double MaxProtectedTopologyGraphRepresentationAxisDistanceDrawingUnits = 1.5;
     private const double MinProtectedTopologyGraphRepresentationCoverageRatio = 0.985;
+    private const double MaxProtectedTopologyStructuralAxisAlignmentDistanceDrawingUnits = 4.0;
+    private const double MinProtectedTopologyStructuralAnchorOverlapRatio = 0.90;
+    private const double MinProtectedTopologyStructuralAnchorCoverageRatio = 0.35;
+    private const double MinProtectedTopologyStructuralAnchorLengthDrawingUnits = 24.0;
     private const double MaxTrustedExteriorDominantPlacementGraphMergeAxisBandDistanceDrawingUnits = 4.0;
 
     public static PlacementWallGraphExport From(
@@ -3912,6 +3916,36 @@ public sealed record PlacementWallGraphExport(
         var postProtectedTopologyRestorationCompactionNodeNormalization =
             NormalizePlacementGraphNodeReferencesFromGeometry(edges);
         edges = postProtectedTopologyRestorationCompactionNodeNormalization.Edges;
+        var postProtectedTopologyRestorationResidualEndpointSnap =
+            SnapResidualPlacementGraphEndpointsOntoHostEdges(edges);
+        edges = postProtectedTopologyRestorationResidualEndpointSnap.Edges;
+        PlacementGraphAxisRegularizationResult postProtectedTopologyRestorationResidualAxisRegularization;
+        PlacementGraphNodeReferenceNormalizationResult postProtectedTopologyRestorationResidualNodeNormalization;
+        var postProtectedTopologyRestorationResidualCollapsedEdgeCount = 0;
+        var postProtectedTopologyRestorationResidualSuppressedContainedEdgeCount = 0;
+        if (postProtectedTopologyRestorationResidualEndpointSnap.SnappedEndpointCount > 0)
+        {
+            postProtectedTopologyRestorationResidualAxisRegularization =
+                RegularizeAxisAlignedPlacementGraphEdges(edges);
+            edges = postProtectedTopologyRestorationResidualAxisRegularization.Edges;
+            var postProtectedTopologyRestorationResidualCompactionPreEdgeCount = edges.Length;
+            edges = CollapseInlineCollinearPlacementGraphEdges(edges);
+            postProtectedTopologyRestorationResidualCollapsedEdgeCount =
+                Math.Max(0, postProtectedTopologyRestorationResidualCompactionPreEdgeCount - edges.Length);
+            edges = SuppressContainedPlacementGraphEdges(
+                edges,
+                out postProtectedTopologyRestorationResidualSuppressedContainedEdgeCount);
+            postProtectedTopologyRestorationResidualNodeNormalization =
+                NormalizePlacementGraphNodeReferencesFromGeometry(edges);
+            edges = postProtectedTopologyRestorationResidualNodeNormalization.Edges;
+        }
+        else
+        {
+            postProtectedTopologyRestorationResidualAxisRegularization =
+                new PlacementGraphAxisRegularizationResult(edges, 0);
+            postProtectedTopologyRestorationResidualNodeNormalization =
+                new PlacementGraphNodeReferenceNormalizationResult(edges, 0);
+        }
         var residualEndpointOnHostSummary = SummarizeResidualPlacementGraphEndpointOnHostEdges(edges);
         var finalCompactedEdgeCount = Math.Max(0, finalCompactionPreEdgeCount - finalPostCompactionEdgeCount);
         var alignedEndpointCount = preNormalizationNodeCoordinateAlignment.AlignedEndpointCount
@@ -3936,7 +3970,8 @@ public sealed record PlacementWallGraphExport(
             + postResidualSnapAxisRegularization.RegularizedEdgeCount
             + postPairResidualSnapAxisRegularization.RegularizedEdgeCount
             + postRedundantResidualAxisRegularization.RegularizedEdgeCount
-            + postBridgeResidualAxisRegularization.RegularizedEdgeCount;
+            + postBridgeResidualAxisRegularization.RegularizedEdgeCount
+            + postProtectedTopologyRestorationResidualAxisRegularization.RegularizedEdgeCount;
         var postAbsorptionCompactedEdgeCount = Math.Max(0, postAbsorptionEdgeCount - edges.Length);
         var nodes = BuildPlacementWallGraphNodes(graph, edges, calibration);
         var components = graph.Components
@@ -3985,11 +4020,14 @@ public sealed record PlacementWallGraphExport(
             $"placement wall graph post-bridge snapped {postBridgeResidualEndpointSnap.SnappedEndpointCount} residual endpoint(s) onto host wall runs",
             $"placement wall graph post-bridge compacted {postBridgeResidualCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postBridgeResidualSuppressedContainedEdgeCount} contained duplicate edge(s)",
             $"placement wall graph split {postBridgeResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-bridge residual cleanup",
-            $"placement wall graph restored {protectedTopologyRestoration.RestoredEdgeCount} protected bridged topology edge(s) missing from final graph coverage",
+            $"placement wall graph restored {protectedTopologyRestoration.RestoredEdgeCount} protected bridged topology edge(s) missing from final graph coverage and aligned {protectedTopologyRestoration.AlignedRestoredEdgeCount} restored edge(s) to strong structural wall-body axes",
             $"placement wall graph split {postProtectedTopologyRestorationNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after protected topology restoration",
             $"placement wall graph post-restoration compacted {postProtectedTopologyRestorationCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postProtectedTopologyRestorationSuppressedContainedEdgeCount} contained duplicate edge(s)",
             $"placement wall graph post-restoration short-gap compacted {postProtectedTopologyRestorationShortGapCollapsedEdgeCount} tiny structural continuation gap(s)",
             $"placement wall graph split {postProtectedTopologyRestorationCompactionNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-restoration compaction",
+            $"placement wall graph post-restoration snapped {postProtectedTopologyRestorationResidualEndpointSnap.SnappedEndpointCount} residual endpoint(s) onto corrected host wall runs",
+            $"placement wall graph post-restoration residual compacted {postProtectedTopologyRestorationResidualCollapsedEdgeCount} aligned wall fragment(s) and suppressed {postProtectedTopologyRestorationResidualSuppressedContainedEdgeCount} contained duplicate edge(s)",
+            $"placement wall graph split {postProtectedTopologyRestorationResidualNodeNormalization.SplitNodeReferenceCount} reused node reference(s) after post-restoration residual cleanup",
             "placement wall graph residual endpoint-on-host-wall candidates after cleanup: "
             + $"{residualEndpointOnHostSummary.CandidateEndpointCount} total, "
             + $"{residualEndpointOnHostSummary.CoincidentCandidateEndpointCount} coincident, "
@@ -4050,6 +4088,7 @@ public sealed record PlacementWallGraphExport(
     {
         var restored = new List<PlacementWallGraphEdgeExport>(edges);
         var restoredCount = 0;
+        var alignedRestoredCount = 0;
         foreach (var span in topologySpans.Where(IsProtectedPlacementGraphTopologySpan))
         {
             var edge = PlacementWallGraphEdgeExport.From(
@@ -4061,6 +4100,15 @@ public sealed record PlacementWallGraphExport(
             if (IsProtectedPlacementGraphTopologyEdgeRepresented(edge, restored))
             {
                 continue;
+            }
+
+            edge = AlignProtectedPlacementGraphTopologyEdgeToStructuralBodyAxis(
+                edge,
+                restored,
+                out var alignedToStructuralBody);
+            if (alignedToStructuralBody)
+            {
+                alignedRestoredCount++;
             }
 
             restored.Add(edge with
@@ -4075,7 +4123,7 @@ public sealed record PlacementWallGraphExport(
 
         if (restoredCount == 0)
         {
-            return new PlacementGraphProtectedTopologyRestorationResult(edges.ToArray(), 0);
+            return new PlacementGraphProtectedTopologyRestorationResult(edges.ToArray(), 0, 0);
         }
 
         return new PlacementGraphProtectedTopologyRestorationResult(
@@ -4085,7 +4133,8 @@ public sealed record PlacementWallGraphExport(
                 .ThenBy(edge => edge.Bounds?.X ?? double.MaxValue)
                 .ThenBy(edge => edge.Id, StringComparer.Ordinal)
                 .ToArray(),
-            restoredCount);
+            restoredCount,
+            alignedRestoredCount);
     }
 
     private static bool IsProtectedPlacementGraphTopologySpan(WallGraphTopologySpan span)
@@ -4151,6 +4200,101 @@ public sealed record PlacementWallGraphExport(
         return covered / Math.Max(protectedSpan.Length, 0.001)
             >= MinProtectedTopologyGraphRepresentationCoverageRatio;
     }
+
+    internal static PlacementWallGraphEdgeExport AlignProtectedPlacementGraphTopologyEdgeToStructuralBodyAxis(
+        PlacementWallGraphEdgeExport protectedEdge,
+        IReadOnlyList<PlacementWallGraphEdgeExport> edges,
+        out bool aligned)
+    {
+        aligned = false;
+        if (TryCreatePlacementGraphMergeSpan(-1, protectedEdge) is not { } protectedSpan
+            || !protectedEdge.Evidence.Any(item =>
+                item.Contains("clean placement exterior run bridge", StringComparison.OrdinalIgnoreCase))
+            || !IsTrustedExteriorShellPlacementGraphMergeContinuation(protectedEdge)
+            || HasPlacementGraphDetailOrSurfaceEvidence(protectedEdge)
+            || HasHardPlacementGraphRepresentativeDetailEvidence(protectedEdge))
+        {
+            return protectedEdge;
+        }
+
+        var anchor = edges
+            .Select((edge, index) => TryCreatePlacementGraphMergeSpan(index, edge))
+            .Where(span => span is not null)
+            .Select(span => span!)
+            .Where(span =>
+                span.Edge.PageNumber == protectedSpan.Edge.PageNumber
+                && span.Orientation == protectedSpan.Orientation
+                && IsProtectedTopologyStructuralAxisAnchor(span.Edge)
+                && !HasPlacementGraphDetailOrSurfaceEvidence(span.Edge)
+                && !HasHardPlacementGraphRepresentativeDetailEvidence(span.Edge))
+            .Select(span =>
+            {
+                var overlap = Math.Min(span.End, protectedSpan.End) - Math.Max(span.Start, protectedSpan.Start);
+                return new
+                {
+                    Span = span,
+                    AxisDistance = Math.Abs(span.Axis - protectedSpan.Axis),
+                    Overlap = Math.Max(0, overlap),
+                    AnchorOverlapRatio = Math.Max(0, overlap) / Math.Max(span.Length, 0.001),
+                    ProtectedCoverageRatio = Math.Max(0, overlap) / Math.Max(protectedSpan.Length, 0.001)
+                };
+            })
+            .Where(candidate =>
+                candidate.AxisDistance > 0.001
+                && candidate.AxisDistance <= MaxProtectedTopologyStructuralAxisAlignmentDistanceDrawingUnits
+                && candidate.Span.Length >= MinProtectedTopologyStructuralAnchorLengthDrawingUnits
+                && candidate.AnchorOverlapRatio >= MinProtectedTopologyStructuralAnchorOverlapRatio
+                && candidate.ProtectedCoverageRatio >= MinProtectedTopologyStructuralAnchorCoverageRatio)
+            .OrderByDescending(candidate => candidate.Overlap)
+            .ThenByDescending(candidate => candidate.Span.Length)
+            .ThenBy(candidate => candidate.AxisDistance)
+            .ThenBy(candidate => candidate.Span.Edge.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (anchor is null)
+        {
+            return protectedEdge;
+        }
+
+        var line = protectedSpan.Orientation == PlacementGraphEdgeOrientation.Horizontal
+            ? new PlanLineSegment(
+                new PlanPoint(protectedSpan.Start, anchor.Span.Axis),
+                new PlanPoint(protectedSpan.End, anchor.Span.Axis))
+            : new PlanLineSegment(
+                new PlanPoint(anchor.Span.Axis, protectedSpan.Start),
+                new PlanPoint(anchor.Span.Axis, protectedSpan.End));
+        var bounds = BoundsForMergedPlacementGraphRun(
+            line,
+            protectedSpan.Orientation,
+            protectedEdge.ThicknessDrawingUnits);
+        var scale = protectedEdge.MillimetersPerDrawingUnit;
+        aligned = true;
+
+        return protectedEdge with
+        {
+            CenterLine = LineExport.From(line),
+            CenterLineMillimeters = ScaleLine(line, scale),
+            Bounds = RectExport.From(bounds),
+            BoundsMillimeters = ScaleRect(bounds, scale),
+            Evidence = protectedEdge.Evidence
+                .Append(
+                    "placement wall graph protected topology restoration aligned restored exterior bridge "
+                    + $"to strong structural wall-body axis {anchor.Span.Edge.Id}; "
+                    + $"axis shift {anchor.AxisDistance:0.###}, anchor overlap {anchor.AnchorOverlapRatio:0.###}, "
+                    + $"protected coverage {anchor.ProtectedCoverageRatio:0.###}")
+                .Distinct(StringComparer.Ordinal)
+                .ToArray()
+        };
+    }
+
+    private static bool IsProtectedTopologyStructuralAxisAnchor(PlacementWallGraphEdgeExport edge) =>
+        !edge.ExcludedFromStructuralTopology
+        && IsStructuralPlacementGraphComponentKind(edge.WallComponentKind)
+        && edge.Confidence >= 0.70
+        && IsPlacementReadyWallBodyEvidence(edge)
+        && edge.Evidence.Any(item =>
+            item.Contains("filled closed vector wall body", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("centered between paired wall faces", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("paired wall-face midpoint", StringComparison.OrdinalIgnoreCase));
 
     private static PlacementWallGraphEdgeExport[] CollapseCleanPlacementGraphEdges(
         IReadOnlyList<PlacementWallGraphEdgeExport> edges)
@@ -8564,7 +8708,8 @@ public sealed record PlacementWallGraphExport(
 
     private sealed record PlacementGraphProtectedTopologyRestorationResult(
         PlacementWallGraphEdgeExport[] Edges,
-        int RestoredEdgeCount);
+        int RestoredEdgeCount,
+        int AlignedRestoredEdgeCount);
 
     private sealed record PlacementGraphRedundantEndpointOnHostFragmentSuppression(
         PlacementGraphMergeSpan CandidateSpan,
