@@ -420,7 +420,7 @@ public sealed class GlobalWallSolutionTests
     [InlineData(StructuralEvidenceSignalKind.IsolatedStructuralIsland)]
     [InlineData(StructuralEvidenceSignalKind.UnoccupiedShellExtension)]
     [InlineData(StructuralEvidenceSignalKind.WallBodyThicknessOutlier)]
-    public async Task StructuralCore_PropagatesAuditableNonWallRejectionIntoLegacyHypotheses(
+    public async Task StructuralCore_RetainedReviewSignalDoesNotBecomeHardRejection(
         StructuralEvidenceSignalKind blockingKind)
     {
         var result = await CreateScanResultAsync();
@@ -470,19 +470,15 @@ public sealed class GlobalWallSolutionTests
                 StringComparer.Ordinal))
             .ToArray();
         Assert.NotEmpty(targetDecisions);
-        Assert.All(
+        Assert.DoesNotContain(
             targetDecisions,
-            decision =>
-            {
-                Assert.True(decision.StrongNegativeEvidence);
-                Assert.Equal("Rejected", decision.Decision);
-                Assert.Empty(decision.SelectedByHypothesisIds);
-                Assert.Contains(
-                    decision.Evidence,
-                    item => item.Contains(
-                        "non-wall or unsupported-context evidence",
-                        StringComparison.OrdinalIgnoreCase));
-            });
+            decision => decision.Evidence.Any(item => item.Contains(
+                "joint structural evidence rejected every contributing source wall",
+                StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(
+            targetDecisions,
+            decision => decision.Decision != "Rejected"
+                || decision.SelectedByHypothesisIds.Count > 0);
     }
 
     [Fact]
@@ -507,6 +503,7 @@ public sealed class GlobalWallSolutionTests
                     ])
                 {
                     SourceWallIds = [target.Id],
+                    AbsolutePlacementBlock = true,
                     BlockingSignalKinds =
                     [
                         StructuralEvidenceSignalKind.UnsupportedOblique
@@ -543,6 +540,64 @@ public sealed class GlobalWallSolutionTests
                 Assert.Equal("Rejected", decision.Decision);
                 Assert.Empty(decision.SelectedByHypothesisIds);
             });
+    }
+
+    [Fact]
+    public async Task StructuralCore_SelectedCandidateOutweighsNonAbsoluteBlockingSignal()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var target = placement.Walls.First();
+        var structuralSolution = result.StructuralPlanSolution with
+        {
+            CandidateDecisions =
+            [
+                new StructuralWallDecision(
+                    $"structural:wall:{target.Id}",
+                    StructuralWallDecisionKind.Selected,
+                    UnaryScore: 0.7,
+                    ObjectiveContribution: 0.2,
+                    Reasons:
+                    [
+                        "selected by the joint structural objective",
+                        "context-only evidence remains as a review signal"
+                    ])
+                {
+                    SourceWallIds = [target.Id],
+                    BlockingSignalKinds =
+                    [
+                        StructuralEvidenceSignalKind.ContextOnlyBoundary
+                    ]
+                }
+            ],
+            WallRuns = Array.Empty<StructuralWallRun>(),
+            Metrics = result.StructuralPlanSolution.Metrics with
+            {
+                SelectedCandidateCount = 1,
+                CanonicalWallRunCount = 0
+            }
+        };
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [target],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structuralSolution);
+
+        var targetDecisions = solutions.CandidateDecisions
+            .Where(decision => decision.SourceWallIds.Contains(
+                target.Id,
+                StringComparer.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(targetDecisions);
+        Assert.DoesNotContain(
+            targetDecisions,
+            decision => decision.Evidence.Any(item => item.Contains(
+                "joint structural evidence rejected every contributing source wall",
+                StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(targetDecisions, decision => decision.Decision == "Selected");
     }
 
     [Fact]
@@ -985,6 +1040,98 @@ public sealed class GlobalWallSolutionTests
         Assert.Equal(3, decision.SelectedByHypothesisIds.Count(id =>
             !string.Equals(id, selectedHypothesis.Id, StringComparison.Ordinal)));
         Assert.Contains(selectedHypothesis.Id, decision.SelectedByHypothesisIds);
+    }
+
+    [Fact]
+    public async Task StructuralCore_RecoversUnanimousMajorWallWithTwoAnchoredOpenings()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var target = HostWallFragment(
+            template,
+            "two-opening-consensus-target",
+            new LineExport(
+                new PointExport(100, 200),
+                new PointExport(400, 200))) with
+        {
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "dimension-like source context"
+            ]
+        };
+        var structural = HostWallFragment(
+            template,
+            "two-opening-consensus-structural",
+            new LineExport(
+                new PointExport(600, 100),
+                new PointExport(600, 400)));
+        var endpointSupports = new[]
+        {
+            HostWallFragment(
+                template,
+                "two-opening-consensus-left-support",
+                new LineExport(
+                    new PointExport(100, 80),
+                    new PointExport(100, 320))),
+            HostWallFragment(
+                template,
+                "two-opening-consensus-right-support",
+                new LineExport(
+                    new PointExport(400, 80),
+                    new PointExport(400, 320)))
+        };
+        var edge = CleanGraphEdge(target, "two-opening-consensus-edge");
+        var openings = new[]
+        {
+            AnchoredOpening(
+                "two-opening-consensus-first",
+                target.Id,
+                structural.Id),
+            AnchoredOpening(
+                "two-opening-consensus-second",
+                target.Id,
+                structural.Id)
+        };
+        var structuralSolution = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [structural]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            endpointSupports
+                .Append(structural)
+                .Append(target)
+                .ToArray(),
+            Array.Empty<PlacementRoomExport>(),
+            openings,
+            EmptyGraph(placement.WallGraph) with
+            {
+                Edges = [edge]
+            },
+            structuralSolution);
+
+        var selectedHypothesis = Assert.Single(solutions.Hypotheses.Where(hypothesis =>
+            hypothesis.Selected));
+        Assert.Equal("hypothesis:joint-structural-core", selectedHypothesis.Id);
+        var decision = Assert.Single(solutions.CandidateDecisions.Where(candidate =>
+            candidate.CandidateId == $"candidate:graph:{edge.Id}"));
+        Assert.Equal(2, decision.OpeningSupportCount);
+        Assert.True(decision.MajorWallCandidate);
+        Assert.True(decision.LocalScore >= 0.90);
+        Assert.Equal(2, decision.SupportedEndpointCount);
+        Assert.Equal(3, decision.SelectedByHypothesisIds.Count(id =>
+            !string.Equals(id, selectedHypothesis.Id, StringComparison.Ordinal)));
+        Assert.Contains("weak non-wall evidence 1", decision.Evidence);
+        Assert.Contains("structural evidence 1", decision.Evidence);
+        Assert.Equal(1, selectedHypothesis.RecoveredCandidateCount);
+        Assert.Equal("Selected", decision.Decision);
+        Assert.Contains(selectedHypothesis.Id, decision.SelectedByHypothesisIds);
+        Assert.Contains(
+            solutions.SelectedWallRuns,
+            run => run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal));
     }
 
     [Theory]

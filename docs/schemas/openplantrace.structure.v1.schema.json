@@ -834,7 +834,7 @@
       ],
       "properties": {
         "solverVersion": {
-          "const": "openplantrace.global-wall-solver.v14"
+          "const": "openplantrace.global-wall-solver.v15"
         },
         "selectedHypothesisId": {
           "type": "string",

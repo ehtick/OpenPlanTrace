@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v14";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v15";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -586,8 +586,7 @@ public static partial class GlobalWallSolutionBuilder
         var structurallyAcceptedWallIds = structuralSolution.CandidateDecisions
             .Where(decision =>
                 decision.Decision == StructuralWallDecisionKind.Selected
-                && !decision.BlockingSignalKinds.Any(
-                    StructuralRejectionSignalKinds.Contains))
+                && !decision.AbsolutePlacementBlock)
             .SelectMany(decision => decision.SourceWallIds)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Concat(coordinateReadyStructuralWallIds)
@@ -596,8 +595,10 @@ public static partial class GlobalWallSolutionBuilder
         var structurallyRejectedWallIds = structuralSolution.CandidateDecisions
             .Where(decision =>
                 decision.AbsolutePlacementBlock
-                || decision.BlockingSignalKinds.Any(
-                    StructuralRejectionSignalKinds.Contains))
+                || (decision.Decision is StructuralWallDecisionKind.Rejected
+                        or StructuralWallDecisionKind.Invalid
+                    && decision.BlockingSignalKinds.Any(
+                        StructuralRejectionSignalKinds.Contains)))
             .SelectMany(decision => decision.SourceWallIds)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Where(id => !structurallyAcceptedWallIds.Contains(id))
@@ -963,9 +964,12 @@ public static partial class GlobalWallSolutionBuilder
         && candidate.ReadyForCoordinatePlacement
         && candidate.WeakNegativeEvidenceCount <= 1
         && (candidate.MajorWallCandidate
-            ? candidate.StructuralEvidenceCount >= 2
-                && (candidate.SupportedEndpointCount >= 2
-                    || candidate.OpeningSupportCount >= 1)
+            ? (candidate.StructuralEvidenceCount >= 2
+                    && (candidate.SupportedEndpointCount >= 2
+                        || candidate.OpeningSupportCount >= 1))
+                || (candidate.StructuralEvidenceCount >= 1
+                    && candidate.SupportedEndpointCount >= 2
+                    && candidate.OpeningSupportCount >= 2)
             : candidate.StructuralEvidenceCount >= 1
                 && candidate.SupportedEndpointCount >= 2
                 && (candidate.OpeningSupportCount >= 1
