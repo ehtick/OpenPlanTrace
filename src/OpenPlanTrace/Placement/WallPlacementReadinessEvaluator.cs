@@ -973,6 +973,19 @@ public static class WallPlacementReadinessEvaluator
             return false;
         }
 
+        var hasTrustedBoundaryAnchor =
+            EvidenceContains(evidence, "both endpoints supported by structural context")
+            || HasTopologySupportedEndpointCount(evidence, minimumEndpointCount: 2)
+            || EvidenceContainsAny(
+                evidence,
+                "geometric room boundary support",
+                "explicit room boundary support",
+                "detected room evidence on one side",
+                "detected room evidence on both sides",
+                "exterior shell repair support",
+                TrustedExteriorShellContinuityEvidence,
+                RoomConfirmedIsolatedExteriorPromotionEvidence,
+                "trusted benchmark");
         if (!EvidenceContains(evidence, "dimension-like fragmented perimeter parallel-face candidate")
             || !EvidenceContainsAny(
                 evidence,
@@ -983,10 +996,7 @@ public static class WallPlacementReadinessEvaluator
                 evidence,
                 "parallel wall-face pair",
                 "strong parallel-face wall pair")
-            || !EvidenceContainsAny(
-                evidence,
-                "one endpoint supported by structural context",
-                "supported endpoint"))
+            || !hasTrustedBoundaryAnchor)
         {
             return false;
         }

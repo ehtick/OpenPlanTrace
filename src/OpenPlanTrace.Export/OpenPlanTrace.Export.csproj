@@ -31,5 +31,11 @@
     <EmbeddedResource
       Include="..\..\docs\schemas\openplantrace.placement.v12.schema.json"
       LogicalName="OpenPlanTrace.Export.Schemas.openplantrace.placement.v12.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\schemas\openplantrace.structure.v1.schema.json"
+      LogicalName="OpenPlanTrace.Export.Schemas.openplantrace.structure.v1.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\schemas\openplantrace.wall-truth-evaluation.v1.schema.json"
+      LogicalName="OpenPlanTrace.Export.Schemas.openplantrace.wall-truth-evaluation.v1.schema.json" />
   </ItemGroup>
 </Project>

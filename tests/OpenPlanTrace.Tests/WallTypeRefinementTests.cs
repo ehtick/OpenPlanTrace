@@ -3206,6 +3206,48 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DemotesNonOrthogonalSingleLineWhenSameRoomOccupiesBothSides()
+    {
+        var wall = NonOrthogonalDimensionLikeInteriorWall("wall-diagonal-inside-one-room", 100, 100, 160, 140);
+        var context = CreateContext("same-room-on-both-sides-is-not-boundary-support");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room(
+            "room-around-diagonal",
+            RoomUseKind.Bedroom,
+            new PlanRect(60, 60, 140, 120),
+            new[]
+            {
+                new PlanPoint(60, 60),
+                new PlanPoint(200, 60),
+                new PlanPoint(200, 180),
+                new PlanPoint(60, 180)
+            }));
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var demoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(demoted.PlacementReady);
+        Assert.True(demoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, demoted.Decision);
+        Assert.Contains(
+            demoted.Evidence,
+            item => item.Contains("same room on both sides True", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["sameRoomOnBothSidesEvidenceWallCount"] == "1"
+                && diagnostic.Properties["twoSidedRoomEvidenceWallCount"] == "0");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_KeepsNonOrthogonalDimensionLikeWallWithExplicitRoomBoundarySupport()
     {
         var wall = NonOrthogonalDimensionLikeInteriorWall("wall-diagonal-room-boundary", 100, 100, 160, 140);
@@ -4552,6 +4594,206 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DoesNotUsePerpendicularWallEndingInsideRoomEdgeAsShellAnchor()
+    {
+        var bottomShell = ExteriorShellWall("wall-shell-bottom", 100, 180, 320, 180);
+        var interiorCrossing = ExteriorShellWall("wall-crossing-inside-edge", 210, 40, 210, 100);
+        var distantTopShell = ExteriorShellWall("wall-distant-top-shell", 380, 100, 500, 100);
+        var context = CreateContext("interior-crossing-shell-anchor-blocked");
+        context.Walls.Add(bottomShell);
+        context.Walls.Add(interiorCrossing);
+        context.Walls.Add(distantTopShell);
+        context.Rooms.Add(RepairRoom(
+            "room-with-unanchored-top-edge",
+            new PlanRect(100, 100, 220, 80),
+            new[]
+            {
+                new PlanPoint(100, 100),
+                new PlanPoint(320, 100),
+                new PlanPoint(320, 180),
+                new PlanPoint(100, 180)
+            }));
+        context.WallGraph = GraphFor(bottomShell, interiorCrossing, distantTopShell);
+        context.WallEvidenceMap = EvidenceMapFor(
+            new[] { bottomShell, interiorCrossing, distantTopShell },
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall => wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.DoesNotContain(
+            context.Walls,
+            wall => wall.Id.Contains("wall-exterior-shell-inferred", StringComparison.Ordinal)
+                && Math.Abs(wall.CenterLine.Start.Y - 100) <= 0.001
+                && Math.Abs(wall.CenterLine.End.Y - 100) <= 0.001);
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DoesNotInferExteriorShellFromGrosslyOversizedSemanticRoom()
+    {
+        var rightShell = ExteriorShellWall("wall-shell-right", 380, 100, 380, 180);
+        var bottomShell = ExteriorShellWall("wall-shell-bottom", 100, 180, 320, 180);
+        var nearbyTopShell = ExteriorShellWall("wall-nearby-top-shell", 376, 100, 500, 100);
+        var context = CreateContext(
+            "oversized-semantic-room-shell-inference-blocked",
+            new PlanPrimitive[]
+            {
+                new LinePrimitive(new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(320, 100)))
+                {
+                    SourceId = "unrelated-source-line-cluster",
+                    StrokeWidth = 0.05
+                }
+            });
+        context.Walls.Add(rightShell);
+        context.Walls.Add(bottomShell);
+        context.Walls.Add(nearbyTopShell);
+        context.Rooms.Add(RepairRoom(
+            "room-gross-area-mismatch",
+            new PlanRect(100, 100, 220, 80),
+            new[]
+            {
+                new PlanPoint(100, 100),
+                new PlanPoint(320, 100),
+                new PlanPoint(320, 180),
+                new PlanPoint(100, 180)
+            }) with
+        {
+            Evidence =
+            [
+                "semantic room boundary inferred from nearby wall candidates wall-a,wall-b,wall-c,wall-d",
+                "semantic room boundary wall coverage 0.82 across 4 strong side(s)",
+                "semantic room boundary trusted wall support 0.75 across 4 side(s)",
+                "semantic room boundary area match ratio 4.951 from printed room area"
+            ]
+        });
+        context.WallGraph = GraphFor(rightShell, bottomShell, nearbyTopShell);
+        context.WallEvidenceMap = EvidenceMapFor(
+            new[] { rightShell, bottomShell, nearbyTopShell },
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall => wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.DoesNotContain(
+            context.Walls,
+            wall => wall.Id.Contains("wall-exterior-shell-inferred", StringComparison.Ordinal)
+                && Math.Abs(wall.CenterLine.Start.Y - 100) <= 0.001
+                && Math.Abs(wall.CenterLine.End.Y - 100) <= 0.001);
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DemotesAsymmetricDimensionPairAcrossOutdoorRoomEvidence()
+    {
+        var wall = DimensionPairedOutdoorBoundaryWall(
+            "wall-asymmetric-dimension-pair",
+            firstHealedGap: 34.299,
+            secondHealedGap: 4.252);
+        var context = CreateContext("asymmetric-dimension-pair-outdoor-boundary");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room(
+            "terrace-above",
+            RoomUseKind.Outdoor,
+            new PlanRect(90, 20, 120, 80),
+            new[]
+            {
+                new PlanPoint(90, 20),
+                new PlanPoint(210, 20),
+                new PlanPoint(210, 100),
+                new PlanPoint(90, 100)
+            },
+            new[] { wall.Id }));
+        context.Rooms.Add(Room(
+            "room-below",
+            RoomUseKind.Office,
+            new PlanRect(90, 100, 120, 80),
+            new[]
+            {
+                new PlanPoint(90, 100),
+                new PlanPoint(210, 100),
+                new PlanPoint(210, 180),
+                new PlanPoint(90, 180)
+            },
+            new[] { wall.Id }));
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var refined = Assert.Single(context.Walls);
+        Assert.Equal(WallType.Unknown, refined.WallType);
+        Assert.Contains(
+            refined.Evidence,
+            item => item.Contains("asymmetric dimension/structural face pairing", StringComparison.OrdinalIgnoreCase));
+        var assessment = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(assessment.PlacementReady);
+        Assert.True(assessment.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, assessment.Decision);
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsBalancedDimensionPairAcrossOutdoorRoomBoundary()
+    {
+        var wall = DimensionPairedOutdoorBoundaryWall(
+            "wall-balanced-dimension-pair",
+            firstHealedGap: 9.5,
+            secondHealedGap: 8.0);
+        var context = CreateContext("balanced-dimension-pair-outdoor-boundary");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room(
+            "terrace-above",
+            RoomUseKind.Outdoor,
+            new PlanRect(90, 20, 120, 80),
+            new[]
+            {
+                new PlanPoint(90, 20),
+                new PlanPoint(210, 20),
+                new PlanPoint(210, 100),
+                new PlanPoint(90, 100)
+            },
+            new[] { wall.Id }));
+        context.Rooms.Add(Room(
+            "room-below",
+            RoomUseKind.Office,
+            new PlanRect(90, 100, 120, 80),
+            new[]
+            {
+                new PlanPoint(90, 100),
+                new PlanPoint(210, 100),
+                new PlanPoint(210, 180),
+                new PlanPoint(90, 180)
+            },
+            new[] { wall.Id }));
+        context.WallGraph = GraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var refined = Assert.Single(context.Walls);
+        Assert.Equal(WallType.Exterior, refined.WallType);
+        var assessment = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(assessment.PlacementReady);
+        Assert.False(assessment.RequiresReview);
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_InfersLongExteriorShellSpanWhenSourceLineSupportsRoomBoundary()
     {
         var leftShell = ExteriorShellWall("wall-shell-left", 100, 100, 100, 180);
@@ -4606,6 +4848,335 @@ public sealed class WallTypeRefinementTests
         Assert.True(assessment.PlacementReady);
         Assert.False(assessment.RequiresReview);
         Assert.Contains("source-long-exterior-shell-face", assessment.SourcePrimitiveIds);
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DoesNotRecoverSplitDimensionBaselineAsExteriorShell()
+    {
+        var leftShell = ExteriorShellWall("wall-shell-left", 20, 100, 20, 180);
+        var rightShell = ExteriorShellWall("wall-shell-right", 370, 100, 370, 180);
+        var bottomShell = ExteriorShellWall("wall-shell-bottom", 20, 180, 370, 180);
+        var dimensionBaseline = new PlanLineSegment(new PlanPoint(20, 100), new PlanPoint(191, 100));
+        var context = CreateContext(
+            "source-backed-exterior-shell-dimension-chain",
+            new PlanPrimitive[]
+            {
+                new LinePrimitive(dimensionBaseline)
+                {
+                    SourceId = "dimension-baseline-source",
+                    StrokeWidth = 0.05
+                },
+                new LinePrimitive(new PlanLineSegment(new PlanPoint(199, 100), new PlanPoint(370, 100)))
+                {
+                    SourceId = "dimension-baseline-continuation",
+                    StrokeWidth = 0.05
+                }
+            });
+        context.Dimensions.Add(new DimensionAnnotation(
+            "page:1:dimension:1",
+            1,
+            DimensionKind.Linear,
+            DimensionOrientation.Horizontal,
+            "6 100",
+            "6100 mm",
+            new PlanRect(20, 88, 171, 24),
+            PlanMeasurementUnit.Millimeter,
+            6100,
+            dimensionBaseline,
+            171,
+            35.673,
+            Confidence.High,
+            null,
+            new[] { "dimension-baseline-source" },
+            new[] { "test detected dimension baseline" }));
+        context.Walls.Add(leftShell);
+        context.Walls.Add(rightShell);
+        context.Walls.Add(bottomShell);
+        context.WallGraph = GraphFor(leftShell, rightShell, bottomShell);
+        context.WallEvidenceMap = EvidenceMapFor(
+            new[] { leftShell, rightShell, bottomShell },
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall => wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.DoesNotContain(
+            context.Walls,
+            wall => wall.Id.Contains("wall-exterior-shell-source-backed", StringComparison.Ordinal));
+        var diagnostic = Assert.Single(
+            context.Diagnostics.Build().Messages,
+            message => message.Code == "walls.source_backed_shell_dimension_candidates_suppressed");
+        Assert.Equal("2", diagnostic.Properties["suppressedSourcePrimitiveCount"]);
+        Assert.Contains("dimension-baseline-source", diagnostic.SourcePrimitiveIds);
+        Assert.Contains("dimension-baseline-continuation", diagnostic.SourcePrimitiveIds);
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DemotesWeakUnpairedLineShadowedByStrongerParallelWall()
+    {
+        var detail = new WallSegment(
+            "wall-offset-detail",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(240, 100)),
+            4,
+            new Confidence(0.88))
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "offset-detail-source" },
+            FragmentEvidence = new WallFragmentEvidence(
+                FragmentCount: 4,
+                TotalHealedGap: 0,
+                MaxHealedGap: 0,
+                DuplicatePrimitiveCount: 0,
+                GapRatio: 0,
+                RequiresGeometryReview: false,
+                Evidence: Array.Empty<string>()),
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "run merged 4 fragments",
+                "layer (unlayered) classified Unknown (0.35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type interior: supported wall evidence inside exterior envelope"
+            ]
+        };
+        var structuralWall = new WallSegment(
+            "wall-source-backed-structural",
+            1,
+            new PlanLineSegment(new PlanPoint(90, 136), new PlanPoint(260, 136)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Exterior,
+            SourcePrimitiveIds = new[] { "structural-source" },
+            Evidence =
+            [
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors"
+            ]
+        };
+        var context = CreateContext("parallel-offset-detail-shadow");
+        context.Walls.Add(detail);
+        context.Walls.Add(structuralWall);
+        context.WallGraph = GraphFor(detail, structuralWall);
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                new WallEvidenceWallAssessment(
+                    detail.Id,
+                    detail.PageNumber,
+                    detail.Bounds,
+                    WallEvidenceCategory.MediumWallBody,
+                    Confidence.High,
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    detail.SourcePrimitiveIds,
+                    detail.Evidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                },
+                new WallEvidenceWallAssessment(
+                    structuralWall.Id,
+                    structuralWall.PageNumber,
+                    structuralWall.Bounds,
+                    WallEvidenceCategory.RecoveredWallBody,
+                    Confidence.High,
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    structuralWall.SourcePrimitiveIds,
+                    structuralWall.Evidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                }
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var detailAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == detail.Id);
+        Assert.False(detailAssessment.PlacementReady);
+        Assert.True(detailAssessment.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, detailAssessment.Decision);
+        Assert.Contains(
+            detailAssessment.Evidence,
+            item => item.Contains("parallel offset detail shadow", StringComparison.OrdinalIgnoreCase));
+        Assert.True(Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == structuralWall.Id).PlacementReady);
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.parallel_offset_detail_shadows_demoted"
+                && diagnostic.Properties["demotedWallCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsDistantUnpairedWallWhenParallelWallDoesNotExplainIt()
+    {
+        var wall = new WallSegment(
+            "wall-distant-unpaired",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(240, 100)),
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "distant-unpaired-source" },
+            Evidence =
+            [
+                "single wall-length vector run",
+                "layer (unlayered) classified Unknown (0.35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type interior: supported wall evidence inside exterior envelope"
+            ]
+        };
+        var distantStructuralWall = new WallSegment(
+            "wall-distant-structural",
+            1,
+            new PlanLineSegment(new PlanPoint(90, 190), new PlanPoint(260, 190)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Exterior,
+            SourcePrimitiveIds = new[] { "distant-structural-source" },
+            Evidence =
+            [
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors"
+            ]
+        };
+        var context = CreateContext("distant-parallel-wall-not-shadow");
+        context.Walls.Add(wall);
+        context.Walls.Add(distantStructuralWall);
+        context.WallGraph = GraphFor(wall, distantStructuralWall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            new[] { wall, distantStructuralWall },
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            candidate => candidate.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.True(Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == wall.Id).PlacementReady);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.parallel_offset_detail_shadows_demoted");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DemotesExteriorOpeningClearanceRectangleEdge()
+    {
+        var rectangleTop = new PlanLineSegment(new PlanPoint(80, 120), new PlanPoint(200, 120));
+        var rectangleLeft = new PlanLineSegment(new PlanPoint(80, 120), new PlanPoint(80, 240));
+        var rectangleBottom = new PlanLineSegment(new PlanPoint(80, 240), new PlanPoint(200, 240));
+        var rectangleRight = new PlanLineSegment(new PlanPoint(200, 120), new PlanPoint(200, 240));
+        var context = CreateContext(
+            "exterior-opening-clearance-rectangle",
+            new PlanPrimitive[]
+            {
+                new LinePrimitive(rectangleTop) { SourceId = "clearance-top", StrokeWidth = 0.13 },
+                new LinePrimitive(rectangleLeft) { SourceId = "clearance-left", StrokeWidth = 0.13 },
+                new LinePrimitive(rectangleBottom) { SourceId = "clearance-bottom", StrokeWidth = 0.13 },
+                new LinePrimitive(rectangleRight) { SourceId = "clearance-right", StrokeWidth = 0.13 }
+            });
+        var clearanceEdge = new WallSegment(
+            "wall-clearance-bottom",
+            1,
+            rectangleBottom,
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "clearance-bottom" },
+            Evidence =
+            [
+                "single wall-length vector run",
+                "layer (unlayered) classified Unknown (0.35)",
+                "layer evidence: no strong layer name or geometry evidence",
+                "wall type interior: supported wall evidence inside exterior envelope"
+            ]
+        };
+        var shellWalls = new[]
+        {
+            ExteriorShellWall("wall-shell-top", 200, 60, 500, 60),
+            ExteriorShellWall("wall-shell-right", 500, 60, 500, 300),
+            ExteriorShellWall("wall-shell-bottom", 200, 300, 500, 300),
+            ExteriorShellWall("wall-shell-left", 200, 60, 200, 300)
+        };
+        context.Walls.Add(clearanceEdge);
+        context.Walls.AddRange(shellWalls);
+        context.Openings.Add(new OpeningCandidate(
+            "opening-at-clearance",
+            1,
+            OpeningType.Door,
+            new PlanRect(194, 228, 12, 24),
+            Confidence.High));
+        context.WallGraph = GraphFor(new[] { clearanceEdge }.Concat(shellWalls).ToArray());
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                new WallEvidenceWallAssessment(
+                    clearanceEdge.Id,
+                    clearanceEdge.PageNumber,
+                    clearanceEdge.Bounds,
+                    WallEvidenceCategory.MediumWallBody,
+                    Confidence.High,
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    clearanceEdge.SourcePrimitiveIds,
+                    clearanceEdge.Evidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                }
+            }
+            .Concat(shellWalls.Select(wall => new WallEvidenceWallAssessment(
+                wall.Id,
+                wall.PageNumber,
+                wall.Bounds,
+                WallEvidenceCategory.StrongWallBody,
+                Confidence.High,
+                PlacementReady: true,
+                RequiresReview: false,
+                RejectedAsNoise: false,
+                wall.SourcePrimitiveIds,
+                wall.Evidence)
+            {
+                Decision = WallEvidenceDecision.Accept
+            }))
+            .ToArray());
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var clearanceAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == clearanceEdge.Id);
+        Assert.False(clearanceAssessment.PlacementReady);
+        Assert.True(clearanceAssessment.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, clearanceAssessment.Decision);
+        Assert.Contains(
+            clearanceAssessment.Evidence,
+            item => item.Contains("exterior opening-clearance rectangle", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.exterior_opening_clearance_rectangles_demoted"
+                && diagnostic.Properties["demotedWallCount"] == "1");
     }
 
     [Fact]
@@ -5118,6 +5689,47 @@ public sealed class WallTypeRefinementTests
                     new[] { "isolated wall graph fragment with weak topology" },
                     ExcludedFromStructuralTopology: excludedFromStructuralTopology)
             });
+
+    private static WallSegment DimensionPairedOutdoorBoundaryWall(
+        string id,
+        double firstHealedGap,
+        double secondHealedGap) =>
+        new(
+            id,
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(192, 100)),
+            14,
+            new Confidence(0.78))
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 93), new PlanPoint(192, 93)),
+                new PlanLineSegment(new PlanPoint(100, 107), new PlanPoint(192, 107)),
+                FaceSeparation: 14,
+                OverlapRatio: 1,
+                Score: 0.841,
+                FirstFaceFragmentCount: 12,
+                SecondFaceFragmentCount: 22,
+                FirstFaceSourcePrimitiveIds: new[] { "dimension-face" },
+                SecondFaceSourcePrimitiveIds: new[] { "structural-face" }),
+            SourcePrimitiveIds = new[] { "dimension-face", "structural-face" },
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "face separation 14 drawing units",
+                "pair score 0.841",
+                "overlap ratio 1",
+                "first face merged 12 fragments",
+                $"first face healed {firstHealedGap.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} drawing units of gaps; max gap 3.118",
+                "second face merged 22 fragments",
+                $"second face healed {secondHealedGap.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} drawing units of gaps; max gap 4.252",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence assessment: StrongWallBody / placement-ready / confidence 0.78"
+            ]
+        };
 
     private static WallGraph ObjectLikeGraphFor(WallSegment wall) =>
         new(

@@ -65,6 +65,8 @@ public sealed record SvgOverlayRenderOptions
 
     public bool IncludePlacementWallGraphNodes { get; init; }
 
+    public bool IncludeCanonicalWallSolutions { get; init; }
+
     public bool IncludeOmittedWallRiskHighlights { get; init; }
 
     public bool IncludeRoutingLayer { get; init; }
@@ -147,13 +149,14 @@ public sealed record SvgOverlayRenderOptions
                 IncludeObjectAggregates = false,
                 IncludeSurfacePatterns = false,
                 IncludeWallTopologySpans = false,
-                IncludeWallBodyFootprints = true,
+                IncludeWallBodyFootprints = false,
                 IncludeReviewOnlyWallTopologySpans = false,
                 IncludeSuppressedDetailWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
-                IncludePlacementWallGraph = true,
+                IncludePlacementWallGraph = false,
+                IncludeCanonicalWallSolutions = true,
                 IncludeExcludedPlacementGeometry = false,
-                IncludeOmittedWallRiskHighlights = true,
+                IncludeOmittedWallRiskHighlights = false,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true
@@ -184,6 +187,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSuppressedDetailWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeCanonicalWallSolutions = true,
                 IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
@@ -215,6 +219,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeSuppressedDetailWallTopologySpans = true,
                 IncludeWallGraphRepairs = false,
                 IncludePlacementWallGraph = true,
+                IncludeCanonicalWallSolutions = true,
                 IncludeOmittedWallRiskHighlights = true,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
@@ -241,13 +246,14 @@ public sealed record SvgOverlayRenderOptions
                 IncludeObjectAggregates = false,
                 IncludeSurfacePatterns = false,
                 IncludeWallTopologySpans = false,
-                IncludeWallBodyFootprints = true,
+                IncludeWallBodyFootprints = false,
                 IncludeReviewOnlyWallTopologySpans = false,
                 IncludeSuppressedDetailWallTopologySpans = false,
                 IncludeWallGraphRepairs = false,
-                IncludePlacementWallGraph = true,
+                IncludePlacementWallGraph = false,
+                IncludeCanonicalWallSolutions = true,
                 IncludeExcludedPlacementGeometry = false,
-                IncludeOmittedWallRiskHighlights = true,
+                IncludeOmittedWallRiskHighlights = false,
                 IncludeRoutingLayer = false,
                 IncludeSourceContext = true,
                 RequirePlacementReadyStructuralWallTopologySpans = true,

@@ -4,7 +4,9 @@ OpenPlanTrace is a standalone .NET floorplan scanning engine for applications th
 
 The project intentionally does not contain downstream application UI code. It exposes a library boundary that other applications can consume later.
 
-**Project links:** [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
+**Project links:** [Architecture](docs/ARCHITECTURE.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
+
+Current alpha version: `0.11.010`.
 
 ## Versioning and Changelog
 
@@ -50,6 +52,10 @@ The first engine version works from normalized floorplan drawing primitives:
 - scale/unit calibration evidence from PDF scale text, labeled scale bars, DXF drawing units, dimension hints, grouped scale contexts with source region IDs/bounds, scope-aware default selection that does not promote key-plan/notes scale groups to whole-sheet measurements, spatial-indexed dense-page matching, measurement scale provenance, and mixed-scale diagnostics
 - dimension-versus-calibration QA diagnostics for consistent dimensions, text-localized dense PDF dimension-line pools, same-line dimension text conflicts, scale outliers, high dimension-scale spread, chained dimension sum conflicts, mixed-scale sheets, and not-to-scale notes
 - schema-versioned JSON export with a portable page coordinate-system contract, source document provenance, title-block, dimension, annotation item references, surface patterns, grid-axis, grid-bay spacing, deterministic room-use, room-adjacency, typed room-cluster semantic evidence, routing-layer barriers/passages/obstacles/room-use hints/suppressed objects/ignored objects, graph-junction-aware routing barriers with minor junction compression, suppression of unused isolated wall fragments and dense secondary detail patterns from trusted routing barriers, source primitive IDs, and source layers
+- schema-versioned canonical structure export with globally solved wall runs, canonical nodes, rooms, openings, exact page and millimeter coordinates, wall type/thickness, source wall/graph/primitive provenance, reliability, integrity metrics, and actionable structural issues
+- deterministic global wall hypotheses that compare the joint structural core with conservative, balanced, and recall-first solutions using guarded major-wall recall, unanimous source-backed gap recovery, long-wall coverage, endpoint connectivity, room closure, exterior continuity, duplicate length, review length, and noise length
+- robust canonical wall topology optimization using iteratively reweighted least squares with Huber loss, exact inline T-junction/crossing references, residual diagnostics, and long unsplit wall identities
+- schema-versioned wall truth datasets and evaluation output for exact centerline/type regression gates, with a wall-only viewer editor for maintaining local correctness references
 - page-coordinate GeoJSON-style feature export for downstream QA/mapping tools, including pages, regions, surface patterns, walls, wall nodes, rooms, room adjacencies, room clusters, openings, grid axes, grid bay spacings, dimensions, annotations, annotation references, objects, object groups, object aggregates, and routing-layer features
 - measured wall lengths, room areas, grid bay spacings, and opening widths when calibration is reliable, including the scale group used for each measurement when it can be assigned deterministically
 - deterministic scan quality/readiness report with overall confidence, grade, detector-level confidence summaries, review-required flags, evidence-backed issues including high dimension-scale spread, and a scan-level review queue for measurement outliers, ranked/capped wall-gap and symbol-group triage, object aggregates, and openings
@@ -89,21 +95,31 @@ The core exposes source capability metadata through `PlanSourceCapabilityCatalog
 flowchart LR
   A["PDF or Drawing Source"] --> B["IPlanDocumentLoader"]
   B --> C["PlanDocument primitives"]
-  C --> D["OpenPlanTraceScanner"]
-  D --> E["Layer and sheet region stages"]
-  E --> L["Calibration stage"]
-  L --> F["Wall detection stage"]
-  F --> W["Wall evidence refinement stage"]
-  W --> P["Wall topology preparation stage"]
-  P --> G["Wall graph stage"]
-  G --> H["Opening stage"]
-  H --> I["Room stage"]
-  I --> R["Room adjacency stage"]
-  R --> J["Object candidate stage"]
-  J --> O["Object grouping and aggregation"]
-  O --> V["Kvemo optional Visual AI"]
-  V --> K["PlanScanResult"]
+  C --> D["Deterministic detector stages"]
+  D --> E["Structural evidence producers"]
+  E --> F["StructuralEvidenceGraph"]
+  F --> G["JointStructuralSolver"]
+  G --> H["StructuralPlanSolution"]
+  H --> I["Canonical wall runs and junctions"]
+  I --> J["Rooms, openings, objects, and routing"]
+  J --> K["PlanScanResult"]
+  K --> L["Placement, structure, GeoJSON, and SVG adapters"]
 ```
+
+Version `0.11.000` moves structural interpretation into the core library.
+Independent producers contribute wall, wall-graph, room-boundary, opening-host,
+and negative non-wall evidence to `StructuralEvidenceGraph`. The
+`JointStructuralSolver` selects a coherent hypothesis using explicit unary,
+pairwise, room-closure, and exterior-continuity factors. Rejected and uncertain
+candidates remain available for diagnostics and review.
+
+The canonical topology builder fits source-backed wall axes, compacts
+collinear candidates into long wall runs, and keeps T-junctions and crossings
+as inline references instead of fragmenting host walls. Export projects this
+core solution into placement and structure contracts while preserving the
+difference between trusted coordinate geometry and retained review geometry.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for ownership boundaries and
+extension rules.
 
 ## Coordinate Model
 
@@ -113,7 +129,13 @@ The scanner now emits a `PlanCalibration` result. It records the chosen drawing-
 
 Opening exports include a `placement` object for downstream layout engines. It projects each door/window/opening onto a host-wall reference line and provides ordered start/end/center offsets in page drawing units, calibrated millimeter offsets when scale is unambiguous, opening length, host-wall parameters, along/normal vectors, cross-wall offset, confidence, and evidence. If a detected opening projects opposite the reference-line direction, the exported placement packet normalizes start/end offsets, host-wall parameters, jamb lines, and footprint corner order so downstream consumers do not have to repair reversed spans. Split-wall gaps use both adjacent wall fragments to derive a continuous reference line, while continuous-wall swing/tick openings use the actual host wall centerline.
 
-The scanner still executes a fixed stage chain, but each stage now declares its display name, kind, required/optional input artifacts, output artifacts, and capabilities. Wall geometry is intentionally split into raw `WallCandidates`, a `WallEvidence` refinement artifact, explicit `WallTopologyPreparation`, and final `Walls`; this lets OpenPlanTrace score, recover, reject, and diagnose wall evidence before topology consumes a graph-ready wall ID set split into accepted, review-required, and unassessed inputs. Wall coordinate trust is also evaluated in the core engine through `WallPlacementReadinessEvaluator`, so JSON export, visual QA, CLI validation, and future host applications can share the same rule for whether a wall-looking segment is safe exact placement geometry. Scan diagnostics export an execution plan with per-stage dependency readiness, missing artifacts, available-before artifacts, hard/preferred dependency levels, and a runtime artifact ledger showing per-stage input snapshots, output snapshots, and changed artifact counts. Benchmark manifests can gate those artifact counts and deltas per stage, and benchmark-draft generation seeds conservative gates from reviewed scan JSON. Routing is now represented as its own pipeline stage with first-class barrier, passage, obstacle, room-use hint, suppressed-object, and ignored-object artifacts, so downstream routing noise can be benchmarked directly instead of inferred only from final counts. That makes the current linear pipeline auditable and gives future detector plugins, partial reruns, and parallel stage groups a stable contract to build on.
+The scanner executes an auditable stage chain whose stages declare required and
+optional inputs, outputs, capabilities, and artifact counts. Raw detections are
+retained as evidence; the structural interpretation stage owns the canonical
+structural hypothesis. Scan diagnostics export execution waves, dependency
+readiness, stage contracts, and artifact ledgers. This keeps the current
+executor deterministic while allowing a later dependency-driven scheduler to
+rerun only affected evidence producers and consumers.
 
 ## Repository Layout
 
@@ -173,7 +195,24 @@ SVG should contain the page image as a data URI, which makes headless raster
 screenshots portable even when the renderer cannot resolve external image
 paths.
 
-`--out-dir` writes `scan.json`, `scan.geojson`, `placement.json`, `overlays/page-N.svg`, and `visual-snapshot.json`. CLI SVG overlays now default to the `placement-review` profile, which draws placement-ready clean wall graph topology as merged source-wall runs in a separate `wall-topology-spans` layer for placement QA while keeping review-only, excluded, object-like, isolated-fragment, and short dangling non-placement spans out of that clean layer; pass `--svg-profile placement-graph-qa` for exported placement wall graph screenshots over capped faint source context, `--svg-profile wall-qa-focus` for cropped source-backed walls-only screenshots around clean wall topology, `--svg-profile wall-qa` for full-page clean walls-only accuracy screenshots, `--svg-profile wall-qa-review` for full-page screenshots that show clean spans plus amber non-placement/review spans, `--svg-profile structural-review` for the broader structural context, or `--svg-profile full` when you want every debug layer in the SVG. The full scan export now includes `document.sourceReadiness`, so consumers can see whether the source came from PDF vector extraction, DXF vector extraction, DWG-to-DXF conversion, raster extraction, or pre-extracted primitives before reading detector arrays. The placement export is the compact downstream-consumption packet: it preserves source document provenance (`sourceFormat`, loader, raw/effective source kind, DWG/raster adapter facts, and metadata properties), a fast import summary with counts/readiness ratios/per-page bounds, an `importReadiness` gate for geometry/metric/routing import, page-local coordinates, calibrated millimeter coordinates when scale is reliable, quality/metric trust gates, surface patterns, walls, rooms, openings with anchor offsets, object aggregates with child-composition summaries and per-child placement bounds, routing items, and placement issues without requiring consumers to parse the full scan result. Wall records keep the raw detected centerline for audit, expose `evidenceAssessment` with category/confidence/placement-ready/review/rejected-noise flags, and expose `topologySpans` as merged clean placement runs projected back onto trusted orthogonal source-wall axes; when paired wall-face evidence exists, placement spans and solid-span centerlines use the midpoint between the faces while raw wall and wall-graph coordinates remain available for audit. Downstream placement engines should prefer those span coordinates, or the stricter routing barriers, when they need snapped wall segments instead of long source primitives. The placement `wallGraph.edges` section now collapses raw fragment edges into clean topology-span edges for downstream use while preserving every original raw wall graph edge id in `sourceWallGraphEdgeIds` for audit/debug traceability. `surfacePatterns` identify dense terrace, hatch, overroof, tile-like, or similar non-structural linework that was excluded from wall detection and structural topology; each item keeps bounds, millimeter bounds when calibration is reliable, center coordinates, spacing/intersection counts, source primitive IDs/layers, confidence, evidence, and a recommended action for downstream engines. Scan JSON and visual snapshots also emit exact `SurfacePatternReview` queue items for each reviewable surface pattern, plus capped `SurfacePatternWallOverlapReview` items when a non-excluded wall still overlaps or shares source evidence with a non-structural surface pattern. Those overlaps now also surface as `quality.scan_risk.surface_pattern_wall_overlap`, `placement.wall_graph.surface_pattern_wall_overlaps.require_review`, compact placement issues named `placement.review.surface_pattern_wall_overlap`, and per-wall `reliability.reasons` entries on the affected wall records. Review tools can jump directly to the relevant pattern/wall bounds instead of interpreting broad wall-filter diagnostics. Placement issues include page numbers, page-coordinate bounds, optional millimeter bounds, confidence, recommended action, source primitive IDs/layers, evidence, and properties so suppressed dense detail patterns, surface/wall overlaps, or unanchored openings can be reviewed and mapped precisely by another engine. The viewer accepts scan/placement JSON and exposes a dedicated placement-issues overlay plus an Advanced-tab issue audit; selecting an issue shows exact page, normalized, and real-world coordinates together with source evidence and recommended action. Walls whose placement reliability or scan evidence assessment requires review or blocks coordinate placement are styled separately, counted in the legend, and listed in an Advanced-tab wall reliability audit so downstream users can distinguish safe walls from topology/placement risks. The viewer exposes placement-ready merged clean wall topology runs as a default-on layer and non-placement wall spans as an optional debug layer, and its placement wall and wall-body footprint layers intentionally draw only walls that have clean topology spans, so visual QA does not accidentally treat raw detected centerlines as placement-ready geometry. Scan-quality wall summaries, scan-risk audits including object-noise and surface-pattern overlap warnings, no-wall/no-room gates, and import-readiness ratios in both the core `PlanImportReadiness.FromScanResult(...)` API and compact placement export use structural wall entities while still exporting excluded/object-like wall components with explicit `excludedFromStructuralTopology` metadata, so downstream consumers can retain full evidence without treating intentionally non-structural linework as failed geometry. The visual snapshot is a compact QA artifact for repeatable review: it records the OpenPlanTrace page coordinate system, page bounds, SVG overlay paths, detector layer counts, per-layer bounds, confidence summaries, coverage ratio, primitive counts, scan review-queue counts/kinds/severities, compact per-page review items, and visual-review issues such as empty overlays, missing main-floorplan regions, out-of-page detections, high wall-node density, missing object aggregation, or queued scan-review work. The top-level wall-gap, surface/wall overlap, and object-group review queues are intentionally ranked and capped so they stay first-pass triage lists; the full diagnostics, `objectGroups`, review datasets, correction datasets, and placement/object exports still retain the complete candidate set.
+`--out-dir` writes full and compact scan JSON, GeoJSON, `placement.json`,
+`structure.json`, SVG overlays, and `visual-snapshot.json`. SVG overlays default
+to `placement-review`. Use `placement-graph-qa` to inspect pre-solver graph
+construction, `wall-qa-focus` for a cropped canonical walls-only screenshot,
+`wall-qa` for a full-page canonical walls-only screenshot, `wall-qa-review` to
+compare canonical walls with review candidates, `structural-review` for broader
+structural context, or `full` for every debug layer. The canonical wall-QA
+profiles draw the same selected solved runs exported in
+`placement.wallSolutions` and `structure.json`; raw candidates, body
+footprints, and pre-solver graph edges are kept out of standard correctness
+screenshots.
+
+The placement export is the downstream packet for source provenance,
+import-readiness gates, exact page coordinates, calibrated millimeter
+coordinates when reliable, walls, rooms, openings, object aggregates, routing,
+and placement issues. Raw wall candidates, evidence assessments, source graph
+edges, surface patterns, and review issues remain available for audit without
+being mistaken for canonical geometry.
 
 Placement topology spans include `sourceWallGraphEdgeIds`, which lets downstream importers trace a compact merged clean wall run back to every raw wall graph edge that produced it. Placement wall graph edges may also collapse near-contiguous collinear clean spans across adjacent source wall IDs, keeping the long placement-ready run while preserving the original raw edge IDs for audit. Recovered or source-backed clean topology spans that do not originate from a raw wall graph edge are still exported as compact placement wall graph edges, so downstream consumers can rely on `wallGraph.edges` for placement-ready topology.
 
@@ -199,9 +238,18 @@ review and import.
 
 The viewer also includes an off-by-default `Raw detected walls` layer for audit-only comparison against the clean placement spans. Keep this layer off for wall-QA screenshots unless the goal is to inspect detector mistakes directly.
 
-The `placement-graph-qa`, `wall-qa`, `wall-qa-review`, and `wall-qa-focus` SVG profiles add a faint `sourceContext` linework layer when no PDF background image is embedded, so clean-wall screenshots remain visually comparable to the source plan without treating that context as detected output. For very large PDF primitive streams, source context is spatially prioritized around the visible wall/topology review area before the cap is applied, so the reference linework comes from the same plan neighborhood as the wall overlay instead of from unrelated first-in-file-order primitives. `placement-graph-qa` uses a tighter source-context cap for fast exported-graph screenshots. Use `placement-graph-qa` for downstream wall graph correctness screenshots, use `wall-qa` or `wall-qa-focus` for clean topology-span screenshots, and use `wall-qa-review` when diagnosing missing walls because it separates clean placement spans from faint dashed amber review-only spans and orange/pink omitted-wall risk highlights. `wall-qa` and `wall-qa-focus` hide suppressed detail/opening/surface-pattern omitted-risk highlights; use `wall-qa-recall` when you need every noisy candidate. Amber review spans and omitted-risk highlights are diagnostic omissions, not coordinates a downstream placement engine should import.
+The `placement-graph-qa`, `wall-qa`, `wall-qa-review`, and `wall-qa-focus`
+profiles add faint `sourceContext` linework when no PDF background image is
+embedded. `placement-graph-qa` inspects pre-solver graph construction.
+`wall-qa` and `wall-qa-focus` show canonical solved wall intervals and hide
+candidate geometry. `wall-qa-review` and `wall-qa-recall` add review evidence
+for diagnosing omissions and noise. Source context is spatially prioritized
+around the visible plan area on dense PDFs.
 
-The wall-QA profiles draw only placement-ready structural topology spans in the clean wall layer. Trusted exceptions, suppressed fragments, and review-only wall candidates stay out of the clean screenshot layer unless they are explicitly shown as diagnostics by a review profile.
+The standard wall-QA profiles draw canonical solved wall intervals.
+Review-required canonical runs remain visible as dashed amber because they are
+still present in downstream output; rejected candidates and raw graph fragments
+stay out unless a review or recall profile is selected.
 
 Opening-linked one-endpoint wall/detail fragments are suppressed from the
 `wall-qa-review` amber span layer and counted as hidden suppressed detail, while
@@ -213,7 +261,72 @@ Endpoint-to-wall repair candidates are exported for QA without automatically pun
 
 Placement issues also include informational `placement.review.rejected_strong_wall_body` entries when a long object-like wall candidate was rejected even though it still has strong paired wall-body evidence. These entries are review beacons for possible missed structural walls; they do not promote the candidate, mark it placement-ready, or block import readiness by themselves.
 
+### Canonical Structure Output
+
+`--out-dir` also writes `scan.compact.json`, `scan.compact.json.gz`, and
+`structure.json`. The full `scan.json` is detector and diagnostic truth for
+audit. `placement.json` is the richer downstream packet for placement,
+routing, objects, wall-solver hypotheses, and review workflows.
+`structure.json` is the smaller authoritative structural packet for consumers
+that need canonical walls, nodes, rooms, and openings without replaying
+detector cleanup. Its wall runs come from the selected deterministic global
+solution, not from whichever local candidate happened to run last. Every
+solved run retains its contributing candidate, source-wall, graph-edge,
+primitive, and layer provenance. A canonical wall keeps one logical identity
+across source-backed door and window gaps while exporting explicit
+`openingIntervals` and complementary `solidIntervals`. Importers should use the
+logical run for topology and identity, the solid intervals and wall-body
+polygons for collision/routing geometry, and opening intervals for exact
+door/window offsets. Raw and rejected candidates remain available for audit
+and correction, but downstream geometry consumers should import the canonical
+structure wall runs.
+
+The selected solution passes through deterministic wall evidence
+reconciliation before export. Candidate, room, opening, and neighboring-run
+votes are grouped by source provenance so several representations of one PDF
+primitive cannot imitate independent agreement. Larger axis or endpoint
+corrections require genuinely independent corroboration; weak same-source
+cleanup is limited to small thickness-aware adjustments. Reconciled
+near-coincident runs are then collapsed into one canonical wall while retaining
+all contributing wall, graph-edge, primitive, layer, opening, and decision
+evidence. The topology optimizer retains interior T-junctions and crossings as
+`inlineJunctions` on unsplit canonical runs. Each reference records the shared
+node ID, wall parameter, drawing-unit and millimeter offsets, fitted position,
+residual, incident wall IDs, confidence, review state, optimizer
+version/method, and fit evidence. Structure-node degree and connected-component
+analysis include those references without multiplying wall objects. A
+placement-ready endpoint may attach to a review-required canonical host only
+when the global solver has certified it as a coherent multi-room boundary;
+generic review walls and review-only crossings remain excluded.
+
+The structure contract is `openplantrace.structure.v1`. Export its schema with
+`openplantrace schema structure --out .\openplantrace.structure.v1.schema.json`
+and validate output with
+`openplantrace validate .\scan-output\structure.json --kind structure --deep`.
+Deep validation checks canonical wall identity, exact solid/opening interval
+partitioning, opening-to-host interval references, wall-body geometry, metric
+lengths, topology references, and summary totals.
+
+Wall accuracy can be gated with a reviewed `openplantrace.wall-truth.v1`
+dataset:
+
+```powershell
+openplantrace wall-truth-evaluate .\wall-truth.json .\scan-output\structure.json --json .\wall-truth-evaluation.json
+openplantrace validate .\wall-truth.json --kind wall-truth
+openplantrace validate .\wall-truth-evaluation.json --kind wall-truth-evaluation
+```
+
+The evaluator reports centerline precision/recall, endpoint error, type
+agreement, false positives, missing truth walls, and threshold pass/fail
+results. Truth files and private source plans stay local unless their owner has
+explicitly approved publication.
+
 The placement contract is schema-versioned as `openplantrace.placement.v12`. Its schema explicitly defines source document provenance, the `summary` block for import gating, the nested `importReadiness` block with grade, score, readiness booleans, blocking/review issue codes, recommended actions, and evidence, and the nested opening-placement anchor object, including host wall IDs, anchor wall IDs, reference lines, start/end/center offsets, length, host-wall parameters, along/normal vectors, confidence, and evidence. Placement v2 carries wall-graph repair assessment fields (`severity`, `importImpact`, `applicability`, safe-snap distance, review limit, and excess distance) in drawing units and millimeters so downstream importers can distinguish reviewable snaps from topology blockers. Placement v3 adds a compact `wallGraph` packet with graph summary counts, node positions, edge centerlines, component membership, exclusion state, metric transforms when calibration allows, and repair-candidate ID links so downstream consumers can import topology without reconstructing it from wall arrays. Placement v4 adds routing-passage placement readiness fields (`placementStatus`, `readyForCoordinatePlacement`, `requiresReview`, and `reviewReasons`) so downstream routing engines can reject unsafe door/window passage coordinates without parsing evidence text. Placement v5 adds `wallType` on exported walls (`Exterior`, `Interior`, or `Unknown`) so downstream consumers can separate envelope walls from partitions without parsing evidence text. Placement v6 adds structured wall fragment evidence, wall evidence assessment export, and review/placement-ready reliability gating so consumers can avoid trusting heavily healed, weak, rejected, or review-required wall geometry as exact placement input. Placement v7 adds closed wall-body footprint polygons, footprint bounds, along/normal vectors, and span thickness to each solid wall span so downstream placement engines can use wall rectangles directly instead of reconstructing thickness from a centerline. Placement v8 adds structured wall `placementOmission` reasons so downstream consumers can skip duplicate faces, blocked topology repairs, object-like linework, isolated fragments, and review-only wall evidence without parsing free-text diagnostics. Walls with any `placementOmission` are also marked not coordinate-ready in their reliability block, even if their raw wall evidence looked strong. Placement v9 adds document/page summary counts for placement-ready walls, omitted walls, clean topology spans, solid wall spans, and omission-code totals so importers can judge wall output readiness without scanning every wall entity first. Placement v10 adds `openingDominatedWallIds` to room boundary reliability so trusted room boundaries almost entirely consumed by anchored doors/openings do not block room placement while their tiny wall remnants stay omitted from exact wall geometry, and separates represented duplicate/context walls, suppressed noise/detail/opening-consumed walls, and true placement-review walls in summary and page-summary blocks. Placement v11 adds `wallSets`, a compact ID index for exact wall import, review-only wall IDs, represented/context walls, suppressed wall noise, omitted walls by code, and reliability-tracked walls. Placement v12 adds `wallGraph.residualEndpointOnHostCandidates`, a structured coordinate packet for endpoint-to-host-wall alignment candidates that remain after deterministic cleanup; each candidate includes endpoint/host edge IDs, wall IDs, node ID, page point, host point, optional millimeter coordinates, repair line, distance, severity, recommended action, and evidence for review. Its omission-code enum covers topology blockers, duplicate faces, rejected evidence, opening-consumed wall remnants, object/detail linework, secondary walls without room support, secondary stair/object linework, fragmented-pair review, thin exterior face-pair review, missing clean spans, and generic coordinate-review gates. Export the JSON Schema with `openplantrace schema placement --out .\placement.schema.json`, and validate a generated artifact with `openplantrace validate .\scan-output\placement.json --kind placement`. Validation checks that summary counts agree with the emitted arrays and that metric/routing readiness cannot be true unless geometry import is ready. Add `--deep` to validate downstream-placement semantics such as page references, positive/page-contained bounds, wall centerline lengths, anchored opening host-wall references, placement offset consistency, metric coordinate consistency, routing references, and metric-readiness calibration gates.
+
+New placement v12 packets include additive `wallSolutions` solver metadata.
+Older v12 packets without that field remain valid; consumers should prefer
+`structure.json` for canonical solved wall import and use `wallSolutions` when
+they need hypothesis comparison or candidate-decision diagnostics.
 
 Opening-linked one-ended wall fragments use `opening_detail_fragment_review_required`
 when a wall-looking candidate has weak endpoint support and is also referenced by
@@ -233,9 +346,9 @@ The `fragmented_interior_without_room_boundary_support` omission code marks susp
 
 Topology-supported fragmented paired walls are also guarded: if a short promoted wall has excessive face fragmentation, OpenPlanTrace keeps it as `fragmented_short_parallel_pair_review_required` review evidence instead of exporting it as exact clean placement geometry. These omissions also emit `placement.review.fragmented_short_parallel_pair` placement issues and the import-readiness code `placement.wall_pairs.fragmented_short_pairs_require_review`, including wall bounds, source IDs/layers, confidence, thickness, evidence, and a reviewer action.
 
-The snapshot contract is schema-versioned as `openplantrace.visual-snapshot.v4`. Export its JSON Schema with `openplantrace schema visual-snapshot --out .\visual-snapshot.schema.json`, and validate a generated artifact with `openplantrace validate .\scan-output\visual-snapshot.json --kind visual-snapshot`. Visual snapshots include page-space detector bounds, normalized page-relative layer bounds, normalized layer-density scores, wall-placement ready/review/suppressed/represented counts, residual endpoint-on-host-wall counts after placement graph cleanup, prioritized wall omission reasons, capped omitted-wall examples with page-space bounds and centerlines, a `wallOmittedRiskHighlights` layer for screenshot triage, high-density visual warnings, and high review-wall ratio warnings so screenshots and overlays can be compared across page sizes without losing exact drawing-unit coordinates. The viewer can load `visual-snapshot.json` directly, render page-coordinate layer bounds, and expose density, issue, review-queue, wall QA, schema, and coordinate metadata in the General and Advanced tabs for repeatable visual QA.
+The snapshot contract is schema-versioned as `openplantrace.visual-snapshot.v4`. Export its JSON Schema with `openplantrace schema visual-snapshot --out .\visual-snapshot.schema.json`, and validate a generated artifact with `openplantrace validate .\scan-output\visual-snapshot.json --kind visual-snapshot`. Visual snapshots include page-space detector bounds, normalized page-relative layer bounds, normalized layer-density scores, wall-placement ready/review/suppressed/represented counts, residual endpoint-on-host-wall counts after placement graph cleanup, opening-aware major-wall clean coverage, prioritized wall omission reasons, capped omitted-wall examples with page-space bounds and centerlines, a `wallOmittedRiskHighlights` layer for screenshot triage, high-density visual warnings, and high review-wall ratio warnings so screenshots and overlays can be compared across page sizes without losing exact drawing-unit coordinates. The viewer can load `visual-snapshot.json` directly, render page-coordinate layer bounds, and expose density, issue, review-queue, wall QA, schema, and coordinate metadata in the General and Advanced tabs for repeatable visual QA.
 
-When a visual snapshot includes `wallPlacement`, the viewer summarizes placement-ready walls, review walls, suppressed/noise walls, represented duplicate/context walls, and top omission reasons without requiring the original scan JSON.
+When a visual snapshot includes `wallPlacement`, the viewer summarizes placement-ready walls, review walls, suppressed/noise walls, represented duplicate/context walls, major-wall coverage, and top omission reasons without requiring the original scan JSON.
 
 Placement-review SVGs and visual snapshots also expose wall graph repair candidates as a separate `wall-graph-repairs` / `wallGraphRepairs` QA layer. These are not accepted walls; they are suggested endpoint snap or trim actions with source/target coordinates, severity, import impact, and evidence so screenshots can show known topology gaps before a downstream engine trusts wall placement.
 

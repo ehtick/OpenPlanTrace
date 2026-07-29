@@ -381,12 +381,19 @@ public static class BenchmarkManifestDraftBuilder
             .Select((wall, index) =>
             {
                 var bounds = ReadBounds(wall, "bounds", options);
+                var centerLine = ReadLine(wall, "centerLine", options);
                 return WithProvenance(new BenchmarkDetectionTarget
                 {
                     Id = TargetId(wall, "wall", index),
                     PageNumber = GetInt(wall, "pageNumber"),
                     Bounds = bounds,
-                    MinIntersectionOverUnion = bounds is null ? null : 0.35
+                    CenterLine = centerLine,
+                    MinIntersectionOverUnion = bounds is null ? null : 0.35,
+                    MaxLineDistance = centerLine is null ? null : 2.0,
+                    MaxEndpointDistance = centerLine is null ? null : 6.0,
+                    MaxAngularDifferenceDegrees = centerLine is null ? null : 3.0,
+                    MinLengthOverlapRatio = centerLine is null ? null : 0.90,
+                    WallType = ReadEnum<WallType>(wall, "wallType")
                 }, wall);
             });
 
@@ -1147,6 +1154,34 @@ public static class BenchmarkManifestDraftBuilder
         }
 
         return new PlanRect(x.Value, y.Value, width.Value, height.Value);
+    }
+
+    private static PlanLineSegment? ReadLine(
+        JsonElement element,
+        string propertyName,
+        BenchmarkManifestDraftOptions options)
+    {
+        if (!options.IncludeBounds)
+        {
+            return null;
+        }
+
+        var line = TryGetObject(element, propertyName);
+        var start = TryGetObject(line, "start");
+        var end = TryGetObject(line, "end");
+        var startX = GetDouble(start, "x");
+        var startY = GetDouble(start, "y");
+        var endX = GetDouble(end, "x");
+        var endY = GetDouble(end, "y");
+        if (startX is null || startY is null || endX is null || endY is null)
+        {
+            return null;
+        }
+
+        var result = new PlanLineSegment(
+            new PlanPoint(startX.Value, startY.Value),
+            new PlanPoint(endX.Value, endY.Value));
+        return result.Length > 0.001 ? result : null;
     }
 
     private static int? SinglePageNumber(JsonElement element)

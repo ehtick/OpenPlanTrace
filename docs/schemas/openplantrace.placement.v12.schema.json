@@ -102,6 +102,9 @@
     "wallGraph": {
       "$ref": "#/$defs/wallGraph"
     },
+    "wallSolutions": {
+      "$ref": "#/$defs/wallSolutions"
+    },
     "routingLayer": {
       "$ref": "#/$defs/routingLayer"
     },
@@ -2471,6 +2474,540 @@
         }
       }
     },
+    "solvedWallOpeningInterval": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "wallRunId",
+        "openingId",
+        "pageNumber",
+        "type",
+        "operation",
+        "attachmentKind",
+        "centerLine",
+        "centerLineMillimeters",
+        "startPoint",
+        "startPointMillimeters",
+        "endPoint",
+        "endPointMillimeters",
+        "startParameter",
+        "endParameter",
+        "centerParameter",
+        "startOffsetDrawingUnits",
+        "endOffsetDrawingUnits",
+        "centerOffsetDrawingUnits",
+        "lengthDrawingUnits",
+        "startOffsetMillimeters",
+        "endOffsetMillimeters",
+        "centerOffsetMillimeters",
+        "lengthMillimeters",
+        "sourceOpeningWidthDrawingUnits",
+        "sourceOpeningWidthMillimeters",
+        "crossWallOffsetDrawingUnits",
+        "crossWallOffsetMillimeters",
+        "readyForCoordinatePlacement",
+        "requiresReview",
+        "confidence",
+        "sourceHostWallIds",
+        "sourcePrimitiveIds",
+        "sourceLayers",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "wallRunId": { "$ref": "#/$defs/id" },
+        "openingId": { "$ref": "#/$defs/id" },
+        "pageNumber": { "$ref": "#/$defs/pageNumber" },
+        "type": { "type": "string", "minLength": 1 },
+        "operation": { "type": "string", "minLength": 1 },
+        "attachmentKind": {
+          "enum": ["SourceLinked", "GeometryAligned", "ReconstructedGap"]
+        },
+        "centerLine": { "$ref": "#/$defs/line" },
+        "centerLineMillimeters": { "$ref": "#/$defs/nullableLine" },
+        "startPoint": { "$ref": "#/$defs/point" },
+        "startPointMillimeters": { "$ref": "#/$defs/nullablePoint" },
+        "endPoint": { "$ref": "#/$defs/point" },
+        "endPointMillimeters": { "$ref": "#/$defs/nullablePoint" },
+        "startParameter": { "$ref": "#/$defs/ratio" },
+        "endParameter": { "$ref": "#/$defs/ratio" },
+        "centerParameter": { "$ref": "#/$defs/ratio" },
+        "startOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "endOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "centerOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "lengthDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "startOffsetMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "endOffsetMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "centerOffsetMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "lengthMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "sourceOpeningWidthDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "sourceOpeningWidthMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "crossWallOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "crossWallOffsetMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "readyForCoordinatePlacement": { "type": "boolean" },
+        "requiresReview": { "type": "boolean" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "sourceHostWallIds": { "$ref": "#/$defs/stringArray" },
+        "sourcePrimitiveIds": { "$ref": "#/$defs/stringArray" },
+        "sourceLayers": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "solvedWallSolidInterval": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "wallRunId",
+        "pageNumber",
+        "sequence",
+        "centerLine",
+        "centerLineMillimeters",
+        "bodyPolygon",
+        "bodyPolygonMillimeters",
+        "bodyBounds",
+        "bodyBoundsMillimeters",
+        "alongVector",
+        "normalVector",
+        "thicknessDrawingUnits",
+        "thicknessMillimeters",
+        "startParameter",
+        "endParameter",
+        "centerParameter",
+        "startOffsetDrawingUnits",
+        "endOffsetDrawingUnits",
+        "centerOffsetDrawingUnits",
+        "drawingLength",
+        "lengthMeters",
+        "readyForCoordinatePlacement",
+        "readyForMetricPlacement",
+        "requiresReview",
+        "reviewReasons",
+        "adjacentOpeningIds",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "wallRunId": { "$ref": "#/$defs/id" },
+        "pageNumber": { "$ref": "#/$defs/pageNumber" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "centerLine": { "$ref": "#/$defs/line" },
+        "centerLineMillimeters": { "$ref": "#/$defs/nullableLine" },
+        "bodyPolygon": {
+          "type": "array",
+          "minItems": 5,
+          "items": { "$ref": "#/$defs/point" }
+        },
+        "bodyPolygonMillimeters": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "minItems": 5,
+              "items": { "$ref": "#/$defs/point" }
+            }
+          ]
+        },
+        "bodyBounds": { "$ref": "#/$defs/rect" },
+        "bodyBoundsMillimeters": { "$ref": "#/$defs/nullableRect" },
+        "alongVector": { "$ref": "#/$defs/vector" },
+        "normalVector": { "$ref": "#/$defs/vector" },
+        "thicknessDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "thicknessMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "startParameter": { "$ref": "#/$defs/ratio" },
+        "endParameter": { "$ref": "#/$defs/ratio" },
+        "centerParameter": { "$ref": "#/$defs/ratio" },
+        "startOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "endOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "centerOffsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "drawingLength": { "$ref": "#/$defs/nonNegativeNumber" },
+        "lengthMeters": { "$ref": "#/$defs/nullableNumber" },
+        "readyForCoordinatePlacement": { "type": "boolean" },
+        "readyForMetricPlacement": { "type": "boolean" },
+        "requiresReview": { "type": "boolean" },
+        "reviewReasons": { "$ref": "#/$defs/stringArray" },
+        "adjacentOpeningIds": { "$ref": "#/$defs/stringArray" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "wallRunReconciliation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "originalCenterLine",
+        "reconciledCenterLine",
+        "axisShiftDrawingUnits",
+        "startEndpointDeltaDrawingUnits",
+        "endEndpointDeltaDrawingUnits",
+        "candidateVoteCount",
+        "roomBoundaryVoteCount",
+        "openingVoteCount",
+        "neighborVoteCount",
+        "junctionSnapCount",
+        "collapsedDuplicateRunCount",
+        "confidence",
+        "actions",
+        "evidence"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["Unchanged", "Adjusted", "PreservedForReview"]
+        },
+        "originalCenterLine": { "$ref": "#/$defs/line" },
+        "reconciledCenterLine": { "$ref": "#/$defs/line" },
+        "axisShiftDrawingUnits": { "type": "number" },
+        "startEndpointDeltaDrawingUnits": { "type": "number" },
+        "endEndpointDeltaDrawingUnits": { "type": "number" },
+        "candidateVoteCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "roomBoundaryVoteCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "openingVoteCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "neighborVoteCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "junctionSnapCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "collapsedDuplicateRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "AxisAligned",
+              "ExtendedStart",
+              "TrimmedStart",
+              "ExtendedEnd",
+              "TrimmedEnd",
+              "JunctionSnapped",
+              "PreservedForReview",
+              "Unchanged"
+            ]
+          }
+        },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "wallReconciliationSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "reconcilerVersion",
+        "evaluatedWallRunCount",
+        "adjustedWallRunCount",
+        "axisAlignedWallRunCount",
+        "extendedEndpointCount",
+        "trimmedEndpointCount",
+        "junctionSnappedEndpointCount",
+        "collapsedDuplicateWallRunCount",
+        "candidateSupportedWallRunCount",
+        "roomBoundarySupportedWallRunCount",
+        "openingSupportedWallRunCount",
+        "neighborSupportedWallRunCount",
+        "preservedForReviewWallRunCount",
+        "totalAxisShiftDrawingUnits",
+        "maximumAxisShiftDrawingUnits",
+        "evidence"
+      ],
+      "properties": {
+        "reconcilerVersion": {
+          "const": "openplantrace.wall-evidence-reconciler.v5"
+        },
+        "evaluatedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "adjustedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "axisAlignedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "extendedEndpointCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "trimmedEndpointCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "junctionSnappedEndpointCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "collapsedDuplicateWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "candidateSupportedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "roomBoundarySupportedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "openingSupportedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "neighborSupportedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "preservedForReviewWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "totalAxisShiftDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "maximumAxisShiftDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "wallTopologyOptimizationSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "optimizerVersion",
+        "method",
+        "evaluatedWallPairCount",
+        "junctionNodeCount",
+        "inlineJunctionReferenceCount",
+        "tJunctionNodeCount",
+        "crossingNodeCount",
+        "endpointAnchoredNodeCount",
+        "observationCount",
+        "lineConstraintCount",
+        "maximumIterationCount",
+        "rootMeanSquareResidualDrawingUnits",
+        "maximumResidualDrawingUnits",
+        "robustObjective",
+        "evidence"
+      ],
+      "properties": {
+        "optimizerVersion": {
+          "const": "openplantrace.wall-topology-optimizer.v2"
+        },
+        "method": {
+          "const": "RobustWeightedLeastSquaresHuber"
+        },
+        "evaluatedWallPairCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "junctionNodeCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "inlineJunctionReferenceCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "tJunctionNodeCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "crossingNodeCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "endpointAnchoredNodeCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "observationCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "lineConstraintCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "maximumIterationCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "rootMeanSquareResidualDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "maximumResidualDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "robustObjective": { "$ref": "#/$defs/nonNegativeNumber" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "wallJunctionOptimization": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "optimizerVersion",
+        "method",
+        "endpointAnchored",
+        "iterationCount",
+        "observationCount",
+        "lineConstraintCount",
+        "rootMeanSquareResidualDrawingUnits",
+        "maximumResidualDrawingUnits",
+        "robustObjective",
+        "converged",
+        "evidence"
+      ],
+      "properties": {
+        "optimizerVersion": {
+          "const": "openplantrace.wall-topology-optimizer.v2"
+        },
+        "method": {
+          "const": "RobustWeightedLeastSquaresHuber"
+        },
+        "endpointAnchored": { "type": "boolean" },
+        "iterationCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "observationCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "lineConstraintCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "rootMeanSquareResidualDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "maximumResidualDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "robustObjective": { "$ref": "#/$defs/nonNegativeNumber" },
+        "converged": { "type": "boolean" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "solvedWallInlineJunction": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "wallRunId",
+        "nodeId",
+        "pageNumber",
+        "kind",
+        "nodePosition",
+        "nodePositionMillimeters",
+        "wallPosition",
+        "wallPositionMillimeters",
+        "parameter",
+        "offsetDrawingUnits",
+        "offsetMillimeters",
+        "projectionResidualDrawingUnits",
+        "projectionResidualMillimeters",
+        "incidentWallRunIds",
+        "confidence",
+        "requiresReview",
+        "optimization",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "wallRunId": { "$ref": "#/$defs/id" },
+        "nodeId": { "$ref": "#/$defs/id" },
+        "pageNumber": { "$ref": "#/$defs/pageNumber" },
+        "kind": {
+          "enum": ["TJunction", "Crossing", "MultiJunction"]
+        },
+        "nodePosition": { "$ref": "#/$defs/point" },
+        "nodePositionMillimeters": { "$ref": "#/$defs/nullablePoint" },
+        "wallPosition": { "$ref": "#/$defs/point" },
+        "wallPositionMillimeters": { "$ref": "#/$defs/nullablePoint" },
+        "parameter": { "$ref": "#/$defs/ratio" },
+        "offsetDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "offsetMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "projectionResidualDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "projectionResidualMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "incidentWallRunIds": { "$ref": "#/$defs/stringArray" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "requiresReview": { "type": "boolean" },
+        "optimization": { "$ref": "#/$defs/wallJunctionOptimization" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "solvedWallRun": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "pageNumber",
+        "fromNodeId",
+        "toNodeId",
+        "wallType",
+        "centerLine",
+        "centerLineMillimeters",
+        "bounds",
+        "boundsMillimeters",
+        "drawingLength",
+        "lengthMeters",
+        "thicknessDrawingUnits",
+        "thicknessMillimeters",
+        "millimetersPerDrawingUnit",
+        "solidDrawingLength",
+        "solidLengthMeters",
+        "openingDrawingLength",
+        "reconstructedOpeningGapCount",
+        "confidence",
+        "reliability",
+        "openingIntervals",
+        "solidIntervals",
+        "candidateIds",
+        "candidateOrigins",
+        "sourceWallIds",
+        "sourceWallGraphEdgeIds",
+        "sourcePrimitiveIds",
+        "sourceLayers",
+        "inlineJunctions",
+        "reconciliation",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "pageNumber": { "$ref": "#/$defs/pageNumber" },
+        "fromNodeId": { "$ref": "#/$defs/id" },
+        "toNodeId": { "$ref": "#/$defs/id" },
+        "wallType": { "type": "string", "minLength": 1 },
+        "centerLine": { "$ref": "#/$defs/line" },
+        "centerLineMillimeters": { "$ref": "#/$defs/nullableLine" },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "boundsMillimeters": { "$ref": "#/$defs/nullableRect" },
+        "drawingLength": { "$ref": "#/$defs/nonNegativeNumber" },
+        "lengthMeters": { "$ref": "#/$defs/nullableNumber" },
+        "thicknessDrawingUnits": { "$ref": "#/$defs/nonNegativeNumber" },
+        "thicknessMillimeters": { "$ref": "#/$defs/nullableNumber" },
+        "millimetersPerDrawingUnit": { "$ref": "#/$defs/nullableNumber" },
+        "solidDrawingLength": { "$ref": "#/$defs/nonNegativeNumber" },
+        "solidLengthMeters": { "$ref": "#/$defs/nullableNumber" },
+        "openingDrawingLength": { "$ref": "#/$defs/nonNegativeNumber" },
+        "reconstructedOpeningGapCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "confidence": { "$ref": "#/$defs/ratio" },
+        "reliability": { "$ref": "#/$defs/reliability" },
+        "openingIntervals": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/solvedWallOpeningInterval" }
+        },
+        "solidIntervals": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/solvedWallSolidInterval" }
+        },
+        "candidateIds": { "$ref": "#/$defs/stringArray" },
+        "candidateOrigins": { "$ref": "#/$defs/stringArray" },
+        "sourceWallIds": { "$ref": "#/$defs/stringArray" },
+        "sourceWallGraphEdgeIds": { "$ref": "#/$defs/stringArray" },
+        "sourcePrimitiveIds": { "$ref": "#/$defs/stringArray" },
+        "sourceLayers": { "$ref": "#/$defs/stringArray" },
+        "inlineJunctions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/solvedWallInlineJunction" }
+        },
+        "reconciliation": { "$ref": "#/$defs/wallRunReconciliation" },
+        "evidence": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "wallSolutions": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "solverVersion",
+        "selectedHypothesisId",
+        "selectedProfile",
+        "selectedScore",
+        "candidateCount",
+        "selectedCandidateCount",
+        "selectedWallRunCount",
+        "iterationCount",
+        "hypotheses",
+        "selectedWallRuns",
+        "candidateDecisions",
+        "reconciliation",
+        "topology",
+        "evidence"
+      ],
+      "properties": {
+        "solverVersion": {
+          "const": "openplantrace.global-wall-solver.v13"
+        },
+        "selectedHypothesisId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selectedProfile": {
+          "enum": ["joint-structural", "conservative", "balanced", "recall-first"]
+        },
+        "selectedScore": {
+          "$ref": "#/$defs/ratio"
+        },
+        "candidateCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "selectedCandidateCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "selectedWallRunCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "iterationCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "hypotheses": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "selectedWallRuns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/solvedWallRun"
+          }
+        },
+        "candidateDecisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/wallReconciliationSummary"
+        },
+        "topology": {
+          "$ref": "#/$defs/wallTopologyOptimizationSummary"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
     "wallGraph": {
       "type": "object",
       "additionalProperties": true,
@@ -2638,6 +3175,10 @@
         "confidence": { "$ref": "#/$defs/ratio" },
         "sourcePrimitiveIds": { "$ref": "#/$defs/stringArray" },
         "sourceLayers": { "$ref": "#/$defs/stringArray" },
+        "sourceWallIds": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Detector wall IDs merged into this clean placement graph edge."
+        },
         "sourceWallGraphEdgeIds": { "$ref": "#/$defs/stringArray" },
         "evidence": { "$ref": "#/$defs/stringArray" }
       }

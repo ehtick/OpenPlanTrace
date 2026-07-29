@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace OpenPlanTrace.Tests;
 
@@ -102,6 +103,95 @@ public sealed class CliPlacementValidationTests
         Assert.Contains(
             validation.RootElement.GetProperty("messages").EnumerateArray(),
             message => message.GetProperty("message").GetString()?.Contains("Placement deep validation checked", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task ValidatePlacement_AcceptsGeneratedWallReconciliation()
+    {
+        using var workspace = TestWorkspace.Create();
+        var placementPath = workspace.Write(
+            "placement.json",
+            await CreateGeneratedPlacementJsonAsync());
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            placementPath,
+            "--kind",
+            "placement",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(0, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.True(validation.RootElement.GetProperty("valid").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ValidatePlacement_RejectsStaleWallReconciliationSummary()
+    {
+        using var workspace = TestWorkspace.Create();
+        var placement = JsonNode.Parse(await CreateGeneratedPlacementJsonAsync())!.AsObject();
+        var reconciliation = placement["wallSolutions"]!["reconciliation"]!.AsObject();
+        reconciliation["evaluatedWallRunCount"] =
+            reconciliation["evaluatedWallRunCount"]!.GetValue<int>() + 1;
+        var placementPath = workspace.Write("placement.json", placement.ToJsonString());
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            placementPath,
+            "--kind",
+            "placement",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(1, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.False(validation.RootElement.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            validation.RootElement.GetProperty("messages").EnumerateArray(),
+            message => message.GetProperty("message").GetString()?.Contains(
+                "evaluatedWallRunCount must match",
+                StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task ValidatePlacement_RejectsMissingWallRunReconciliation()
+    {
+        using var workspace = TestWorkspace.Create();
+        var placement = JsonNode.Parse(await CreateGeneratedPlacementJsonAsync())!.AsObject();
+        var selectedRuns = placement["wallSolutions"]!["selectedWallRuns"]!.AsArray();
+        Assert.NotEmpty(selectedRuns);
+        Assert.True(selectedRuns[0]!.AsObject().Remove("reconciliation"));
+        var placementPath = workspace.Write("placement.json", placement.ToJsonString());
+        var validationPath = workspace.PathFor("validation.json");
+
+        var exitCode = await global::OpenPlanTraceCli.RunAsync(new[]
+        {
+            "validate",
+            placementPath,
+            "--kind",
+            "placement",
+            "--json",
+            validationPath,
+            "--compact-json"
+        });
+
+        Assert.Equal(1, exitCode);
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath));
+        Assert.False(validation.RootElement.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            validation.RootElement.GetProperty("messages").EnumerateArray(),
+            message => message.GetProperty("message").GetString()?.Contains(
+                "requires an object reconciliation",
+                StringComparison.Ordinal) == true);
     }
 
     [Fact]
@@ -1346,6 +1436,22 @@ public sealed class CliPlacementValidationTests
 
     private static async Task<string> CreateGeneratedScanJsonAsync()
     {
+        var result = await CreateGeneratedScanResultAsync();
+        return PlanTraceJsonExporter.Serialize(
+            result,
+            new PlanTraceJsonExportOptions { WriteIndented = false });
+    }
+
+    private static async Task<string> CreateGeneratedPlacementJsonAsync()
+    {
+        var result = await CreateGeneratedScanResultAsync();
+        return PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false });
+    }
+
+    private static async Task<PlanScanResult> CreateGeneratedScanResultAsync()
+    {
         var document = new PlanDocument(
             "cli-scan-validation-plan",
             new[]
@@ -1364,10 +1470,7 @@ public sealed class CliPlacementValidationTests
                     })
             });
 
-        var result = await new OpenPlanTraceScanner().ScanAsync(document);
-        return PlanTraceJsonExporter.Serialize(
-            result,
-            new PlanTraceJsonExportOptions { WriteIndented = false });
+        return await new OpenPlanTraceScanner().ScanAsync(document);
     }
 
     private sealed class TestWorkspace : IDisposable

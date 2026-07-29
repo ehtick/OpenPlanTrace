@@ -8,6 +8,181 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.010] - 2026-07-29
+
+- Improved unanimous source-backed wall recovery.
+- Improved partially covered major wall recovery.
+- Improved reviewed extreme wall recall.
+- Preserved light and medium canonical geometry.
+- Added consensus recovery regression coverage.
+
+## [0.11.009] - 2026-07-29
+
+- Added source-linked exterior wall assembly resolution.
+- Improved thick exterior wall centerline accuracy.
+- Reduced duplicate exterior wall runs.
+- Added exterior assembly regression coverage.
+- Improved light, medium, and extreme walls-only verification.
+
+## [0.11.008] - 2026-07-29
+
+- Improved partial dimension-provenance arbitration.
+- Improved reviewed exterior-shell wall recovery.
+- Improved room-confirmed wall-body recovery.
+- Improved isolated structural-island blocking.
+- Improved clean wall recall across regression plans.
+
+## [0.11.007] - 2026-07-29
+
+- Improved provisional room-loop isolation.
+- Improved distinct room-side wall evidence.
+- Improved independent wall-body arbitration.
+- Improved structural blocker propagation.
+- Improved source-aware canonical wall extents.
+- Added dimension provenance to structural wall rejection.
+- Added occupied-territory rejection for annotation wall tails.
+- Added decisive recall rescue for incomplete structural solutions.
+- Prevented isolated details and weak openings from anchoring structural walls.
+- Prevented room hypotheses from creating unsupported wall tails.
+- Reduced furniture, dimension, and paper-space wall traces.
+- Improved light, medium, and extreme walls-only review.
+
+## [0.11.006] - 2026-07-29
+
+- Improved repeated-detail rejection in structural evidence.
+- Improved filled wall-body protection from density rejection.
+- Fixed incomplete structural cores hiding better wall solutions.
+- Added guarded wall-hypothesis arbitration.
+- Improved major-wall recall without duplicate or noise growth.
+- Improved light, medium, and extreme walls-only review.
+
+## [0.11.005] - 2026-07-28
+
+- Fixed excluded wall islands being restored by structural solving.
+- Improved structural territory evidence for detached plan details.
+- Improved room-, opening-, and shell-anchored wall protection.
+- Improved wall recall metrics to ignore excluded detail islands.
+
+## [0.11.004] - 2026-07-28
+
+- Fixed structural axes collapsing through shared source evidence.
+- Improved long source-backed exterior wall recall.
+- Improved short-fragment continuation evidence.
+- Improved medium and extreme wall coverage.
+
+## [0.11.003] - 2026-07-28
+
+- Improved unknown-room interior partition recovery.
+- Added two-sided source-linked room boundary evidence.
+- Improved same-side room-cycle rejection.
+- Improved weak detail evidence protection.
+- Improved medium wall recall without light or extreme regressions.
+
+## [0.11.002] - 2026-07-28
+
+- Fixed canonical walls inheriting legacy review state.
+- Improved unanimous long-wall recovery.
+- Improved precise source-wall geometry selection.
+- Improved evidence-backed endpoint clipping.
+- Improved canonical wall compaction after recovery.
+- Fixed reconciler schema version drift.
+- Improved light, medium, and extreme walls-only review.
+
+## [0.11.001] - 2026-07-28
+
+- Improved canonical wall placement recall.
+- Improved strong wall-body readiness.
+- Improved outdoor room-boundary suppression.
+- Improved conflicted room-loop handling.
+- Improved oblique detail and door-line rejection.
+- Fixed legacy readiness overriding structural decisions.
+- Fixed legacy fragment blocks hiding canonical walls.
+- Improved indoor-outdoor host-wall recall.
+- Added coverage-aware wall-run reliability.
+- Added wall-readiness regression coverage.
+- Improved light, medium, and extreme walls-only review.
+
+## [0.11.000] - 2026-07-28
+
+- Added a canonical structural evidence graph.
+- Added independent wall, room, opening, and topology evidence producers.
+- Added deterministic joint structural candidate solving.
+- Added explicit unary, relation, room-closure, and exterior-continuity factors.
+- Added retained negative evidence and auditable candidate decisions.
+- Added robust canonical wall-axis fitting.
+- Added long-run wall compaction with unsplit junctions.
+- Added canonical structural solution pipeline artifacts.
+- Improved room-boundary recovery without silently accepting rejected geometry.
+- Improved structural provenance through canonical wall runs.
+- Improved placement export to consume the core structural solution.
+- Improved coordinate-readiness preservation across export.
+- Fixed structural-core review wall runs being marked coordinate-ready.
+- Improved trusted and review-only wall separation in the viewer.
+- Improved deterministic structural solver regression coverage.
+- Improved light, medium, and extreme walls-only visual review.
+- Added the OpenPlanTrace architecture guide.
+
+## [0.10.000] - 2026-07-28
+
+- Added canonical structural plan JSON export.
+- Added deterministic global wall hypotheses and canonical solved wall runs.
+- Added source-backed wall junction completion.
+- Added wall truth datasets, evaluation gates, and viewer editing.
+- Added wall solver metrics and wall truth overlays to the viewer.
+- Added exact wall centerline and type benchmark scoring.
+- Added structural graph integrity validation and diagnostics.
+- Added opening-aware canonical host-wall reconstruction.
+- Added canonical wall opening and solid intervals.
+- Added collision-ready wall body spans around doors and windows.
+- Added exact opening-to-wall interval references.
+- Added robust Huber-weighted wall junction fitting.
+- Added unsplit canonical T-junction and crossing references.
+- Added wall topology optimizer diagnostics.
+- Improved placement and structure export caching.
+- Improved compact wall graph provenance across merged runs.
+- Improved wall evidence voting across merged provenance.
+- Improved source-aware wall evidence reconciliation.
+- Improved global wall-face pairing across duplicate PDF drawing paths.
+- Improved wall-bounded semantic room recovery and adjacent room-label separation.
+- Improved canonical wall precision around offset details and opening-clearance rectangles.
+- Fixed dimension baselines leaking into recovered exterior shell walls.
+- Improved independent evidence gates for wall corrections.
+- Improved unsafe wall axis-shift rejection.
+- Improved post-reconciliation canonical duplicate collapse.
+- Improved canonical structure connectivity through inline junctions.
+- Improved weak review-only wall tail suppression.
+- Improved short exterior corner overrun trimming.
+- Improved opening and source provenance across collapsed wall runs.
+- Improved wall reconciliation diagnostics and deep validation.
+- Improved wall identity across door and window gaps.
+- Improved canonical wall interval validation and diagnostics.
+- Improved competing same-source wall representation collapse.
+- Improved review-only raw wall rejection.
+- Improved opening-aware endpoint connectivity scoring.
+- Improved placement v12 compatibility for optional wall solver metadata.
+- Improved exterior shell inference from reliable room geometry.
+- Improved mixed dimension and structural face-pair rejection.
+- Improved coherent room-boundary wall recovery.
+- Improved review-safe T-junction topology for recovered walls.
+- Improved wall solver schema version consistency.
+- Improved light, medium, and extreme wall-only visual regression review.
+- Improved wall-only SVG review to show canonical solved walls.
+- Improved privacy-safe real-plan regression labels.
+- Improved .NET test discovery consistency.
+
+## [0.09.021] - 2026-07-07
+
+- Improved major wall clean-coverage diagnostics.
+- Improved opening-aware wall coverage metrics.
+- Improved visual snapshot wall placement data.
+- Small improvement to wall coverage viewer panels.
+
+## [0.09.020] - 2026-07-07
+
+- Improved exterior shell wall continuity merging.
+- Improved final placement graph long-run cleanup.
+- Small improvement to wide-axis wall gap regression tests.
+
 ## [0.09.019] - 2026-07-07
 
 - Improved clean placement graph SVG review profile.
@@ -1412,7 +1587,7 @@ schema versions.
 - Validated the generated scan and placement artifacts, including deep placement
   validation.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260623-opening-detail-suppressed-v1/wall-qa-review-plan-crop.png`.
+  `real-pdf-output/medium-plan-20260623-opening-detail-suppressed-v1/wall-qa-review-plan-crop.png`.
 - Ran focused export tests: `119` tests passed.
 - Ran the full test suite: `731` tests passed.
 
@@ -1439,7 +1614,7 @@ schema versions.
 - Validated the generated scan and placement artifacts, including deep placement
   validation.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260623-opening-detail-issues-v1/wall-qa-review-plan-crop.png`;
+  `real-pdf-output/medium-plan-20260623-opening-detail-issues-v1/wall-qa-review-plan-crop.png`;
   the legend now reports `omit: opening detail fragments 1`.
 - Ran focused export/schema tests: `163` tests passed.
 - Ran the full test suite: `730` tests passed.
@@ -1467,7 +1642,7 @@ schema versions.
   `opening_detail_fragment_review_required` with evidence naming
   `page:1:opening:5`.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260623-opening-linked-fragment-v1/wall-qa-review.png`;
+  `real-pdf-output/medium-plan-20260623-opening-linked-fragment-v1/wall-qa-review.png`;
   the legend now reports `omit: opening detail fragments 1`.
 - Validated the generated scan, placement, and visual-snapshot artifacts with
   the CLI validator.
@@ -1498,8 +1673,8 @@ schema versions.
   `duplicate_clean_topology_span` with `0.907` overlap and `2.314` drawing-unit
   axis distance to the clean span.
 - Rendered and inspected wall-QA screenshots at
-  `real-pdf-output/medium-a20-102-20260622-near-duplicate-isolated-v1/wall-qa-review.png`
-  and `real-pdf-output/medium-a20-102-20260622-near-duplicate-isolated-v1/wall-qa-review-crop-middle.png`.
+  `real-pdf-output/medium-plan-20260622-near-duplicate-isolated-v1/wall-qa-review.png`
+  and `real-pdf-output/medium-plan-20260622-near-duplicate-isolated-v1/wall-qa-review-crop-middle.png`.
 - Validated the generated scan, placement, and visual-snapshot artifacts with
   the CLI validator.
 - Ran focused export tests: `117` tests passed.
@@ -1523,7 +1698,7 @@ schema versions.
   from `2` to `1`, and coordinate/metric readiness rose from `0.623188` to
   `0.637681`.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260622-thin-exterior-bridge-v2/wall-qa-review.png`.
+  `real-pdf-output/medium-plan-20260622-thin-exterior-bridge-v2/wall-qa-review.png`.
 - Validated the generated scan and placement artifacts with the CLI validator.
 - Ran targeted placement/export/scan-quality tests: `172` tests passed.
 - Ran the full test suite: `727` tests passed.
@@ -1549,7 +1724,7 @@ schema versions.
   from `19` to `20`, and coordinate/metric readiness rose from `0.617647` to
   `0.623188`.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260622-trusted-isolated-shell-v1/wall-qa-review.png`.
+  `real-pdf-output/medium-plan-20260622-trusted-isolated-shell-v1/wall-qa-review.png`.
 - Validated the generated scan and placement artifacts with the CLI validator.
 - Ran targeted placement/export/scan-quality tests: `168` tests passed.
 - Ran the full test suite: `723` tests passed.
@@ -1578,7 +1753,7 @@ schema versions.
   and `metricReadyRatio` improved from `0.276316` to `0.617647` while raw wall
   detections remained unchanged.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260622-placement-readiness-denominator-v1/wall-qa-review.png`.
+  `real-pdf-output/medium-plan-20260622-placement-readiness-denominator-v1/wall-qa-review.png`.
 - Validated the generated scan and placement artifacts with the CLI validator.
 - Ran targeted export/scan-quality/placement-validation tests: `159` tests
   passed.
@@ -1606,7 +1781,7 @@ schema versions.
 - Placement export now reports `metricTrust` as
   `CalibratedWithOutlierReview` and `readyForMetricPlacement` as `true`.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260622-dominant-scale-review-v1/wall-qa-review.png`.
+  `real-pdf-output/medium-plan-20260622-dominant-scale-review-v1/wall-qa-review.png`.
 - Validated the generated scan and placement artifacts with the CLI validator.
 - Ran targeted measurement/export tests: `119` tests passed.
 - Ran the full test suite: `718` tests passed.
@@ -1633,7 +1808,7 @@ schema versions.
 - Opening and routing side-link quality warnings were cleared on the medium
   scan.
 - Rendered and inspected the wall-QA screenshot at
-  `real-pdf-output/medium-a20-102-20260622-room-pair-opening-links-v4/wall-qa-review.png`.
+  `real-pdf-output/medium-plan-20260622-room-pair-opening-links-v4/wall-qa-review.png`.
 - Validated the generated placement artifact with deep placement checks
   enabled.
 - Ran targeted room-semantics tests: `29` tests passed.
@@ -1660,7 +1835,7 @@ schema versions.
   `page:1:wall:51`, and `page:1:room:4` stayed blocked because it has low
   confidence and no linked wall evidence.
 - Rendered and inspected the wall-QA screenshot at
-  `%TEMP%/openplantrace-medium-a20-102-20260622-wall-backed-semantic-rooms-v1-wall-qa-review.png`.
+  `%TEMP%/openplantrace-medium-plan-20260622-wall-backed-semantic-rooms-v1-wall-qa-review.png`.
 - Validated the generated placement artifact with deep placement checks
   enabled.
 - Ran targeted room-readiness tests: `3` tests passed.
@@ -1688,7 +1863,7 @@ schema versions.
   longer block their rooms; `page:1:wall:51` remains review-only because it is
   short, gappy, and isolated.
 - Rendered and inspected the wall-QA screenshot at
-  `%TEMP%/openplantrace-medium-a20-102-20260622-fragment-fallback-v1-wall-qa-review.png`.
+  `%TEMP%/openplantrace-medium-plan-20260622-fragment-fallback-v1-wall-qa-review.png`.
 - Validated the generated placement artifact with deep placement checks
   enabled.
 - Ran targeted readiness/export tests: `5` tests passed.
@@ -1711,7 +1886,7 @@ schema versions.
   room coordinate blockers into `openingDominatedWallIds` while the remaining
   real blockers stayed visible for review.
 - Rendered and inspected the wall-QA screenshot at
-  `%TEMP%/openplantrace-medium-a20-102-20260622-opening-dominated-boundary-v1-wall-qa-review.png`.
+  `%TEMP%/openplantrace-medium-plan-20260622-opening-dominated-boundary-v1-wall-qa-review.png`.
 - Validated the generated placement artifact with deep placement checks enabled.
 - Ran targeted exporter/schema tests: `6` tests passed.
 - Ran the full test suite: `711` tests passed.
@@ -1735,7 +1910,7 @@ schema versions.
   visible topology spans stayed unchanged, confirming the covered-entry guard
   did not regress.
 - Rendered and inspected the wall-QA screenshot at
-  `%TEMP%/openplantrace-medium-a20-102-20260622-room-backed-thin-exterior-v1-wall-qa-review.png`.
+  `%TEMP%/openplantrace-medium-plan-20260622-room-backed-thin-exterior-v1-wall-qa-review.png`.
 - Ran targeted wall/export/refinement tests: `183` tests passed.
 - Ran the full test suite: `710` tests passed.
 
@@ -1756,7 +1931,7 @@ schema versions.
   `secondary_over_sourced_detail_linework` omission cleared for the recovered
   room-boundary wall.
 - Rendered and inspected the wall-QA screenshot at
-  `%TEMP%/openplantrace-medium-a20-102-20260622-two-sided-room-wall-v1-wall-qa-review.png`.
+  `%TEMP%/openplantrace-medium-plan-20260622-two-sided-room-wall-v1-wall-qa-review.png`.
 - Ran targeted scan/export/wall tests: `181` tests passed.
 - Ran the full test suite: `708` tests passed.
 
@@ -1778,7 +1953,7 @@ schema versions.
   review screenshot reports `81` suppressed detail spans hidden and leaves a
   much smaller actionable amber set for wall accuracy review.
 - Rendered and inspected the updated screenshot at
-  `%TEMP%/openplantrace-medium-a20-102-20260622-v2-wall-qa-review.png`.
+  `%TEMP%/openplantrace-medium-plan-20260622-v2-wall-qa-review.png`.
 - Ran targeted export/schema/wall tests: `210` tests passed.
 - Ran the full test suite: `707` tests passed.
 

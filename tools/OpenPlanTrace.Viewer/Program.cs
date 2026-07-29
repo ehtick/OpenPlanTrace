@@ -192,7 +192,7 @@ app.MapPost("/api/scan", async (IFormFile file, CancellationToken cancellationTo
             },
             cancellationToken: cancellationToken);
 
-        return Results.Ok(PlanTraceExport.From(result));
+        return Results.Ok(ViewerScanBundle.From(result));
     }
     catch (Exception exception)
     {
@@ -361,6 +361,20 @@ internal static class ViewerJsonFilePolicy
 internal static class ViewerPdfFilePolicy
 {
     public const long MaximumPdfBytes = 250 * 1024 * 1024;
+}
+
+internal sealed record ViewerScanBundle(
+    string SchemaVersion,
+    PlanTraceExport Scan,
+    PlanPlacementExport Placement)
+{
+    public const string CurrentSchemaVersion = "openplantrace.viewer-scan.v1";
+
+    public static ViewerScanBundle From(PlanScanResult result) =>
+        new(
+            CurrentSchemaVersion,
+            PlanTraceExport.From(result),
+            PlanPlacementExport.From(result));
 }
 
 internal sealed record ScanResponse(

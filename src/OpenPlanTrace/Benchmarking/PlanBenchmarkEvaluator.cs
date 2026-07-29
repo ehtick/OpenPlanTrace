@@ -1387,7 +1387,9 @@ public static class PlanBenchmarkEvaluator
                 wall.PageNumber,
                 wall.Bounds,
                 null,
-                null)));
+                null,
+                CenterLine: wall.CenterLine,
+                WallType: wall.WallType)));
 
         AddDetectorMetric(
             assertions,
@@ -1742,6 +1744,14 @@ public static class PlanBenchmarkEvaluator
         AddEvidence(evidence, "routing influence", detection.RoutingInfluence?.ToString());
         AddEvidence(evidence, "structural influence", detection.StructuralInfluence?.ToString());
         AddEvidence(evidence, "room use", detection.RoomUseKind?.ToString());
+        AddEvidence(evidence, "wall type", detection.WallType?.ToString());
+
+        if (detection.CenterLine is { } centerLine)
+        {
+            evidence.Add(
+                $"centerline ({centerLine.Start.X:0.###},{centerLine.Start.Y:0.###})"
+                + $" -> ({centerLine.End.X:0.###},{centerLine.End.Y:0.###})");
+        }
 
         if (detection.Count is { } count)
         {
@@ -1910,6 +1920,7 @@ public static class PlanBenchmarkEvaluator
             || !EnumMatches(target.DimensionOrientation, actual.DimensionOrientation, out evidence, "dimension orientation")
             || !EnumMatches(target.AnnotationKind, actual.AnnotationKind, out evidence, "annotation kind")
             || !EnumMatches(target.GridAxisOrientation, actual.GridAxisOrientation, out evidence, "grid orientation")
+            || !EnumMatches(target.WallType, actual.WallType, out evidence, "wall type")
             || !EnumMatches(target.OpeningType, actual.OpeningType, out evidence, "opening type")
             || !EnumMatches(target.OpeningOperation, actual.OpeningOperation, out evidence, "opening operation")
             || !EnumMatches(target.ObjectCategory, actual.ObjectCategory, out evidence, "object category")
@@ -1931,6 +1942,7 @@ public static class PlanBenchmarkEvaluator
         AddEnumScore(target.DimensionOrientation, evidenceItems, ref criteriaCount, ref score, "dimension orientation");
         AddEnumScore(target.AnnotationKind, evidenceItems, ref criteriaCount, ref score, "annotation kind");
         AddEnumScore(target.GridAxisOrientation, evidenceItems, ref criteriaCount, ref score, "grid orientation");
+        AddEnumScore(target.WallType, evidenceItems, ref criteriaCount, ref score, "wall type");
         AddEnumScore(target.OpeningType, evidenceItems, ref criteriaCount, ref score, "opening type");
         AddEnumScore(target.OpeningOperation, evidenceItems, ref criteriaCount, ref score, "opening operation");
         AddEnumScore(target.ObjectCategory, evidenceItems, ref criteriaCount, ref score, "object category");
@@ -1943,6 +1955,30 @@ public static class PlanBenchmarkEvaluator
         AddEnumScore(target.RoomUseKind, evidenceItems, ref criteriaCount, ref score, "room use kind");
         AddEnumScore(target.SuppressionReason, evidenceItems, ref criteriaCount, ref score, "suppression reason");
         AddEnumScore(target.SuppressionAction, evidenceItems, ref criteriaCount, ref score, "suppression action");
+
+        if (target.CenterLine is { } targetCenterLine)
+        {
+            criteriaCount++;
+            if (actual.CenterLine is not { } actualCenterLine)
+            {
+                evidence = "detection has no centerline";
+                return false;
+            }
+
+            if (!TryScoreLineGeometry(
+                    target,
+                    targetCenterLine,
+                    actualCenterLine,
+                    out var lineScore,
+                    out var lineEvidence))
+            {
+                evidence = lineEvidence;
+                return false;
+            }
+
+            score += lineScore;
+            evidenceItems.Add(lineEvidence);
+        }
 
         if (target.Bounds is not null)
         {
@@ -2233,6 +2269,160 @@ public static class PlanBenchmarkEvaluator
         return union <= 0 ? 0 : overlap / union;
     }
 
+    private static bool TryScoreLineGeometry(
+        BenchmarkDetectionTarget target,
+        PlanLineSegment expected,
+        PlanLineSegment actual,
+        out double score,
+        out string evidence)
+    {
+        score = 0;
+        if (expected.Length <= 0.001 || actual.Length <= 0.001)
+        {
+            evidence = "centerline mismatch: expected and detected lines must have positive length";
+            return false;
+        }
+
+        var maxLineDistance = Math.Max(0, target.MaxLineDistance ?? 3.0);
+        var maxEndpointDistance = Math.Max(0, target.MaxEndpointDistance ?? 8.0);
+        var maxAngularDifference = Math.Clamp(target.MaxAngularDifferenceDegrees ?? 5.0, 0, 90);
+        var minOverlapRatio = Math.Clamp(target.MinLengthOverlapRatio ?? 0.80, 0, 1);
+        var angularDifference = AngularDifferenceDegrees(expected, actual);
+        var lineDistance = SymmetricInfiniteLineDistance(expected, actual);
+        var endpointDistance = EndpointPairDistance(expected, actual);
+        var overlapRatio = ProjectedOverlapRatio(expected, actual);
+
+        if (angularDifference > maxAngularDifference + 0.000001)
+        {
+            evidence =
+                $"centerline angle mismatch: {angularDifference:0.###} degrees"
+                + $" > {maxAngularDifference:0.###}";
+            return false;
+        }
+
+        if (lineDistance > maxLineDistance + 0.000001)
+        {
+            evidence =
+                $"centerline lateral mismatch: {lineDistance:0.###}"
+                + $" > {maxLineDistance:0.###} drawing units";
+            return false;
+        }
+
+        if (endpointDistance > maxEndpointDistance + 0.000001)
+        {
+            evidence =
+                $"centerline endpoint mismatch: {endpointDistance:0.###}"
+                + $" > {maxEndpointDistance:0.###} drawing units";
+            return false;
+        }
+
+        if (overlapRatio + 0.000001 < minOverlapRatio)
+        {
+            evidence =
+                $"centerline overlap mismatch: {FormatRatio(overlapRatio)}"
+                + $" < {FormatRatio(minOverlapRatio)}";
+            return false;
+        }
+
+        var angleScore = ToleranceScore(angularDifference, maxAngularDifference);
+        var lineDistanceScore = ToleranceScore(lineDistance, maxLineDistance);
+        var endpointScore = ToleranceScore(endpointDistance, maxEndpointDistance);
+        score = Math.Clamp(
+            (angleScore + lineDistanceScore + endpointScore + overlapRatio) / 4.0,
+            0,
+            1);
+        evidence =
+            $"centerline angle {angularDifference:0.###} deg, "
+            + $"lateral {lineDistance:0.###}, endpoint {endpointDistance:0.###}, "
+            + $"overlap {FormatRatio(overlapRatio)}";
+        return true;
+    }
+
+    private static double AngularDifferenceDegrees(PlanLineSegment first, PlanLineSegment second)
+    {
+        var firstDx = first.End.X - first.Start.X;
+        var firstDy = first.End.Y - first.Start.Y;
+        var secondDx = second.End.X - second.Start.X;
+        var secondDy = second.End.Y - second.Start.Y;
+        var denominator = first.Length * second.Length;
+        if (denominator <= 0.001)
+        {
+            return 90;
+        }
+
+        var cosine = Math.Clamp(
+            Math.Abs((firstDx * secondDx + firstDy * secondDy) / denominator),
+            0,
+            1);
+        return Math.Acos(cosine) * (180.0 / Math.PI);
+    }
+
+    private static double SymmetricInfiniteLineDistance(
+        PlanLineSegment first,
+        PlanLineSegment second) =>
+        Math.Max(
+            Math.Max(
+                DistanceToInfiniteLine(first, second.Start),
+                DistanceToInfiniteLine(first, second.End)),
+            Math.Max(
+                DistanceToInfiniteLine(second, first.Start),
+                DistanceToInfiniteLine(second, first.End)));
+
+    private static double DistanceToInfiniteLine(PlanLineSegment line, PlanPoint point)
+    {
+        var dx = line.End.X - line.Start.X;
+        var dy = line.End.Y - line.Start.Y;
+        var length = line.Length;
+        if (length <= 0.001)
+        {
+            return point.DistanceTo(line.Start);
+        }
+
+        return Math.Abs(
+            dy * point.X
+            - dx * point.Y
+            + line.End.X * line.Start.Y
+            - line.End.Y * line.Start.X) / length;
+    }
+
+    private static double EndpointPairDistance(PlanLineSegment expected, PlanLineSegment actual)
+    {
+        var direct = Math.Max(
+            expected.Start.DistanceTo(actual.Start),
+            expected.End.DistanceTo(actual.End));
+        var reversed = Math.Max(
+            expected.Start.DistanceTo(actual.End),
+            expected.End.DistanceTo(actual.Start));
+        return Math.Min(direct, reversed);
+    }
+
+    private static double ProjectedOverlapRatio(PlanLineSegment expected, PlanLineSegment actual)
+    {
+        var length = expected.Length;
+        if (length <= 0.001)
+        {
+            return 0;
+        }
+
+        var unitX = (expected.End.X - expected.Start.X) / length;
+        var unitY = (expected.End.Y - expected.Start.Y) / length;
+        var first = Project(actual.Start);
+        var second = Project(actual.End);
+        var actualStart = Math.Min(first, second);
+        var actualEnd = Math.Max(first, second);
+        var overlap = Math.Max(0, Math.Min(length, actualEnd) - Math.Max(0, actualStart));
+        return Math.Clamp(overlap / length, 0, 1);
+
+        double Project(PlanPoint point) =>
+            (point.X - expected.Start.X) * unitX
+            + (point.Y - expected.Start.Y) * unitY;
+    }
+
+    private static double ToleranceScore(double value, double tolerance) =>
+        tolerance <= 0.000001
+            ? value <= 0.000001 ? 1 : 0
+            : Math.Clamp(1.0 - value / tolerance, 0, 1);
+
     private static string TargetId(BenchmarkDetectionTarget target, int index) =>
         string.IsNullOrWhiteSpace(target.Id) ? $"target-{index + 1}" : target.Id;
 
@@ -2312,5 +2502,7 @@ public static class PlanBenchmarkEvaluator
         RoutingSuppressedObjectAction? SuppressionAction = null,
         string? ReplacementRoutingObstacleId = null,
         string? RoomUseHintId = null,
-        IReadOnlyList<string>? DetectedTags = null);
+        IReadOnlyList<string>? DetectedTags = null,
+        PlanLineSegment? CenterLine = null,
+        WallType? WallType = null);
 }

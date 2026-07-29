@@ -359,6 +359,7 @@
         "placementSuppressedWallCount",
         "placementReviewWallCount",
         "residualEndpointOnHostWall",
+        "cleanCoverage",
         "omissionCounts",
         "topOmissions"
       ],
@@ -380,6 +381,9 @@
         },
         "residualEndpointOnHostWall": {
           "$ref": "#/$defs/wallGraphResidualSummary"
+        },
+        "cleanCoverage": {
+          "$ref": "#/$defs/wallCleanCoverageSummary"
         },
         "omissionCounts": {
           "$ref": "#/$defs/countBreakdown"
@@ -423,6 +427,101 @@
         },
         "maxDistance": {
           "$ref": "#/$defs/nonNegativeNumber"
+        }
+      }
+    },
+    "wallCleanCoverageSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "trackedMajorWallCount",
+        "fullyCoveredMajorWallCount",
+        "underCoveredMajorWallCount",
+        "averageCoverageRatio",
+        "minimumCoverageRatio",
+        "underCoveredExamples"
+      ],
+      "properties": {
+        "trackedMajorWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "fullyCoveredMajorWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "underCoveredMajorWallCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "averageCoverageRatio": {
+          "$ref": "#/$defs/ratio"
+        },
+        "minimumCoverageRatio": {
+          "$ref": "#/$defs/ratio"
+        },
+        "underCoveredExamples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/wallCleanCoverageExample"
+          }
+        }
+      }
+    },
+    "wallCleanCoverageExample": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "wallId",
+        "pageNumber",
+        "wallType",
+        "detectionKind",
+        "confidence",
+        "drawingLength",
+        "coverageRatio",
+        "missingLengthDrawingUnits",
+        "axisToleranceDrawingUnits",
+        "bounds",
+        "centerLine",
+        "evidence"
+      ],
+      "properties": {
+        "wallId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pageNumber": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "wallType": {
+          "type": "string"
+        },
+        "detectionKind": {
+          "type": "string"
+        },
+        "confidence": {
+          "$ref": "#/$defs/ratio"
+        },
+        "drawingLength": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "coverageRatio": {
+          "$ref": "#/$defs/ratio"
+        },
+        "missingLengthDrawingUnits": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "axisToleranceDrawingUnits": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "centerLine": {
+          "$ref": "#/$defs/line"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

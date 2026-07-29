@@ -2061,6 +2061,30 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementExporter_LinksExteriorShellWallIdsInDuplicateCleanTopologyOmissions()
+    {
+        const string hostWallId = "page:1:wall-exterior-shell-source-backed:002";
+        var result = RenameSyntheticWall(
+            CreateContainedDuplicatePlacementRunResult(),
+            "duplicate-long-wall",
+            hostWallId);
+
+        using var document = JsonDocument.Parse(PlanPlacementJsonExporter.Serialize(
+            result,
+            new PlanPlacementJsonExportOptions { WriteIndented = false }));
+        var duplicateWall = document.RootElement
+            .GetProperty("walls")
+            .EnumerateArray()
+            .Single(wall => wall.GetProperty("id").GetString() == "duplicate-contained-wall");
+        var omission = duplicateWall.GetProperty("placementOmission");
+
+        Assert.Equal("duplicate_clean_topology_span", omission.GetProperty("code").GetString());
+        Assert.Contains(
+            hostWallId,
+            JsonStrings(omission.GetProperty("linkedWallIds")));
+    }
+
+    [Fact]
     public void PlacementExporter_ClassifiesRecoveredRoomBoundaryPairMostlyCoveredByCleanSpanAsDuplicate()
     {
         var result = WithContainedWallAsRecoveredGeometricRoomBoundaryPair(
@@ -2648,19 +2672,19 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa\"", svg);
         Assert.Contains("Walls-only placement QA", svg);
-        Assert.Contains("Solid blue/green = compact import wall graph", svg);
+        Assert.Contains("Blue/green = canonical solved wall runs", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
-        Assert.Contains("id=\"wall-body-footprints\"", svg);
-        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
-        Assert.Contains("wall body footprint detail-host:solid-span:1:body-footprint", svg);
-        Assert.Contains("placement wall graph edge detail-host:clean-run:1", svg);
+        Assert.Contains("id=\"canonical-wall-solutions\"", svg);
+        Assert.Contains("canonical solved wall", svg);
         Assert.Contains("1 visible topology spans", svg);
-        Assert.Contains("1 visible wall body footprints", svg);
+        Assert.Contains("1 wall body footprints hidden", svg);
         Assert.Contains("1 wall graph repairs hidden (1 blocking)", svg);
-        Assert.Contains("1 exported wall graph edges", svg);
+        Assert.Contains("exported wall graph hidden", svg);
         Assert.DoesNotContain("id=\"wall-graph-repairs\"", svg);
         Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
+        Assert.DoesNotContain("id=\"wall-body-footprints\"", svg);
+        Assert.DoesNotContain("id=\"placement-wall-graph-edges\"", svg);
         Assert.DoesNotContain("id=\"walls\"", svg);
         Assert.DoesNotContain("edge-tooth-1", svg);
     }
@@ -2689,6 +2713,7 @@ public sealed class ExportTests
             0.8,
             Array.Empty<string>(),
             Array.Empty<string>(),
+            ["excluded-wall"],
             Array.Empty<string>(),
             ["synthetic excluded edge"]);
         var readyEdge = excludedEdge with
@@ -2721,10 +2746,11 @@ public sealed class ExportTests
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQa));
 
         Assert.Contains("data-profile=\"wall-qa\"", svg);
-        Assert.Contains("Solid blue/green = compact import wall graph", svg);
-        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
-        Assert.Contains("placement wall graph edge detail-host:clean-run:1", svg);
+        Assert.Contains("Blue/green = canonical solved wall runs", svg);
+        Assert.Contains("id=\"canonical-wall-solutions\"", svg);
+        Assert.Contains("canonical solved wall", svg);
         Assert.DoesNotContain("clean wall topology span trusted-exterior-shell-fragment", svg);
+        Assert.DoesNotContain("id=\"placement-wall-graph-edges\"", svg);
         Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("class=\"wall-topology-span wall-topology-span-exterior wall-topology-span-excluded\"", svg);
         Assert.Contains("hidden non-placement topology spans", svg);
@@ -2757,11 +2783,13 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa-review\"", svg);
         Assert.Contains("Wall QA review (actionable amber only)", svg);
-        Assert.Contains("Solid blue/green = compact import wall graph", svg);
+        Assert.Contains("Blue/green = canonical solved wall runs", svg);
+        Assert.Contains("Candidate placement graph shown for comparison", svg);
         Assert.Contains("Dashed amber = review-only wall candidates", svg);
         Assert.Contains("suppressed detail spans hidden", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
+        Assert.Contains("id=\"canonical-wall-solutions\"", svg);
         Assert.Contains("id=\"wall-body-footprints\"", svg);
         Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
         Assert.Contains("id=\"wall-topology-review-spans\"", svg);
@@ -2799,11 +2827,13 @@ public sealed class ExportTests
 
         Assert.Contains("data-profile=\"wall-qa-recall\"", svg);
         Assert.Contains("Wall QA recall (all review/noise candidates)", svg);
-        Assert.Contains("Solid blue/green = compact import wall graph", svg);
+        Assert.Contains("Blue/green = canonical solved wall runs", svg);
+        Assert.Contains("Candidate placement graph shown for comparison", svg);
         Assert.Contains("Dashed amber/purple = review and suppressed candidates", svg);
         Assert.DoesNotContain("suppressed detail spans hidden", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
+        Assert.Contains("id=\"canonical-wall-solutions\"", svg);
         Assert.Contains("id=\"wall-body-footprints\"", svg);
         Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
         Assert.Contains("id=\"wall-topology-review-spans\"", svg);
@@ -2853,9 +2883,11 @@ public sealed class ExportTests
             new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaRecall));
         var recallPage = Assert.Single(recallSnapshot.Pages);
+        Assert.DoesNotContain(
+            page.Layers,
+            layer => layer.Name == "wallOmittedRiskHighlights");
         Assert.True(
-            page.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count
-            < recallPage.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count);
+            recallPage.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count > 0);
     }
 
     [Fact]
@@ -2883,7 +2915,9 @@ public sealed class ExportTests
             new Dictionary<int, string> { [1] = "overlays/page-1.svg" },
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
         var page = Assert.Single(snapshot.Pages);
-        Assert.Equal(0, page.Layers.Single(layer => layer.Name == "wallOmittedRiskHighlights").Count);
+        Assert.DoesNotContain(
+            page.Layers,
+            layer => layer.Name == "wallOmittedRiskHighlights");
     }
 
     [Fact]
@@ -2980,11 +3014,12 @@ public sealed class ExportTests
         Assert.Contains("viewBox=\"", svg);
         Assert.Contains("<rect class=\"sheet-bg\"", svg);
         Assert.Contains("<g id=\"legend\"", svg);
-        Assert.Contains("Focused wall topology crop", svg);
-        Assert.Contains("Solid blue/green = compact import wall graph", svg);
+        Assert.Contains("Focused canonical wall crop", svg);
+        Assert.Contains("Blue/green = canonical solved wall runs", svg);
         Assert.Contains("Faint source linework context", svg);
         Assert.Contains("id=\"source-context\"", svg);
-        Assert.Contains("id=\"placement-wall-graph-edges\"", svg);
+        Assert.Contains("id=\"canonical-wall-solutions\"", svg);
+        Assert.DoesNotContain("id=\"placement-wall-graph-edges\"", svg);
         Assert.DoesNotContain("id=\"wall-topology-spans\"", svg);
         Assert.DoesNotContain("viewBox=\"0 0", svg);
     }
@@ -3011,7 +3046,7 @@ public sealed class ExportTests
             SvgOverlayRenderOptions.ForProfile(SvgOverlayRenderProfile.WallQaFocus));
 
         Assert.Contains("data-profile=\"wall-qa-focus\"", svg);
-        Assert.Contains("Focused wall topology crop", svg);
+        Assert.Contains("Focused canonical wall crop", svg);
         Assert.DoesNotContain("viewBox=\"0 0 768 400\"", svg);
         Assert.DoesNotContain("<rect class=\"sheet-bg\" x=\"0\" y=\"0\" width=\"768\"", svg);
     }
@@ -3218,6 +3253,94 @@ public sealed class ExportTests
         Assert.DoesNotContain(
             page.Issues,
             issue => issue.Code == "visual.wall_graph_residual_endpoint_on_host_wall");
+    }
+
+    [Fact]
+    public void WallPlacementOmissionSummary_CleanCoverageAcceptsOffsetExteriorFaceAsCovered()
+    {
+        var wall = SyntheticPlacementCoverageWall(
+            "coverage-exterior-wall",
+            new LineExport(new PointExport(0, 100), new PointExport(200, 100)),
+            wallType: "Exterior",
+            evidence: ["wall type exterior: trusted shell centerline"]);
+        var edge = SyntheticPlacementCoverageEdge(
+            "coverage-exterior-edge",
+            "coverage-exterior-wall",
+            new LineExport(new PointExport(0, 111), new PointExport(200, 111)),
+            evidence: ["wall type exterior: clean graph edge offset from shell face"]);
+
+        var summary = WallPlacementOmissionSummary.BuildCleanCoverageSummaryFromPlacementWalls(
+            pageNumber: 1,
+            [edge],
+            [wall]);
+
+        Assert.Equal(1, summary.TrackedMajorWallCount);
+        Assert.Equal(1, summary.FullyCoveredMajorWallCount);
+        Assert.Equal(0, summary.UnderCoveredMajorWallCount);
+        Assert.Equal(1, summary.AverageCoverageRatio, precision: 3);
+        Assert.Empty(summary.UnderCoveredExamples);
+    }
+
+    [Fact]
+    public void WallPlacementOmissionSummary_CleanCoverageFlagsUnderCoveredMajorWall()
+    {
+        var wall = SyntheticPlacementCoverageWall(
+            "coverage-missing-wall",
+            new LineExport(new PointExport(0, 100), new PointExport(200, 100)),
+            wallType: "Interior",
+            evidence: ["wall type interior: major wall requiring graph coverage"]);
+        var shortEdge = SyntheticPlacementCoverageEdge(
+            "coverage-short-edge",
+            "coverage-missing-wall",
+            new LineExport(new PointExport(0, 100), new PointExport(70, 100)),
+            evidence: ["clean graph edge covers only the first part of the wall"]);
+
+        var summary = WallPlacementOmissionSummary.BuildCleanCoverageSummaryFromPlacementWalls(
+            pageNumber: 1,
+            [shortEdge],
+            [wall]);
+
+        Assert.Equal(1, summary.TrackedMajorWallCount);
+        Assert.Equal(0, summary.FullyCoveredMajorWallCount);
+        Assert.Equal(1, summary.UnderCoveredMajorWallCount);
+        Assert.Equal(0.35, summary.AverageCoverageRatio, precision: 3);
+        var example = Assert.Single(summary.UnderCoveredExamples);
+        Assert.Equal("coverage-missing-wall", example.WallId);
+        Assert.Equal(0.35, example.CoverageRatio, precision: 3);
+        Assert.Equal(130, example.MissingLengthDrawingUnits, precision: 3);
+        Assert.Contains(
+            example.Evidence,
+            item => item.Contains("clean wall graph coverage", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void WallPlacementOmissionSummary_CleanCoverageIgnoresCoveredOpeningCutoutGaps()
+    {
+        var wallLine = new LineExport(new PointExport(0, 100), new PointExport(200, 100));
+        var leftSolid = new LineExport(new PointExport(0, 100), new PointExport(60, 100));
+        var rightSolid = new LineExport(new PointExport(140, 100), new PointExport(200, 100));
+        var wall = SyntheticPlacementCoverageWall(
+            "coverage-opening-wall",
+            wallLine,
+            wallType: "Interior",
+            evidence: ["wall type interior: major wall with expected opening cutout"],
+            solidSpans:
+            [
+                SyntheticPlacementCoverageSolidSpan("coverage-opening-wall:solid:1", "coverage-opening-wall", 1, leftSolid),
+                SyntheticPlacementCoverageSolidSpan("coverage-opening-wall:solid:2", "coverage-opening-wall", 2, rightSolid)
+            ]);
+        var leftEdge = SyntheticPlacementCoverageEdge("coverage-left-solid", wall.Id, leftSolid);
+        var rightEdge = SyntheticPlacementCoverageEdge("coverage-right-solid", wall.Id, rightSolid);
+
+        var summary = WallPlacementOmissionSummary.BuildCleanCoverageSummaryFromPlacementWalls(
+            pageNumber: 1,
+            [leftEdge, rightEdge],
+            [wall]);
+
+        Assert.Equal(1, summary.TrackedMajorWallCount);
+        Assert.Equal(1, summary.FullyCoveredMajorWallCount);
+        Assert.Equal(0, summary.UnderCoveredMajorWallCount);
+        Assert.Equal(1, summary.AverageCoverageRatio, precision: 3);
     }
 
     [Theory]
@@ -3815,6 +3938,12 @@ public sealed class ExportTests
         Assert.True(pageWallPlacement.GetProperty("representedWallCount").GetInt32() >= 0);
         Assert.True(pageWallPlacement.GetProperty("placementSuppressedWallCount").GetInt32() >= 0);
         Assert.True(pageWallPlacement.GetProperty("placementReviewWallCount").GetInt32() >= 0);
+        Assert.Equal(JsonValueKind.Object, pageWallPlacement.GetProperty("cleanCoverage").ValueKind);
+        Assert.True(pageWallPlacement.GetProperty("cleanCoverage").GetProperty("trackedMajorWallCount").GetInt32() >= 0);
+        Assert.True(pageWallPlacement.GetProperty("cleanCoverage").GetProperty("underCoveredMajorWallCount").GetInt32() >= 0);
+        Assert.Equal(
+            JsonValueKind.Array,
+            pageWallPlacement.GetProperty("cleanCoverage").GetProperty("underCoveredExamples").ValueKind);
         Assert.Equal(JsonValueKind.Object, pageWallPlacement.GetProperty("omissionCounts").ValueKind);
         Assert.Equal(JsonValueKind.Array, pageWallPlacement.GetProperty("topOmissions").ValueKind);
         Assert.Equal(JsonValueKind.Array, pageWallPlacement.GetProperty("omittedWallExamples").ValueKind);
@@ -6035,7 +6164,7 @@ public sealed class ExportTests
                 "layer (unlayered) classified Dimension (0,24)",
                 "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
                 "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement",
-                "one endpoint supported by structural context"
+                "both endpoints supported by structural context"
             ]);
 
         var placementJson = PlanPlacementJsonExporter.Serialize(
@@ -14762,6 +14891,80 @@ public sealed class ExportTests
     }
 
     [Fact]
+    public void PlacementWallGraphExport_BridgesWideAxisTrustedExteriorShellGapOntoDominantRun()
+    {
+        var export = CreateSeparatedPlacementGraphGapExport(
+            includeExteriorEvidence: true,
+            componentKind: WallGraphComponentKind.MainStructural,
+            gapDrawingUnits: 13,
+            secondAxisOffsetDrawingUnits: 11.5,
+            firstLengthDrawingUnits: 142,
+            secondLengthDrawingUnits: 55);
+
+        var edge = Assert.Single(export.Edges);
+        var nodeIds = export.Nodes.Select(node => node.Id).ToArray();
+
+        Assert.Equal("gap-node-a", edge.FromNodeId);
+        Assert.Equal("gap-node-d", edge.ToNodeId);
+        Assert.Equal(210, edge.DrawingLength, precision: 3);
+        Assert.Equal(100, edge.CenterLine!.Start.Y, precision: 3);
+        Assert.Equal(100, edge.CenterLine.End.Y, precision: 3);
+        Assert.DoesNotContain("gap-node-b", nodeIds);
+        Assert.DoesNotContain("gap-node-c", nodeIds);
+        Assert.Contains(
+            edge.Evidence,
+            evidence => evidence.Contains("dominant host span", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            edge.Evidence,
+            evidence => evidence.Contains("inline run merged 2 collinear edge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PlacementWallGraphExport_DoesNotBridgeWideAxisCoveredExteriorDetailGap()
+    {
+        var export = CreateSeparatedPlacementGraphGapExport(
+            includeExteriorEvidence: true,
+            componentKind: WallGraphComponentKind.MainStructural,
+            gapDrawingUnits: 13,
+            secondAxisOffsetDrawingUnits: 11.5,
+            firstLengthDrawingUnits: 142,
+            secondLengthDrawingUnits: 55,
+            extraEvidence: ["covered-area boundary detail near exterior shell"]);
+
+        Assert.Equal(2, export.Edges.Count);
+        Assert.Contains(export.Nodes, node => node.Id == "gap-node-b");
+        Assert.Contains(export.Nodes, node => node.Id == "gap-node-c");
+        Assert.DoesNotContain(
+            export.Edges.SelectMany(edge => edge.Evidence),
+            evidence => evidence.Contains("inline run merged 2 collinear edge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void PlacementWallGraphExport_DoesNotBridgeOneSidedOutdoorContextIntoCleanWall()
+    {
+        var export = CreateSeparatedPlacementGraphGapExport(
+            includeExteriorEvidence: false,
+            componentKind: WallGraphComponentKind.MainStructural,
+            gapDrawingUnits: 13,
+            firstExtraEvidence:
+            [
+                "wall type refined exterior: detected room evidence on one side is outdoor/terrace space"
+            ],
+            secondExtraEvidence:
+            [
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body"
+            ]);
+
+        Assert.Equal(2, export.Edges.Count);
+        Assert.Contains(export.Nodes, node => node.Id == "gap-node-b");
+        Assert.Contains(export.Nodes, node => node.Id == "gap-node-c");
+        Assert.DoesNotContain(
+            export.Edges.SelectMany(edge => edge.Evidence),
+            evidence => evidence.Contains("inline run merged 2 collinear edge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void PlacementWallGraphExport_KeepsUntrustedInteriorGraphGapsSeparate()
     {
         var export = CreateSeparatedPlacementGraphGapExport(
@@ -16066,6 +16269,137 @@ public sealed class ExportTests
         });
     }
 
+    private static PlacementWallExport SyntheticPlacementCoverageWall(
+        string id,
+        LineExport centerLine,
+        string wallType,
+        IReadOnlyList<string>? evidence = null,
+        IReadOnlyList<PlacementWallSolidSpanExport>? solidSpans = null,
+        double thickness = 4,
+        double confidence = 0.9) =>
+        new(
+            id,
+            1,
+            centerLine,
+            CenterLineMillimeters: null,
+            TopologySpans: Array.Empty<PlacementWallTopologySpanExport>(),
+            OpeningCutouts: Array.Empty<PlacementWallOpeningCutoutExport>(),
+            SolidSpans: solidSpans ?? Array.Empty<PlacementWallSolidSpanExport>(),
+            Bounds: SyntheticPlacementCoverageBounds(centerLine, thickness),
+            BoundsMillimeters: null,
+            DrawingLength: SyntheticPlacementCoverageLength(centerLine),
+            LengthMeters: null,
+            ThicknessDrawingUnits: thickness,
+            ThicknessMillimeters: null,
+            DetectionKind: "PairedFaces",
+            WallType: wallType,
+            WallComponentId: null,
+            WallComponentKind: null,
+            ExcludedFromStructuralTopology: false,
+            MeasurementScaleGroupId: null,
+            MillimetersPerDrawingUnit: null,
+            Confidence: confidence,
+            FragmentEvidence: null,
+            EvidenceAssessment: null,
+            Reliability: new PlacementReliabilityExport(
+                ReadyForCoordinatePlacement: true,
+                ReadyForMetricPlacement: true,
+                RequiresReview: false,
+                Confidence: confidence,
+                Reasons: Array.Empty<string>()),
+            PlacementOmission: null,
+            WallGraphRepairCandidateIds: Array.Empty<string>(),
+            SourcePrimitiveIds: Array.Empty<string>(),
+            SourceLayers: Array.Empty<string>(),
+            Evidence: evidence ?? Array.Empty<string>());
+
+    private static PlacementWallSolidSpanExport SyntheticPlacementCoverageSolidSpan(
+        string id,
+        string wallId,
+        int sequence,
+        LineExport centerLine,
+        double thickness = 4,
+        double confidence = 0.9) =>
+        new(
+            id,
+            1,
+            wallId,
+            sequence,
+            ReadyForCoordinatePlacement: true,
+            ReadyForMetricPlacement: true,
+            RequiresReview: false,
+            ReviewReasons: Array.Empty<string>(),
+            PlacementOmissionCode: null,
+            CenterLine: centerLine,
+            CenterLineMillimeters: null,
+            BodyPolygon: Array.Empty<PointExport>(),
+            BodyPolygonMillimeters: null,
+            BodyBounds: SyntheticPlacementCoverageBounds(centerLine, thickness),
+            BodyBoundsMillimeters: null,
+            AlongVector: new VectorExport(1, 0),
+            NormalVector: new VectorExport(0, 1),
+            ThicknessDrawingUnits: thickness,
+            ThicknessMillimeters: null,
+            StartParameter: 0,
+            EndParameter: 1,
+            CenterParameter: 0.5,
+            StartOffsetDrawingUnits: 0,
+            EndOffsetDrawingUnits: SyntheticPlacementCoverageLength(centerLine),
+            CenterOffsetDrawingUnits: SyntheticPlacementCoverageLength(centerLine) / 2.0,
+            DrawingLength: SyntheticPlacementCoverageLength(centerLine),
+            LengthMeters: null,
+            AdjacentOpeningIds: Array.Empty<string>(),
+            Evidence: new[] { $"synthetic solid coverage span confidence {confidence:0.###}" });
+
+    private static PlacementWallGraphEdgeExport SyntheticPlacementCoverageEdge(
+        string id,
+        string wallId,
+        LineExport centerLine,
+        IReadOnlyList<string>? evidence = null,
+        double thickness = 4,
+        double confidence = 0.9) =>
+        new(
+            id,
+            1,
+            $"{id}-from",
+            $"{id}-to",
+            wallId,
+            WallComponentId: null,
+            WallComponentKind: null,
+            ExcludedFromStructuralTopology: false,
+            CenterLine: centerLine,
+            CenterLineMillimeters: null,
+            Bounds: SyntheticPlacementCoverageBounds(centerLine, thickness),
+            BoundsMillimeters: null,
+            DrawingLength: SyntheticPlacementCoverageLength(centerLine),
+            LengthMeters: null,
+            ThicknessDrawingUnits: thickness,
+            ThicknessMillimeters: null,
+            MillimetersPerDrawingUnit: null,
+            Confidence: confidence,
+            SourcePrimitiveIds: Array.Empty<string>(),
+            SourceLayers: Array.Empty<string>(),
+            SourceWallIds: new[] { wallId },
+            SourceWallGraphEdgeIds: new[] { id },
+            Evidence: evidence ?? Array.Empty<string>());
+
+    private static RectExport SyntheticPlacementCoverageBounds(LineExport line, double thickness)
+    {
+        var inflate = Math.Max(thickness / 2.0, 0.5);
+        var minX = Math.Min(line.Start.X, line.End.X) - inflate;
+        var minY = Math.Min(line.Start.Y, line.End.Y) - inflate;
+        var width = Math.Abs(line.End.X - line.Start.X) + inflate * 2.0;
+        var height = Math.Abs(line.End.Y - line.Start.Y) + inflate * 2.0;
+        return new RectExport(minX, minY, width, height);
+    }
+
+    private static double SyntheticPlacementCoverageLength(LineExport line)
+    {
+        var dx = line.End.X - line.Start.X;
+        var dy = line.End.Y - line.Start.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
     private static async Task<PlanScanResult> CreateScanResultAsync()
     {
         var document = new PlanDocument(
@@ -16111,18 +16445,28 @@ public sealed class ExportTests
     private static PlacementWallGraphExport CreateSeparatedPlacementGraphGapExport(
         bool includeExteriorEvidence,
         WallGraphComponentKind componentKind,
-        double gapDrawingUnits = 60)
+        double gapDrawingUnits = 60,
+        double secondAxisOffsetDrawingUnits = 0,
+        double firstLengthDrawingUnits = 100,
+        double secondLengthDrawingUnits = 80,
+        IReadOnlyList<string>? extraEvidence = null,
+        IReadOnlyList<string>? firstExtraEvidence = null,
+        IReadOnlyList<string>? secondExtraEvidence = null)
     {
         var firstStart = 20.0;
-        var firstEnd = 120.0;
+        var firstEnd = firstStart + firstLengthDrawingUnits;
         var secondStart = firstEnd + gapDrawingUnits;
-        var secondEnd = secondStart + 80.0;
+        var secondEnd = secondStart + secondLengthDrawingUnits;
+        var firstAxis = 100.0;
+        var secondAxis = firstAxis + secondAxisOffsetDrawingUnits;
+        var minAxis = Math.Min(firstAxis, secondAxis);
+        var maxAxis = Math.Max(firstAxis, secondAxis);
         var nodes = new[]
         {
-            SyntheticNode("gap-node-a", firstStart, 100, WallNodeKind.Endpoint),
-            SyntheticNode("gap-node-b", firstEnd, 100, WallNodeKind.Endpoint),
-            SyntheticNode("gap-node-c", secondStart, 100, WallNodeKind.Endpoint),
-            SyntheticNode("gap-node-d", secondEnd, 100, WallNodeKind.Endpoint)
+            SyntheticNode("gap-node-a", firstStart, firstAxis, WallNodeKind.Endpoint),
+            SyntheticNode("gap-node-b", firstEnd, firstAxis, WallNodeKind.Endpoint),
+            SyntheticNode("gap-node-c", secondStart, secondAxis, WallNodeKind.Endpoint),
+            SyntheticNode("gap-node-d", secondEnd, secondAxis, WallNodeKind.Endpoint)
         };
         var edges = new[]
         {
@@ -16133,21 +16477,30 @@ public sealed class ExportTests
             "gap-component",
             1,
             componentKind,
-            new PlanRect(firstStart - 4, 96, secondEnd - firstStart + 8, 8),
+            new PlanRect(firstStart - 4, minAxis - 4, secondEnd - firstStart + 8, maxAxis - minAxis + 8),
             edges.Select(edge => edge.WallId).ToArray(),
             nodes.Select(node => node.Id).ToArray(),
             edges.Select(edge => edge.Id).ToArray(),
             ["gap-wall-source-a", "gap-wall-source-b"],
-            180,
+            firstLengthDrawingUnits + secondLengthDrawingUnits,
             Confidence.High,
             ["synthetic separated placement graph wall run"]);
         var evidence = includeExteriorEvidence
             ? new[] { "wall type exterior: synthetic trusted exterior shell run" }
             : new[] { "synthetic interior structural run" };
+        evidence = evidence
+            .Concat(extraEvidence ?? Array.Empty<string>())
+            .ToArray();
+        var firstEvidence = evidence
+            .Concat(firstExtraEvidence ?? Array.Empty<string>())
+            .ToArray();
+        var secondEvidence = evidence
+            .Concat(secondExtraEvidence ?? Array.Empty<string>())
+            .ToArray();
         var spans = new[]
         {
-            SeparatedPlacementGraphGapSpan(edges[0], new PlanLineSegment(new PlanPoint(firstStart, 100), new PlanPoint(firstEnd, 100)), evidence),
-            SeparatedPlacementGraphGapSpan(edges[1], new PlanLineSegment(new PlanPoint(secondStart, 100), new PlanPoint(secondEnd, 100)), evidence)
+            SeparatedPlacementGraphGapSpan(edges[0], new PlanLineSegment(new PlanPoint(firstStart, firstAxis), new PlanPoint(firstEnd, firstAxis)), firstEvidence),
+            SeparatedPlacementGraphGapSpan(edges[1], new PlanLineSegment(new PlanPoint(secondStart, secondAxis), new PlanPoint(secondEnd, secondAxis)), secondEvidence)
         };
         var componentLookup = component.WallIds.ToDictionary(
             wallId => wallId,

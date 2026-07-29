@@ -11,6 +11,7 @@ public sealed record PlanOverlayWallPlacementSummary(
     int PlacementSuppressedWallCount,
     int PlacementReviewWallCount,
     PlanOverlayWallGraphResidualSummary ResidualEndpointOnHostWall,
+    PlanOverlayWallCleanCoverageSummary CleanCoverage,
     IReadOnlyDictionary<string, int> OmissionCounts,
     IReadOnlyList<PlanOverlayWallPlacementOmissionSummary> TopOmissions,
     IReadOnlyList<PlanOverlayWallPlacementOmittedWallExample> OmittedWallExamples)
@@ -102,6 +103,37 @@ public sealed record PlanOverlayWallGraphResidualSummary(
             : 0;
 }
 
+public sealed record PlanOverlayWallCleanCoverageSummary(
+    int TrackedMajorWallCount,
+    int FullyCoveredMajorWallCount,
+    int UnderCoveredMajorWallCount,
+    double AverageCoverageRatio,
+    double MinimumCoverageRatio,
+    IReadOnlyList<PlanOverlayWallCleanCoverageExample> UnderCoveredExamples)
+{
+    public static PlanOverlayWallCleanCoverageSummary Empty { get; } = new(
+        0,
+        0,
+        0,
+        0,
+        0,
+        Array.Empty<PlanOverlayWallCleanCoverageExample>());
+}
+
+public sealed record PlanOverlayWallCleanCoverageExample(
+    string WallId,
+    int PageNumber,
+    string WallType,
+    string DetectionKind,
+    double Confidence,
+    double DrawingLength,
+    double CoverageRatio,
+    double MissingLengthDrawingUnits,
+    double AxisToleranceDrawingUnits,
+    PlanRectSnapshot Bounds,
+    LineExport CenterLine,
+    IReadOnlyList<string> Evidence);
+
 public sealed record PlanOverlayWallPlacementOmittedWallExample(
     string WallId,
     int PageNumber,
@@ -121,6 +153,17 @@ public sealed record PlanOverlayWallPlacementOmittedWallExample(
 internal static class WallPlacementOmissionSummary
 {
     private const int MaxOmittedWallExampleEvidenceItems = 16;
+    private const int MaxCleanCoverageExamples = 8;
+    private const double MinMajorWallCoverageLengthDrawingUnits = 80.0;
+    private const double MinMajorWallCoverageConfidence = 0.50;
+    private const double MinMajorWallCleanCoverageRatio = 0.72;
+    private const double MinExteriorWallCleanCoverageRatio = 0.68;
+    private const double MinCleanCoverageAxisToleranceDrawingUnits = 5.0;
+    private const double MaxCleanCoverageAxisToleranceDrawingUnits = 18.0;
+    private const double MaxInteriorCleanCoverageAxisToleranceDrawingUnits = 12.0;
+    private const double MaxSkewForCleanCoverageDrawingUnits = 8.0;
+    private const double MaxSkewForCleanCoverageRatio = 0.10;
+    private const double MaxCleanCoverageIntervalMergeGapDrawingUnits = 1.0;
 
     private static readonly string[] PriorityOmissionCodes =
     [
@@ -168,6 +211,7 @@ internal static class WallPlacementOmissionSummary
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         var omissionCodes = new List<string>();
         var omittedWalls = new List<PlanOverlayWallPlacementOmittedWallExample>();
+        var cleanCoverageCandidates = new List<MajorWallCoverageCandidate>();
         var readyCount = 0;
         var representedCount = 0;
         var suppressedCount = 0;
@@ -229,6 +273,10 @@ internal static class WallPlacementOmissionSummary
             if (omission is null && reliability.ReadyForCoordinatePlacement)
             {
                 readyCount++;
+                if (IsMajorWallCleanCoverageCandidate(wall, reliability.Confidence))
+                {
+                    cleanCoverageCandidates.Add(MajorWallCoverageCandidate.From(wall, reliability.Confidence));
+                }
             }
             else if (omission is not null)
             {
@@ -258,6 +306,12 @@ internal static class WallPlacementOmissionSummary
             suppressedCount,
             Math.Max(0, omissionCodes.Count - representedCount - suppressedCount),
             ExtractResidualEndpointOnHostWallSummary(placementWallGraph, pageNumber),
+            BuildCleanCoverageSummary(
+                pageNumber,
+                placementWallGraph,
+                cleanTopologySpans,
+                cleanCoverageCandidates,
+                placementWalls),
             omissionCounts,
             topOmissions,
             TopOmittedWallExamples(omittedWalls, maxOmittedWallExamples));
@@ -282,6 +336,267 @@ internal static class WallPlacementOmissionSummary
                     maxOmittedWallExamples)
         };
     }
+
+    internal static PlanOverlayWallCleanCoverageSummary BuildCleanCoverageSummaryFromPlacementWalls(
+        int pageNumber,
+        IReadOnlyList<PlacementWallGraphEdgeExport> placementWallGraphEdges,
+        IReadOnlyList<PlacementWallExport> placementWalls) =>
+        BuildCleanCoverageSummary(
+            pageNumber,
+            CleanCoverageLine.FromGraphEdges(placementWallGraphEdges, pageNumber),
+            MajorWallCoverageCandidate.FromPlacementWalls(placementWalls, pageNumber));
+
+    private static PlanOverlayWallCleanCoverageSummary BuildCleanCoverageSummary(
+        int pageNumber,
+        PlacementWallGraphExport? placementWallGraph,
+        IReadOnlyList<WallGraphTopologySpan> cleanTopologySpans,
+        IReadOnlyList<MajorWallCoverageCandidate> fallbackCandidates,
+        IReadOnlyList<PlacementWallExport>? placementWalls)
+    {
+        var candidates = placementWalls is null
+            ? fallbackCandidates
+            : MajorWallCoverageCandidate.FromPlacementWalls(placementWalls, pageNumber);
+        var cleanLines = placementWallGraph is null
+            ? CleanCoverageLine.FromTopologySpans(cleanTopologySpans, pageNumber)
+            : CleanCoverageLine.FromGraphEdges(placementWallGraph.Edges, pageNumber);
+        return BuildCleanCoverageSummary(pageNumber, cleanLines, candidates);
+    }
+
+    private static PlanOverlayWallCleanCoverageSummary BuildCleanCoverageSummary(
+        int pageNumber,
+        IReadOnlyList<CleanCoverageLine> cleanLines,
+        IReadOnlyList<MajorWallCoverageCandidate> candidates)
+    {
+        var pageCandidates = candidates
+            .Where(candidate => candidate.PageNumber == pageNumber)
+            .Where(IsMajorWallCleanCoverageCandidate)
+            .OrderBy(candidate => candidate.WallId, StringComparer.Ordinal)
+            .ToArray();
+        if (pageCandidates.Length == 0)
+        {
+            return PlanOverlayWallCleanCoverageSummary.Empty;
+        }
+
+        var scored = pageCandidates
+            .Select(candidate => ScoreCleanCoverage(candidate, cleanLines))
+            .ToArray();
+        var underCovered = scored
+            .Where(score => score.CoverageRatio < CoverageThreshold(score.Candidate))
+            .OrderBy(score => score.CoverageRatio)
+            .ThenByDescending(score => score.Candidate.DrawingLength)
+            .ThenBy(score => score.Candidate.WallId, StringComparer.Ordinal)
+            .ToArray();
+
+        return new PlanOverlayWallCleanCoverageSummary(
+            pageCandidates.Length,
+            scored.Length - underCovered.Length,
+            underCovered.Length,
+            PlanOverlaySnapshot.Round(scored.Average(score => score.CoverageRatio)),
+            PlanOverlaySnapshot.Round(scored.Min(score => score.CoverageRatio)),
+            underCovered
+                .Take(MaxCleanCoverageExamples)
+                .Select(ToCleanCoverageExample)
+                .ToArray());
+    }
+
+    private static CleanCoverageScore ScoreCleanCoverage(
+        MajorWallCoverageCandidate candidate,
+        IReadOnlyList<CleanCoverageLine> cleanLines)
+    {
+        var candidateProjections = candidate.ExpectedCoverageLines
+            .Select(line => TryGetCoverageProjection(line, out var projection)
+                ? projection
+                : (CoverageProjection?)null)
+            .Where(projection => projection is not null)
+            .Select(projection => projection!.Value)
+            .ToArray();
+        if (candidateProjections.Length == 0)
+        {
+            return new CleanCoverageScore(candidate, 0, candidate.DrawingLength, AxisTolerance(candidate));
+        }
+
+        var tolerance = AxisTolerance(candidate);
+        var projections = new List<CoverageProjection>();
+        foreach (var line in cleanLines)
+        {
+            if (line.PageNumber == candidate.PageNumber
+                && !line.ExcludedFromStructuralTopology
+                && TryGetCoverageProjection(line.CenterLine, out var projection))
+            {
+                projections.Add(projection);
+            }
+        }
+
+        var expectedLength = 0.0;
+        var coveredLength = 0.0;
+        foreach (var candidateProjection in candidateProjections)
+        {
+            var intervals = projections
+                .Where(projection => projection.Orientation == candidateProjection.Orientation)
+                .Where(projection => Math.Abs(projection.Axis - candidateProjection.Axis) <= tolerance)
+                .Select(projection => IntervalOverlap(candidateProjection, projection))
+                .Where(interval => interval.Length > 0)
+                .OrderBy(interval => interval.Start)
+                .ThenBy(interval => interval.End)
+                .ToArray();
+            expectedLength += candidateProjection.Length;
+            coveredLength += MergedIntervalLength(intervals);
+        }
+
+        var coverageRatio = expectedLength <= 0
+            ? 0
+            : Math.Clamp(coveredLength / expectedLength, 0, 1);
+        return new CleanCoverageScore(
+            candidate,
+            coverageRatio,
+            Math.Max(0, expectedLength - coveredLength),
+            tolerance);
+    }
+
+    private static PlanOverlayWallCleanCoverageExample ToCleanCoverageExample(CleanCoverageScore score)
+    {
+        var candidate = score.Candidate;
+        var threshold = CoverageThreshold(candidate);
+        var evidence = new List<string>
+        {
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"clean wall graph coverage {score.CoverageRatio:0.###} below threshold {threshold:0.###}"),
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"missing {score.MissingLengthDrawingUnits:0.###} drawing units from major wall after final placement graph cleanup"),
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"coverage used axis tolerance {score.AxisToleranceDrawingUnits:0.###} drawing units")
+        };
+        evidence.AddRange(candidate.Evidence.Take(8));
+
+        return new PlanOverlayWallCleanCoverageExample(
+            candidate.WallId,
+            candidate.PageNumber,
+            candidate.WallType,
+            candidate.DetectionKind,
+            PlanOverlaySnapshot.Round(candidate.Confidence),
+            PlanOverlaySnapshot.Round(candidate.DrawingLength),
+            PlanOverlaySnapshot.Round(score.CoverageRatio),
+            PlanOverlaySnapshot.Round(score.MissingLengthDrawingUnits),
+            PlanOverlaySnapshot.Round(score.AxisToleranceDrawingUnits),
+            candidate.Bounds,
+            candidate.CenterLine,
+            evidence.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private static CoverageInterval IntervalOverlap(
+        CoverageProjection first,
+        CoverageProjection second)
+    {
+        var start = Math.Max(first.Start, second.Start);
+        var end = Math.Min(first.End, second.End);
+        return end > start
+            ? new CoverageInterval(start, end)
+            : CoverageInterval.Empty;
+    }
+
+    private static double MergedIntervalLength(IReadOnlyList<CoverageInterval> intervals)
+    {
+        if (intervals.Count == 0)
+        {
+            return 0;
+        }
+
+        var total = 0.0;
+        var currentStart = intervals[0].Start;
+        var currentEnd = intervals[0].End;
+        for (var index = 1; index < intervals.Count; index++)
+        {
+            var interval = intervals[index];
+            if (interval.Start <= currentEnd + MaxCleanCoverageIntervalMergeGapDrawingUnits)
+            {
+                currentEnd = Math.Max(currentEnd, interval.End);
+                continue;
+            }
+
+            total += currentEnd - currentStart;
+            currentStart = interval.Start;
+            currentEnd = interval.End;
+        }
+
+        total += currentEnd - currentStart;
+        return total;
+    }
+
+    private static bool TryGetCoverageProjection(
+        LineExport line,
+        out CoverageProjection projection)
+    {
+        var dx = line.End.X - line.Start.X;
+        var dy = line.End.Y - line.Start.Y;
+        var absDx = Math.Abs(dx);
+        var absDy = Math.Abs(dy);
+        var major = Math.Max(absDx, absDy);
+        var minor = Math.Min(absDx, absDy);
+        if (major <= 0
+            || minor > Math.Max(MaxSkewForCleanCoverageDrawingUnits, major * MaxSkewForCleanCoverageRatio))
+        {
+            projection = default;
+            return false;
+        }
+
+        var horizontal = absDx >= absDy;
+        projection = horizontal
+            ? new CoverageProjection(
+                CoverageOrientation.Horizontal,
+                (line.Start.Y + line.End.Y) / 2.0,
+                Math.Min(line.Start.X, line.End.X),
+                Math.Max(line.Start.X, line.End.X))
+            : new CoverageProjection(
+                CoverageOrientation.Vertical,
+                (line.Start.X + line.End.X) / 2.0,
+                Math.Min(line.Start.Y, line.End.Y),
+                Math.Max(line.Start.Y, line.End.Y));
+        return true;
+    }
+
+    private static bool IsMajorWallCleanCoverageCandidate(WallSegment wall, double reliabilityConfidence) =>
+        wall.DrawingLength >= MinMajorWallCoverageLengthDrawingUnits
+        && Math.Max(wall.Confidence.Value, reliabilityConfidence) >= MinMajorWallCoverageConfidence;
+
+    private static bool IsMajorWallCleanCoverageCandidate(MajorWallCoverageCandidate candidate) =>
+        candidate.DrawingLength >= MinMajorWallCoverageLengthDrawingUnits
+        && candidate.Confidence >= MinMajorWallCoverageConfidence
+        && candidate.ExpectedCoverageLines.Any(line => TryGetCoverageProjection(line, out _));
+
+    private static double AxisTolerance(MajorWallCoverageCandidate candidate)
+    {
+        var byThickness = candidate.ThicknessDrawingUnits > 0
+            ? candidate.ThicknessDrawingUnits * 2.5
+            : 0;
+        var tolerance = Math.Max(MinCleanCoverageAxisToleranceDrawingUnits, byThickness);
+        if (IsExteriorCoverageCandidate(candidate))
+        {
+            tolerance = Math.Max(tolerance, 12.0);
+        }
+        else
+        {
+            tolerance = Math.Min(tolerance, MaxInteriorCleanCoverageAxisToleranceDrawingUnits);
+        }
+
+        return Math.Clamp(
+            tolerance,
+            MinCleanCoverageAxisToleranceDrawingUnits,
+            MaxCleanCoverageAxisToleranceDrawingUnits);
+    }
+
+    private static double CoverageThreshold(MajorWallCoverageCandidate candidate) =>
+        IsExteriorCoverageCandidate(candidate)
+            ? MinExteriorWallCleanCoverageRatio
+            : MinMajorWallCleanCoverageRatio;
+
+    private static bool IsExteriorCoverageCandidate(MajorWallCoverageCandidate candidate) =>
+        candidate.WallType.Contains("Exterior", StringComparison.OrdinalIgnoreCase)
+        || candidate.Evidence.Any(item =>
+            item.Contains("wall type exterior", StringComparison.OrdinalIgnoreCase)
+            || item.Contains("exterior shell", StringComparison.OrdinalIgnoreCase));
 
     private static PlanOverlayWallGraphResidualSummary ExtractResidualEndpointOnHostWallSummary(
         PlacementWallGraphExport? placementWallGraph,
@@ -713,6 +1028,124 @@ internal static class WallPlacementOmissionSummary
                 yield return wallId;
             }
         }
+    }
+
+    private sealed record MajorWallCoverageCandidate(
+        string WallId,
+        int PageNumber,
+        string WallType,
+        string DetectionKind,
+        double Confidence,
+        double DrawingLength,
+        double ThicknessDrawingUnits,
+        PlanRectSnapshot Bounds,
+        LineExport CenterLine,
+        IReadOnlyList<LineExport> ExpectedCoverageLines,
+        IReadOnlyList<string> Evidence)
+    {
+        public static MajorWallCoverageCandidate From(WallSegment wall, double reliabilityConfidence) =>
+            new(
+                wall.Id,
+                wall.PageNumber,
+                wall.WallType.ToString(),
+                wall.DetectionKind.ToString(),
+                Math.Max(wall.Confidence.Value, reliabilityConfidence),
+                wall.DrawingLength,
+                wall.Thickness,
+                PlanRectSnapshot.From(wall.Bounds),
+                LineExport.From(wall.CenterLine),
+                [LineExport.From(wall.CenterLine)],
+                wall.Evidence);
+
+        public static IReadOnlyList<MajorWallCoverageCandidate> FromPlacementWalls(
+            IReadOnlyList<PlacementWallExport> walls,
+            int pageNumber) =>
+            walls
+                .Where(wall => wall.PageNumber == pageNumber)
+                .Where(wall => wall.PlacementOmission is null && wall.Reliability.ReadyForCoordinatePlacement)
+                .Select(wall => new MajorWallCoverageCandidate(
+                    wall.Id,
+                    wall.PageNumber,
+                    wall.WallType,
+                    wall.DetectionKind,
+                    wall.Confidence,
+                    wall.DrawingLength,
+                    wall.ThicknessDrawingUnits,
+                    PlanRectSnapshot.From(wall.Bounds),
+                    wall.CenterLine,
+                    ExpectedCoverageLinesFor(wall),
+                    wall.Evidence))
+                .ToArray();
+
+        private static IReadOnlyList<LineExport> ExpectedCoverageLinesFor(PlacementWallExport wall)
+        {
+            var solidSpanLines = wall.SolidSpans
+                .Where(span => span.ReadyForCoordinatePlacement)
+                .Where(span => span.PlacementOmissionCode is null)
+                .Where(span => span.DrawingLength > 0.001)
+                .Select(span => span.CenterLine)
+                .ToArray();
+            return solidSpanLines.Length > 0
+                ? solidSpanLines
+                : new[] { wall.CenterLine };
+        }
+    }
+
+    private sealed record CleanCoverageLine(
+        int PageNumber,
+        LineExport CenterLine,
+        bool ExcludedFromStructuralTopology)
+    {
+        public static IReadOnlyList<CleanCoverageLine> FromGraphEdges(
+            IReadOnlyList<PlacementWallGraphEdgeExport> edges,
+            int pageNumber) =>
+            edges
+                .Where(edge => edge.PageNumber == pageNumber)
+                .Where(edge => edge.CenterLine is not null)
+                .Select(edge => new CleanCoverageLine(
+                    edge.PageNumber,
+                    edge.CenterLine!,
+                    edge.ExcludedFromStructuralTopology))
+                .ToArray();
+
+        public static IReadOnlyList<CleanCoverageLine> FromTopologySpans(
+            IReadOnlyList<WallGraphTopologySpan> spans,
+            int pageNumber) =>
+            spans
+                .Where(span => span.PageNumber == pageNumber)
+                .Select(span => new CleanCoverageLine(
+                    span.PageNumber,
+                    LineExport.From(span.CenterLine),
+                    ExcludedFromStructuralTopology: false))
+                .ToArray();
+    }
+
+    private readonly record struct CleanCoverageScore(
+        MajorWallCoverageCandidate Candidate,
+        double CoverageRatio,
+        double MissingLengthDrawingUnits,
+        double AxisToleranceDrawingUnits);
+
+    private readonly record struct CoverageProjection(
+        CoverageOrientation Orientation,
+        double Axis,
+        double Start,
+        double End)
+    {
+        public double Length => Math.Max(0, End - Start);
+    }
+
+    private readonly record struct CoverageInterval(double Start, double End)
+    {
+        public static CoverageInterval Empty { get; } = new(0, 0);
+
+        public double Length => Math.Max(0, End - Start);
+    }
+
+    private enum CoverageOrientation
+    {
+        Horizontal,
+        Vertical
     }
 
     private static string OmissionLabel(string code) =>

@@ -44,6 +44,64 @@ public sealed class WallPairReconstructionTests
     }
 
     [Fact]
+    public async Task ScanAsync_PreservesParallelFacesAcrossNearCoincidentBridgeLinework()
+    {
+        var primitives = new List<PlanPrimitive>
+        {
+            UnlayeredLine("outer-face", new PlanPoint(80, 100), new PlanPoint(360, 100)),
+            UnlayeredLine("inner-face", new PlanPoint(80, 104.25), new PlanPoint(360, 104.25)),
+            UnlayeredLine("cabinet-edge-a", new PlanPoint(170, 123.8), new PlanPoint(360, 123.8)),
+            UnlayeredLine("cabinet-edge-b", new PlanPoint(170, 123.8), new PlanPoint(360, 123.8))
+        };
+        var bridgeCoordinates = new[] { 101.4, 102.0, 103.0, 105.7, 106.3 };
+        foreach (var coordinate in bridgeCoordinates)
+        {
+            for (var index = 0; index < 8; index++)
+            {
+                primitives.Add(UnlayeredLine(
+                    $"bridge-{coordinate:0.0}-{index}",
+                    new PlanPoint(80, coordinate),
+                    new PlanPoint(360, coordinate)));
+            }
+        }
+
+        var document = new PlanDocument(
+            "near-coincident-axis-bridge",
+            new[]
+            {
+                new PlanPage(1, new PlanSize(500, 280), primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            document,
+            new ScannerOptions
+            {
+                FilterCompactObjectLineworkFromWalls = false,
+                FilterDenseOrthogonalPatternsFromWalls = false,
+                FilterDenseFragmentLineworkFromWalls = false,
+                FilterDimensionLikeFragmentLineworkFromWalls = false,
+                FilterUnsupportedWallBodyLinework = false
+            });
+
+        var wall = Assert.Single(result.Walls, candidate =>
+            candidate.DetectionKind == WallDetectionKind.ParallelLinePair
+            && candidate.CenterLine.Length > 270);
+        Assert.True(
+            wall.CenterLine.Midpoint.Y is >= 101.5 and <= 103.5,
+            string.Join(
+                Environment.NewLine,
+                result.Walls.Select(candidate =>
+                    $"{candidate.Id}: y={candidate.CenterLine.Midpoint.Y:0.###}, "
+                    + $"length={candidate.CenterLine.Length:0.###}, "
+                    + $"separation={candidate.PairEvidence?.FaceSeparation:0.###}, "
+                    + $"first=[{string.Join(",", candidate.PairEvidence?.FirstFaceSourcePrimitiveIds ?? Array.Empty<string>())}], "
+                    + $"second=[{string.Join(",", candidate.PairEvidence?.SecondFaceSourcePrimitiveIds ?? Array.Empty<string>())}]")));
+        Assert.True(
+            wall.PairEvidence?.FaceSeparation >= 2.0,
+            $"Expected separated wall faces, got {wall.PairEvidence?.FaceSeparation}.");
+    }
+
+    [Fact]
     public async Task ScanAsync_LeavesUnpairedCenterlineWallsAsSingleLine()
     {
         var document = new PlanDocument(

@@ -334,6 +334,7 @@ internal sealed class RoomDetectionStage : IPipelineStage
         var added = 0;
         var approximateCount = 0;
         var wallBoundedCount = 0;
+        var resolvedOverlapCount = 0;
         var sourcePrimitiveIds = new List<string>();
 
         foreach (var candidate in candidates)
@@ -344,14 +345,6 @@ internal sealed class RoomDetectionStage : IPipelineStage
             {
                 AddRoomLimitDiagnostic(pageNumber, added, context);
                 break;
-            }
-
-            if (context.Rooms
-                .Where(room => room.PageNumber == pageNumber)
-                .Any(room => room.Bounds.Contains(candidate.AnchorPoint, context.Options.WallSnapTolerance)
-                    || OverlapRatio(candidate.EvidenceBounds, room.Bounds) > 0.55))
-            {
-                continue;
             }
 
             var boundary = TryInferSemanticRoomBoundary(
@@ -388,6 +381,17 @@ internal sealed class RoomDetectionStage : IPipelineStage
                 continue;
             }
 
+            var overlapAssessment = AssessSemanticRoomOverlap(
+                candidate,
+                roomBounds,
+                isWallBounded,
+                context.Rooms.Where(room => room.PageNumber == pageNumber),
+                context.Options.WallSnapTolerance);
+            if (overlapAssessment.Suppress)
+            {
+                continue;
+            }
+
             var key = $"semantic:{pageNumber}:{NormalizeLabel(candidate.Label.Text)}:{Math.Round(candidate.Area.Bounds.Center.X)}:{Math.Round(candidate.Area.Bounds.Center.Y)}";
             if (!seen.Add(key))
             {
@@ -407,6 +411,11 @@ internal sealed class RoomDetectionStage : IPipelineStage
             };
             evidence.AddRange(boundaryEvidence);
             evidence.AddRange(useClassification.Evidence);
+            if (overlapAssessment.DistinctOverlappingRoomIds.Count > 0)
+            {
+                evidence.Add(
+                    $"wall-bounded semantic room retained as geometrically distinct from overlapping room(s) {string.Join(",", overlapAssessment.DistinctOverlappingRoomIds)}");
+            }
 
             context.Rooms.Add(
                 new RoomRegion(
@@ -428,6 +437,7 @@ internal sealed class RoomDetectionStage : IPipelineStage
             added++;
             approximateCount += isWallBounded ? 0 : 1;
             wallBoundedCount += isWallBounded ? 1 : 0;
+            resolvedOverlapCount += overlapAssessment.DistinctOverlappingRoomIds.Count > 0 ? 1 : 0;
             sourcePrimitiveIds.AddRange(candidate.SourcePrimitiveIds);
         }
 
@@ -450,11 +460,60 @@ internal sealed class RoomDetectionStage : IPipelineStage
                 {
                     ["semanticRoomSeedCount"] = added.ToString(),
                     ["wallBoundedSeedCount"] = wallBoundedCount.ToString(),
-                    ["approximateSeedCount"] = approximateCount.ToString()
+                    ["approximateSeedCount"] = approximateCount.ToString(),
+                    ["resolvedOverlapSeedCount"] = resolvedOverlapCount.ToString()
                 });
         }
 
         return added;
+    }
+
+    private static SemanticRoomOverlapAssessment AssessSemanticRoomOverlap(
+        SemanticRoomCandidate candidate,
+        PlanRect candidateBounds,
+        bool isWallBounded,
+        IEnumerable<RoomRegion> existingRooms,
+        double tolerance)
+    {
+        var overlappingRooms = existingRooms
+            .Where(room => room.Bounds.Contains(candidate.AnchorPoint, tolerance)
+                || OverlapRatio(candidate.EvidenceBounds, room.Bounds) > 0.55)
+            .ToArray();
+        if (overlappingRooms.Length == 0)
+        {
+            return SemanticRoomOverlapAssessment.None;
+        }
+
+        var candidateSourceIds = candidate.SourcePrimitiveIds.ToHashSet(StringComparer.Ordinal);
+        if (overlappingRooms.Any(room =>
+                room.LabelSourcePrimitiveIds.Any(candidateSourceIds.Contains)
+                || (isWallBounded && AreEquivalentRoomBounds(candidateBounds, room.Bounds))))
+        {
+            return SemanticRoomOverlapAssessment.Suppressed;
+        }
+
+        if (!isWallBounded)
+        {
+            return SemanticRoomOverlapAssessment.Suppressed;
+        }
+
+        return new SemanticRoomOverlapAssessment(
+            false,
+            overlappingRooms.Select(room => room.Id).Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private static bool AreEquivalentRoomBounds(PlanRect first, PlanRect second)
+    {
+        if (first.IsEmpty || second.IsEmpty)
+        {
+            return false;
+        }
+
+        var intersectionArea = first.OverlapArea(second);
+        var smallerArea = Math.Min(first.Area, second.Area);
+        var largerArea = Math.Max(first.Area, second.Area);
+        return intersectionArea / Math.Max(1, smallerArea) >= 0.82
+            && intersectionArea / Math.Max(1, largerArea) >= 0.7;
     }
 
     private static IReadOnlyList<WallSegment> SemanticBoundaryWallCandidates(
@@ -635,7 +694,6 @@ internal sealed class RoomDetectionStage : IPipelineStage
         }
 
         var rowTolerance = Math.Max(3, MedianValue(words.Select(word => Math.Max(1, word.Bounds.Height)).DefaultIfEmpty(12)) * 0.85);
-        var gapTolerance = Math.Max(26, Math.Min(page.Size.Width, page.Size.Height) * 0.035);
         var rows = new List<List<RoomTextWord>>();
 
         foreach (var word in words)
@@ -656,6 +714,8 @@ internal sealed class RoomDetectionStage : IPipelineStage
         foreach (var row in rows.OrderBy(row => row.Average(word => word.Bounds.Center.Y)))
         {
             var ordered = row.OrderBy(word => word.Bounds.Left).ToArray();
+            var rowGlyphWidth = MedianValue(ordered.Select(EstimatedGlyphWidth).DefaultIfEmpty(2));
+            var rowGapTolerance = Math.Max(4, rowGlyphWidth * 4.0);
             var current = new List<RoomTextWord>();
             foreach (var word in ordered)
             {
@@ -663,7 +723,9 @@ internal sealed class RoomDetectionStage : IPipelineStage
                 {
                     var previous = current[^1];
                     var gap = word.Bounds.Left - previous.Bounds.Right;
-                    var localGapTolerance = Math.Max(gapTolerance, Math.Max(previous.Bounds.Width, word.Bounds.Width) * 1.8);
+                    var localGapTolerance = Math.Max(
+                        rowGapTolerance,
+                        Math.Max(EstimatedGlyphWidth(previous), EstimatedGlyphWidth(word)) * 3.0);
                     if (gap > localGapTolerance)
                     {
                         var line = BuildRoomTextLine(current);
@@ -685,6 +747,12 @@ internal sealed class RoomDetectionStage : IPipelineStage
                 yield return finalLine;
             }
         }
+    }
+
+    private static double EstimatedGlyphWidth(RoomTextWord word)
+    {
+        var glyphCount = word.Text.Count(character => !char.IsWhiteSpace(character));
+        return word.Bounds.Width / Math.Max(1, glyphCount);
     }
 
     private static RoomTextLine? BuildRoomTextLine(IReadOnlyList<RoomTextWord> words)
@@ -1807,6 +1875,17 @@ internal sealed class RoomDetectionStage : IPipelineStage
             return false;
         }
 
+        if (RoomAreaMeasurementRegex.IsMatch(trimmed))
+        {
+            return false;
+        }
+
+        var normalizedUnit = NormalizeLabel(trimmed).Replace(" ", string.Empty, StringComparison.Ordinal);
+        if (IsMeasurementUnitOnly(normalizedUnit))
+        {
+            return false;
+        }
+
         if (!trimmed.Any(char.IsLetterOrDigit))
         {
             return false;
@@ -1932,6 +2011,18 @@ internal sealed class RoomDetectionStage : IPipelineStage
                 || trimmed.Contains('x')
                 || trimmed.Contains('X'));
     }
+
+    private static bool IsMeasurementUnitOnly(string normalizedText) =>
+        normalizedText is "m"
+            or "mm"
+            or "cm"
+            or "m2"
+            or "mm2"
+            or "cm2"
+            or "sqm"
+            or "sqft"
+            or "ft"
+            or "in";
 
     private static bool LooksLikeFloorLevelText(string text)
     {
@@ -2768,6 +2859,15 @@ internal sealed class RoomDetectionStage : IPipelineStage
         PlanPoint AnchorPoint,
         double AreaSquareMeters,
         IReadOnlyList<string> SourcePrimitiveIds);
+
+    private sealed record SemanticRoomOverlapAssessment(
+        bool Suppress,
+        IReadOnlyList<string> DistinctOverlappingRoomIds)
+    {
+        public static SemanticRoomOverlapAssessment None { get; } = new(false, Array.Empty<string>());
+
+        public static SemanticRoomOverlapAssessment Suppressed { get; } = new(true, Array.Empty<string>());
+    }
 
     private sealed record RoomUseClassification(
         RoomUseKind Kind,

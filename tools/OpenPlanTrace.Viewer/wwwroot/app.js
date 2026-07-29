@@ -53,6 +53,7 @@ const supportedKvemoCropSchemaVersions = new Set([
   "openplantrace.kvemo-crops.v1"
 ]);
 const currentObjectReviewDatasetSchemaVersion = "openplantrace.object-review-dataset.v2";
+const currentWallTruthSchemaVersion = "openplantrace.wall-truth.v1";
 const viewerCleanWallMinSpanLength = 8.0;
 const viewerCleanWallMergeGap = 12.0;
 const viewerOrthogonalSkewRatio = 0.04;
@@ -80,6 +81,7 @@ const wallQaEnabledLayers = [
 
 const wallQaReviewEnabledLayers = [
   "walls",
+  "wallTruth",
   "wallTopologyReviewSpans",
   "placementIssues"
 ];
@@ -93,6 +95,7 @@ const overlayLegendItems = [
   { key: "wallComponents", label: "Wall components", stroke: "#c97c18", fill: "rgba(201, 124, 24, 0.06)", dash: "6 4" },
   { key: "rawWalls", label: "Raw detected walls", stroke: "#b82f42", fill: "rgba(184, 47, 66, 0.045)", dash: "2 3" },
   { key: "walls", label: "Placement walls", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.06)" },
+  { key: "wallTruth", label: "Reviewed wall truth", stroke: "#d31f6b", fill: "rgba(211, 31, 107, 0.08)" },
   { key: "wallBodyFootprints", label: "Wall body footprints", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.10)" },
   { key: "wallTopologySpans", label: "Clean wall spans", stroke: "#0f4fb8", fill: "rgba(15, 79, 184, 0.06)" },
   { key: "wallTopologyReviewSpans", label: "Review-only wall spans", stroke: "#a65f00", fill: "rgba(166, 95, 0, 0.035)", dash: "1 4" },
@@ -116,6 +119,7 @@ const overlayLegendItems = [
 
 const placementOverlayLayerKeys = new Set([
   "walls",
+  "wallTruth",
   "wallBodyFootprints",
   "wallTopologySpans",
   "wallTopologyReviewSpans",
@@ -155,7 +159,7 @@ function initialEnabledLayerSet() {
 
 function initialWorkspaceTab() {
   const tab = new URLSearchParams(window.location.search).get("tab");
-  return ["visualizer", "ai", "general", "pipeline", "advanced"].includes(tab) ? tab : "visualizer";
+  return ["visualizer", "ai", "general", "pipeline", "wallTruth", "advanced"].includes(tab) ? tab : "visualizer";
 }
 
 const state = {
@@ -186,6 +190,17 @@ const state = {
   benchmarkManualTargetDraft: resetBenchmarkManualTargetDraft(),
   benchmarkDrawBox: null,
   benchmarkSuppressNextOverlayClick: false,
+  wallTruth: createEmptyWallTruthDataset(),
+  wallTruthMode: "select",
+  wallTruthSelectedId: null,
+  wallTruthDraw: null,
+  wallTruthSuppressNextOverlayClick: false,
+  wallTruthSettings: {
+    wallType: "Unknown",
+    importance: "Major",
+    thicknessDrawingUnits: "",
+    reviewer: ""
+  },
   kvemo: null,
   kvemoFilters: { ...defaultKvemoFilters },
   activeWorkspaceTab: initialWorkspaceTab(),
@@ -240,6 +255,7 @@ const elements = {
   downloadObjectReviewDataset: document.querySelector("#downloadObjectReviewDataset"),
   downloadObjectCorrectionDataset: document.querySelector("#downloadObjectCorrectionDataset"),
   downloadBenchmark: document.querySelector("#downloadBenchmark"),
+  downloadWallTruth: document.querySelector("#downloadWallTruth"),
   downloadSvg: document.querySelector("#downloadSvg"),
   applyDefaultLayers: document.querySelector("#applyDefaultLayers"),
   applyWallQaLayers: document.querySelector("#applyWallQaLayers"),
@@ -272,11 +288,13 @@ const elements = {
     ai: document.querySelector("#tabAi"),
     general: document.querySelector("#tabGeneral"),
     pipeline: document.querySelector("#tabPipeline"),
+    wallTruth: document.querySelector("#tabWallTruth"),
     advanced: document.querySelector("#tabAdvanced")
   },
   aiTabDetails: document.querySelector("#aiTabDetails"),
   generalTabDetails: document.querySelector("#generalTabDetails"),
   pipelineTabDetails: document.querySelector("#pipelineTabDetails"),
+  wallTruthTabDetails: document.querySelector("#wallTruthTabDetails"),
   advancedTabDetails: document.querySelector("#advancedTabDetails")
 };
 
@@ -486,6 +504,10 @@ elements.downloadBenchmark.addEventListener("click", () => {
   downloadReviewedBenchmarkManifest();
 });
 
+elements.downloadWallTruth.addEventListener("click", () => {
+  downloadWallTruthDataset();
+});
+
 elements.downloadSvg.addEventListener("click", () => {
   if (!state.scan) {
     return;
@@ -623,6 +645,11 @@ async function loadPdfFile(file) {
   state.benchmarkManualTargetDraft = resetBenchmarkManualTargetDraft();
   state.benchmarkDrawBox = null;
   state.benchmarkSuppressNextOverlayClick = false;
+  state.wallTruth = createEmptyWallTruthDataset();
+  state.wallTruthMode = "select";
+  state.wallTruthSelectedId = null;
+  state.wallTruthDraw = null;
+  state.wallTruthSuppressNextOverlayClick = false;
   releaseKvemoObjectUrls();
   state.kvemo = null;
   state.kvemoFilters = resetKvemoFilters();
@@ -711,7 +738,7 @@ async function loadPdfAndScanJsonFiles(pdfFile, jsonFile) {
       setDiagnostics(visualSnapshotDiagnostics(state.visualSnapshot));
     } else {
       state.visualSnapshot = null;
-      state.placement = isPlacementPayload(payload) ? payload : null;
+      state.placement = placementPayloadFromViewerPayload(payload);
       state.scan = normalizeScanPayload(payload);
       state.currentPage = state.scan.pages[0]?.number ?? 1;
       state.sourceMode = state.placement ? "placement-pdf" : "pdf-json";
@@ -756,6 +783,11 @@ async function loadScanJsonFile(file) {
 
   try {
     const payload = JSON.parse(await file.text());
+    if (isWallTruthPayload(payload)) {
+      loadWallTruthPayload(payload, file.name);
+      return;
+    }
+
     if (isBenchmarkReviewSession(payload)) {
       loadBenchmarkReviewSessionPayload(payload, file.name);
       return;
@@ -1737,7 +1769,7 @@ async function loadPdfFromUrl(pdfUrl, scanUrl, benchmarkUrl, reviewSessionUrl, b
       }
 
       state.pdf = pdf;
-      state.placement = isPlacementPayload(payload) ? payload : null;
+      state.placement = placementPayloadFromViewerPayload(payload);
       state.scan = normalizeScanPayload(payload);
       state.currentPage = state.scan.pages[0]?.number ?? 1;
       state.sourceMode = state.placement ? "placement-pdf" : "pdf-json";
@@ -1806,10 +1838,10 @@ async function loadScanPayload(
   }
 
   state.pdf = null;
-  state.placement = null;
+  state.placement = placementPayloadFromViewerPayload(payload);
   state.scan = normalizeScanPayload(payload);
   state.currentPage = state.scan.pages[0]?.number ?? 1;
-  state.sourceMode = "json";
+  state.sourceMode = state.placement ? "viewer-scan" : "json";
   state.enabledSourceLayers = new Set((state.scan.layers ?? []).map((layer) => layerKey(layer.name)));
   state.compare = null;
   state.benchmarkComparison = null;
@@ -2507,8 +2539,9 @@ async function scanPdf(
     return;
   }
 
-  state.placement = null;
-  state.scan = normalizeScanPayload(await response.json());
+  const payload = await response.json();
+  state.placement = placementPayloadFromViewerPayload(payload);
+  state.scan = normalizeScanPayload(payload);
   state.enabledSourceLayers = new Set((state.scan.layers ?? []).map((layer) => layerKey(layer.name)));
   state.compare = null;
   state.benchmarkComparison = null;
@@ -3073,62 +3106,128 @@ function drawOverlay() {
   }
 
   if (state.enabledLayers.has("wallTopologyReviewSpans")) {
-    state.scan.walls.filter(onCurrentPage).forEach((wall) => {
-      if (!visibleBySourceLayer(wall)) {
-        return;
-      }
-      if (!shouldDrawWallAsReviewTopologySpan(wall)) {
+    const solvedReviewRuns = placementGraphWallEdges(state.scan)
+      .filter(onCurrentPage)
+      .filter((edge) => edge.solverRun && !wallIsPlacementReady(edge));
+    solvedReviewRuns.forEach((edge) => {
+      if (!visibleBySourceLayer(edge)) {
         return;
       }
 
-      wallReviewTopologySpans(wall).forEach((span) => {
-        if (!visibleBySourceLayer(span)) {
+      canonicalWallDrawableSpans(edge).forEach((span) => {
+        const title = [
+          `${span.id || edge.id} - canonical review wall interval`,
+          edge.wallType ? `type ${edge.wallType}` : "",
+          Number.isFinite(Number(span.drawingLength ?? edge.drawingLength))
+            ? `${formatNumber(span.drawingLength ?? edge.drawingLength)} units`
+            : "",
+          wallReliabilitySummary(edge)
+        ].filter(Boolean).join(" - ");
+        const inspection = describeItem("canonical review wall interval", {
+          ...span,
+          logicalWallRunId: edge.id,
+          wallType: edge.wallType,
+          sourceWallIds: edge.sourceWallIds ?? [],
+          reliability: edge.reliability ?? null
+        });
+        addLine(
+          span.centerLine,
+          "wall wall-topology-span-review-only wall-halo",
+          "",
+          1);
+        addLine(
+          span.centerLine,
+          "wall wall-topology-span-review-only",
+          title,
+          confidence(edge.confidence),
+          inspection);
+      });
+    });
+
+    if (!solvedReviewRuns.length) {
+      state.scan.walls.filter(onCurrentPage).forEach((wall) => {
+        if (!visibleBySourceLayer(wall)) {
+          return;
+        }
+        if (!shouldDrawWallAsReviewTopologySpan(wall)) {
           return;
         }
 
-        const className = `${wallTopologySpanClassName(wall)} wall-topology-span-review-only`;
-        const title = [
-          `${span.id} - review span for ${wall.id}`,
-          wall.wallType ? `type ${wall.wallType}` : "",
-          span.wallGraphEdgeId ? `edge ${span.wallGraphEdgeId}` : "",
-          Number.isFinite(Number(span.drawingLength)) ? `${formatNumber(span.drawingLength)} units` : "",
-          wallReliabilitySummary(wall)
-        ].filter(Boolean).join(" - ");
-        const inspection = describeItem("review wall topology span", {
-          ...span,
-          sourceWallId: wall.id,
-          sourceWallType: wall.wallType,
-          sourceWallComponentKind: wall.wallComponentKind,
-          sourceWallReliability: wall.reliability ?? null,
-          sourceWallEvidenceAssessment: wall.evidenceAssessment ?? null
+        wallReviewTopologySpans(wall).forEach((span) => {
+          if (!visibleBySourceLayer(span)) {
+            return;
+          }
+
+          const className = `${wallTopologySpanClassName(wall)} wall-topology-span-review-only`;
+          const title = [
+            `${span.id} - review span for ${wall.id}`,
+            wall.wallType ? `type ${wall.wallType}` : "",
+            span.wallGraphEdgeId ? `edge ${span.wallGraphEdgeId}` : "",
+            Number.isFinite(Number(span.drawingLength)) ? `${formatNumber(span.drawingLength)} units` : "",
+            wallReliabilitySummary(wall)
+          ].filter(Boolean).join(" - ");
+          const inspection = describeItem("review wall topology span", {
+            ...span,
+            sourceWallId: wall.id,
+            sourceWallType: wall.wallType,
+            sourceWallComponentKind: wall.wallComponentKind,
+            sourceWallReliability: wall.reliability ?? null,
+            sourceWallEvidenceAssessment: wall.evidenceAssessment ?? null
+          });
+          addLine(span.centerLine, `${className} wall-topology-span-halo`, "", 1);
+          addLine(span.centerLine, className, title, confidence(span.confidence ?? wall.confidence), inspection);
         });
-        addLine(span.centerLine, `${className} wall-topology-span-halo`, "", 1);
-        addLine(span.centerLine, className, title, confidence(span.confidence ?? wall.confidence), inspection);
       });
-    });
+    }
   }
 
   if (state.enabledLayers.has("walls")) {
-    const graphEdges = placementGraphWallEdges(state.scan).filter(onCurrentPage);
-    if (graphEdges.length) {
+    const allGraphEdges = placementGraphWallEdges(state.scan).filter(onCurrentPage);
+    const graphEdges = allGraphEdges.filter(wallIsPlacementReady);
+    if (allGraphEdges.length) {
       graphEdges.forEach((edge) => {
         if (!visibleBySourceLayer(edge)) {
           return;
         }
 
-        const title = [
-          `${edge.id} - placement graph edge`,
-          edge.wallType ? `type ${edge.wallType}` : "",
-          edge.wallComponentKind ? `component ${edge.wallComponentKind}` : "",
-          edge.wallId ? `source wall ${edge.wallId}` : "",
-          Number.isFinite(Number(edge.drawingLength)) ? `${formatNumber(edge.drawingLength)} units` : "",
-          edge.confidence == null ? "" : `confidence ${formatNumber(edge.confidence)}`
-        ].filter(Boolean).join(" - ");
-        const inspection = describeItem("placement wall graph edge", edge);
         const className = placementGraphWallEdgeClassName(edge);
-        addLine(edge.centerLine, `${className} wall-halo`, "", 1);
-        addLine(edge.centerLine, className, title, confidence(edge.confidence), inspection);
-        addLine(edge.centerLine, "wall-hit-target", title, 1, inspection);
+        canonicalWallDrawableSpans(edge).forEach((span) => {
+          const title = [
+            `${span.id || edge.id} - ${edge.solverRun ? "canonical solid wall interval" : "placement graph edge"}`,
+            edge.solverRun && span.id ? `logical wall ${edge.id}` : "",
+            edge.wallType ? `type ${edge.wallType}` : "",
+            edge.wallComponentKind ? `component ${edge.wallComponentKind}` : "",
+            edge.wallId ? `source wall ${edge.wallId}` : "",
+            edge.reconciliation?.status
+              ? `reconciliation ${edge.reconciliation.status}`
+              : "",
+            Array.isArray(edge.reconciliation?.actions)
+              ? edge.reconciliation.actions.join(", ")
+              : "",
+            Number.isFinite(Number(span.drawingLength ?? edge.drawingLength))
+              ? `${formatNumber(span.drawingLength ?? edge.drawingLength)} units`
+              : "",
+            edge.confidence == null ? "" : `confidence ${formatNumber(edge.confidence)}`
+          ].filter(Boolean).join(" - ");
+          const inspection = describeItem(
+            edge.solverRun ? "canonical solid wall interval" : "placement wall graph edge",
+            edge.solverRun
+              ? {
+                ...span,
+                logicalWallRunId: edge.id,
+                wallType: edge.wallType,
+                logicalDrawingLength: edge.drawingLength,
+                solidDrawingLength: edge.solidDrawingLength,
+                openingDrawingLength: edge.openingDrawingLength,
+                openingIntervals: edge.openingIntervals ?? [],
+                inlineJunctions: edge.inlineJunctions ?? [],
+                sourceWallIds: edge.sourceWallIds ?? []
+              }
+              : edge);
+          addLine(span.centerLine, `${className} wall-halo`, "", 1);
+          addLine(span.centerLine, className, title, confidence(edge.confidence), inspection);
+          addLine(span.centerLine, "wall-hit-target", title, 1, inspection);
+        });
       });
     } else {
       state.scan.walls.filter(onCurrentPage).forEach((wall) => {
@@ -3233,6 +3332,8 @@ function drawOverlay() {
   drawCompareOverlay(page);
   drawBenchmarkTargets(page);
   drawManualBenchmarkTargetDraft(page);
+  drawWallTruthOverlay(page);
+  drawWallTruthDraft(page);
 }
 
 function shouldDrawWallInStructuralLayer(wall) {
@@ -3750,6 +3851,107 @@ function drawManualBenchmarkTargetDraft(page) {
     });
 }
 
+function drawWallTruthOverlay(page) {
+  if (!state.enabledLayers.has("wallTruth")) {
+    return;
+  }
+
+  (state.wallTruth?.entries ?? [])
+    .filter((entry) => entry.pageNumber === page.number)
+    .forEach((entry) => {
+      const selected = entry.id === state.wallTruthSelectedId;
+      const className = [
+        "wall-truth",
+        entry.labelKind === "Wall" ? "wall-truth-wall" : "wall-truth-not-wall",
+        selected ? "selected" : ""
+      ].filter(Boolean).join(" ");
+      const title = [
+        entry.id,
+        entry.labelKind,
+        entry.wallType,
+        entry.importance,
+        entry.centerLine ? formatWallTruthLine(entry.centerLine) : ""
+      ].filter(Boolean).join(" - ");
+      if (entry.centerLine) {
+        addWallTruthLine(entry.centerLine, `${className} wall-truth-halo`, "", entry, false);
+        addWallTruthLine(entry.centerLine, className, title, entry, true);
+        if (selected) {
+          addCircle(entry.centerLine.start, 2.3, "wall-truth-endpoint", `${entry.id} start`, 1);
+          addCircle(entry.centerLine.end, 2.3, "wall-truth-endpoint", `${entry.id} end`, 1);
+        }
+      } else if (entry.bounds) {
+        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        rect.setAttribute("x", entry.bounds.x);
+        rect.setAttribute("y", entry.bounds.y);
+        rect.setAttribute("width", Math.max(0, entry.bounds.width));
+        rect.setAttribute("height", Math.max(0, entry.bounds.height));
+        rect.setAttribute("class", className);
+        addTitle(rect, title);
+        attachWallTruthInspection(rect, entry);
+        elements.overlay.appendChild(rect);
+      }
+    });
+}
+
+function drawWallTruthDraft(page) {
+  const draw = state.wallTruthDraw;
+  if (!draw || draw.pageNumber !== page.number || !draw.current) {
+    return;
+  }
+
+  if (draw.mode === "notWallRegion") {
+    const bounds = normalizeManualBounds(draw.start, draw.current);
+    if (bounds) {
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", bounds.x);
+      rect.setAttribute("y", bounds.y);
+      rect.setAttribute("width", bounds.width);
+      rect.setAttribute("height", bounds.height);
+      rect.setAttribute("class", "wall-truth-draft wall-truth-draft-region");
+      elements.overlay.appendChild(rect);
+    }
+    return;
+  }
+
+  addWallTruthLine(
+    { start: draw.start, end: draw.current },
+    `wall-truth-draft ${draw.mode === "wall" ? "wall-truth-wall" : "wall-truth-not-wall"}`,
+    "Wall truth draft",
+    null,
+    false);
+}
+
+function addWallTruthLine(line, className, title, entry, interactive) {
+  if (!line?.start || !line?.end) {
+    return;
+  }
+
+  const element = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  element.setAttribute("x1", line.start.x);
+  element.setAttribute("y1", line.start.y);
+  element.setAttribute("x2", line.end.x);
+  element.setAttribute("y2", line.end.y);
+  element.setAttribute("class", className);
+  if (title) {
+    addTitle(element, title);
+  }
+  if (interactive && entry) {
+    attachWallTruthInspection(element, entry);
+  }
+  elements.overlay.appendChild(element);
+}
+
+function attachWallTruthInspection(element, entry) {
+  element.addEventListener("click", (event) => {
+    event.stopPropagation();
+    state.wallTruthSelectedId = entry.id;
+    state.selectedItem = describeWallTruthEntry(entry);
+    setSelection(state.selectedItem);
+    renderWallTruthTabDetails();
+    drawOverlay();
+  });
+}
+
 function benchmarkDetectorShortLabel(label) {
   return String(label || "Target")
     .replace(/\s+targets?$/i, "")
@@ -3973,6 +4175,27 @@ function attachInspection(element, item) {
 }
 
 elements.overlay.addEventListener("mousedown", (event) => {
+  if (event.button === 0 && state.scan && state.wallTruthMode !== "select") {
+    const point = overlayPointFromEvent(event);
+    if (!point) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    syncWallTruthDocumentContext();
+    state.wallTruthDraw = {
+      mode: state.wallTruthMode,
+      start: point,
+      current: point,
+      pageNumber: state.currentPage
+    };
+    state.enabledLayers.add("wallTruth");
+    syncLayerControls();
+    drawOverlay();
+    return;
+  }
+
   if (!state.benchmarkManifest || !state.benchmarkManualTargetDraft?.drawing) {
     return;
   }
@@ -3996,6 +4219,17 @@ elements.overlay.addEventListener("mousemove", (event) => {
   const point = overlayPointFromEvent(event);
   setCursorCoordinates(point);
 
+  if (state.wallTruthDraw) {
+    if (!point) {
+      return;
+    }
+
+    event.preventDefault();
+    state.wallTruthDraw.current = point;
+    drawOverlay();
+    return;
+  }
+
   if (!state.benchmarkDrawBox || !state.benchmarkManualTargetDraft?.drawing) {
     return;
   }
@@ -4015,6 +4249,18 @@ elements.overlay.addEventListener("mouseleave", () => {
 });
 
 elements.overlay.addEventListener("mouseup", (event) => {
+  if (state.wallTruthDraw) {
+    const point = overlayPointFromEvent(event) ?? state.wallTruthDraw.current;
+    const entry = addWallTruthEntryFromDraw(state.wallTruthDraw, point);
+    state.wallTruthDraw = null;
+    state.wallTruthSuppressNextOverlayClick = true;
+    drawOverlay();
+    refreshWorkspaceTabs();
+    updateNavigation();
+    setStatus(entry ? `Added ${entry.id}` : "Wall truth mark was too small");
+    return;
+  }
+
   if (!state.benchmarkDrawBox || !state.benchmarkManualTargetDraft?.drawing) {
     return;
   }
@@ -4033,6 +4279,11 @@ elements.overlay.addEventListener("mouseup", (event) => {
 });
 
 elements.overlay.addEventListener("click", () => {
+  if (state.wallTruthSuppressNextOverlayClick) {
+    state.wallTruthSuppressNextOverlayClick = false;
+    return;
+  }
+
   if (state.benchmarkSuppressNextOverlayClick) {
     state.benchmarkSuppressNextOverlayClick = false;
     return;
@@ -4477,15 +4728,28 @@ function placementGraphWallEdges(scan = state.scan) {
     .filter((edge) => edge.excludedFromStructuralTopology !== true)
     .map((edge) => {
       const sourceWall = wallsById.get(String(edge.wallId || ""));
+      const sourceEvidenceAssessment = edge.solverRun
+        ? null
+        : sourceWall?.evidenceAssessment ?? null;
       return {
         ...edge,
-        wallType: sourceWall?.wallType || wallTypeFromGraphEvidence(edge),
+        wallType: edge.wallType || sourceWall?.wallType || wallTypeFromGraphEvidence(edge),
         wallComponentKind: edge.wallComponentKind || sourceWall?.wallComponentKind || "",
-        evidenceAssessment: sourceWall?.evidenceAssessment ?? null,
-        reliability: sourceWall?.reliability ?? null,
+        evidenceAssessment: edge.evidenceAssessment ?? sourceEvidenceAssessment,
+        reliability: edge.reliability ?? sourceWall?.reliability ?? null,
         sourceWall
       };
     });
+}
+
+function canonicalWallDrawableSpans(edge) {
+  if (!edge?.solverRun || !Array.isArray(edge.solidIntervals)) {
+    return [edge];
+  }
+
+  const solidIntervals = edge.solidIntervals
+    .filter((interval) => interval?.centerLine?.start && interval?.centerLine?.end);
+  return solidIntervals.length ? solidIntervals : [edge];
 }
 
 function placementGraphWallEdgeClassName(edge) {
@@ -4505,6 +4769,12 @@ function placementGraphWallEdgeClassName(edge) {
       break;
     default:
       break;
+  }
+
+  if (wallCoordinateBlocked(edge)) {
+    classes.push("wall-blocked");
+  } else if (wallRequiresReliabilityReview(edge)) {
+    classes.push("wall-review");
   }
 
   return classes.join(" ");
@@ -7823,7 +8093,394 @@ function refreshWorkspaceTabs() {
   renderAiTabDetails();
   renderGeneralTabDetails();
   renderPipelineTabDetails();
+  renderWallTruthTabDetails();
   renderAdvancedTabDetails();
+}
+
+function renderWallTruthTabDetails() {
+  const container = elements.wallTruthTabDetails;
+  if (!container) {
+    return;
+  }
+
+  syncWallTruthDocumentContext();
+  container.replaceChildren();
+
+  const header = document.createElement("section");
+  header.className = "wall-truth-header";
+  const title = document.createElement("div");
+  const heading = document.createElement("h2");
+  heading.textContent = "Reviewed Wall Geometry";
+  const meta = document.createElement("span");
+  const entries = state.wallTruth?.entries ?? [];
+  const wallCount = entries.filter((entry) => entry.labelKind === "Wall").length;
+  const notWallCount = entries.length - wallCount;
+  meta.textContent = `${entries.length} entries / ${wallCount} walls / ${notWallCount} not-wall`;
+  title.append(heading, meta);
+
+  const identity = document.createElement("span");
+  const identityState = wallTruthIdentityState();
+  identity.className = `wall-truth-status ${identityState.kind}`;
+  identity.textContent = identityState.label;
+  header.append(title, identity);
+
+  const toolbar = document.createElement("section");
+  toolbar.className = "wall-truth-toolbar";
+
+  const modes = document.createElement("div");
+  modes.className = "wall-truth-mode-control";
+  [
+    ["select", "Select"],
+    ["wall", "Wall"],
+    ["notWallLine", "Not-wall line"],
+    ["notWallRegion", "Not-wall region"]
+  ].forEach(([mode, label]) => {
+    const button = renderWallTruthButton(label, () => {
+      state.wallTruthMode = mode;
+      state.wallTruthDraw = null;
+      renderWallTruthTabDetails();
+      drawOverlay();
+    });
+    button.classList.toggle("active", state.wallTruthMode === mode);
+    modes.appendChild(button);
+  });
+
+  const controls = document.createElement("div");
+  controls.className = "wall-truth-controls";
+  controls.append(
+    renderWallTruthSelect(
+      "Wall type",
+      state.wallTruthSettings.wallType,
+      ["Unknown", "Exterior", "Interior"],
+      (value) => {
+        state.wallTruthSettings.wallType = value;
+      }),
+    renderWallTruthSelect(
+      "Importance",
+      state.wallTruthSettings.importance,
+      ["Minor", "Standard", "Major", "Critical"],
+      (value) => {
+        state.wallTruthSettings.importance = value;
+      }),
+    renderWallTruthInput(
+      "Thickness",
+      state.wallTruthSettings.thicknessDrawingUnits,
+      "number",
+      (value) => {
+        state.wallTruthSettings.thicknessDrawingUnits = value;
+      },
+      { min: "0.01", step: "0.1", placeholder: "optional" }),
+    renderWallTruthInput(
+      "Reviewer",
+      state.wallTruthSettings.reviewer,
+      "text",
+      (value) => {
+        state.wallTruthSettings.reviewer = value;
+      },
+      { placeholder: "name" })
+  );
+
+  const actions = document.createElement("div");
+  actions.className = "wall-truth-actions";
+  const trace = renderWallTruthButton("Open Visualizer", () => {
+    state.enabledLayers.add("wallTruth");
+    syncLayerControls();
+    setWorkspaceTab("visualizer");
+    drawOverlay();
+    setStatus(`Wall truth mode: ${wallTruthModeLabel(state.wallTruthMode)}`);
+  });
+  trace.disabled = !state.scan;
+  const undo = renderWallTruthButton("Undo", () => {
+    const removed = state.wallTruth.entries.pop();
+    if (removed?.id === state.wallTruthSelectedId) {
+      state.wallTruthSelectedId = null;
+      state.selectedItem = null;
+      setSelection();
+    }
+    renderWallTruthTabDetails();
+    drawOverlay();
+    updateNavigation();
+  });
+  undo.disabled = entries.length === 0;
+  const remove = renderWallTruthButton("Delete", deleteSelectedWallTruthEntry);
+  remove.classList.add("danger");
+  remove.disabled = !state.wallTruthSelectedId;
+  const clearPage = renderWallTruthButton("Clear Page", clearCurrentWallTruthPage);
+  clearPage.disabled = !entries.some((entry) => entry.pageNumber === state.currentPage);
+  const download = renderWallTruthButton("Download JSON", downloadWallTruthDataset);
+  download.disabled = !state.scan && entries.length === 0;
+  const benchmark = renderWallTruthButton("Download Benchmark", downloadWallTruthBenchmark);
+  benchmark.disabled = wallCount === 0;
+  actions.append(trace, undo, remove, clearPage, download, benchmark);
+
+  const completeLabel = document.createElement("label");
+  completeLabel.className = "wall-truth-complete";
+  const complete = document.createElement("input");
+  complete.type = "checkbox";
+  complete.checked = Boolean(state.wallTruth.completeTruthSet);
+  complete.addEventListener("change", () => {
+    state.wallTruth.completeTruthSet = complete.checked;
+    renderWallTruthTabDetails();
+  });
+  completeLabel.append(complete, document.createTextNode(" Complete wall truth set"));
+
+  toolbar.append(modes, controls, actions, completeLabel);
+
+  const summary = document.createElement("section");
+  summary.className = "wall-truth-summary";
+  summary.append(
+    renderTabCard("Dataset", [
+      ["Schema", state.wallTruth.schemaVersion],
+      ["Document", state.wallTruth.documentId || "-"],
+      ["Pages", state.wallTruth.pages?.length ?? 0],
+      ["Complete", state.wallTruth.completeTruthSet ? "Yes" : "No"]
+    ]),
+    renderTabCard("Reviewed geometry", [
+      ["Walls", wallCount],
+      ["Exterior", entries.filter((entry) => entry.wallType === "Exterior").length],
+      ["Interior", entries.filter((entry) => entry.wallType === "Interior").length],
+      ["Not-wall", notWallCount]
+    ]),
+    renderTabCard("Current page", [
+      ["Page", state.currentPage || "-"],
+      ["Entries", entries.filter((entry) => entry.pageNumber === state.currentPage).length],
+      ["Mode", wallTruthModeLabel(state.wallTruthMode)],
+      ["Selected", state.wallTruthSelectedId || "-"]
+    ])
+  );
+
+  const gates = document.createElement("section");
+  gates.className = "wall-truth-gates";
+  const gateTitle = document.createElement("h3");
+  gateTitle.textContent = "Quality Gates";
+  const gateControls = document.createElement("div");
+  gateControls.className = "wall-truth-gate-grid";
+  [
+    ["Recall", "minRecall", 0.01],
+    ["Precision", "minPrecision", 0.01],
+    ["Length recall", "minLengthWeightedRecall", 0.01],
+    ["Major recall", "minMajorWallRecall", 0.01],
+    ["Exterior recall", "minExteriorWallRecall", 0.01],
+    ["Type accuracy", "minWallTypeAccuracy", 0.01],
+    ["Line distance", "maxMeanLineDistance", 0.1],
+    ["Endpoint distance", "maxMeanEndpointDistance", 0.1]
+  ].forEach(([label, key, step]) => {
+    gateControls.appendChild(renderWallTruthInput(
+      label,
+      state.wallTruth.qualityGate[key],
+      "number",
+      (value) => {
+        const number = Number(value);
+        if (Number.isFinite(number) && number >= 0) {
+          state.wallTruth.qualityGate[key] = number;
+        }
+      },
+      { min: "0", step: String(step) }));
+  });
+  gates.append(gateTitle, gateControls);
+
+  const entrySection = document.createElement("section");
+  entrySection.className = "wall-truth-entry-section";
+  const entryHeader = document.createElement("h3");
+  entryHeader.textContent = "Entries";
+  const entryList = document.createElement("div");
+  entryList.className = "wall-truth-entry-list";
+  entries
+    .slice()
+    .sort((first, second) =>
+      first.pageNumber - second.pageNumber
+      || String(first.id).localeCompare(String(second.id)))
+    .forEach((entry) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = [
+        "wall-truth-entry",
+        entry.labelKind === "Wall" ? "wall" : "not-wall",
+        entry.id === state.wallTruthSelectedId ? "selected" : ""
+      ].filter(Boolean).join(" ");
+      const rowTitle = document.createElement("strong");
+      rowTitle.textContent = entry.id;
+      const rowKind = document.createElement("span");
+      rowKind.textContent = [
+        `p${entry.pageNumber}`,
+        entry.labelKind,
+        entry.wallType,
+        entry.importance
+      ].filter(Boolean).join(" / ");
+      const coordinates = document.createElement("small");
+      coordinates.textContent = entry.centerLine
+        ? formatWallTruthLine(entry.centerLine)
+        : formatRectCoordinates(entry.bounds, 3);
+      row.append(rowTitle, rowKind, coordinates);
+      row.addEventListener("click", async () => {
+        state.wallTruthSelectedId = entry.id;
+        state.selectedItem = describeWallTruthEntry(entry);
+        state.currentPage = entry.pageNumber;
+        setSelection(state.selectedItem);
+        await renderCurrentPage();
+        renderWallTruthTabDetails();
+      });
+      entryList.appendChild(row);
+    });
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "wall-truth-empty";
+    empty.textContent = "No reviewed geometry";
+    entryList.appendChild(empty);
+  }
+  entrySection.append(entryHeader, entryList);
+
+  container.append(header, toolbar, summary, gates, entrySection);
+}
+
+function renderWallTruthButton(label, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function renderWallTruthSelect(label, value, options, onChange) {
+  const wrapper = document.createElement("label");
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  const select = document.createElement("select");
+  options.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = option;
+    item.textContent = option;
+    select.appendChild(item);
+  });
+  select.value = value;
+  select.addEventListener("change", () => onChange(select.value));
+  wrapper.append(caption, select);
+  return wrapper;
+}
+
+function renderWallTruthInput(label, value, type, onChange, attributes = {}) {
+  const wrapper = document.createElement("label");
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  const input = document.createElement("input");
+  input.type = type;
+  input.value = value ?? "";
+  Object.entries(attributes).forEach(([key, attributeValue]) => {
+    input.setAttribute(key, attributeValue);
+  });
+  input.addEventListener("change", () => onChange(input.value));
+  wrapper.append(caption, input);
+  return wrapper;
+}
+
+function wallTruthModeLabel(mode) {
+  return {
+    select: "Select",
+    wall: "Wall",
+    notWallLine: "Not-wall line",
+    notWallRegion: "Not-wall region"
+  }[mode] || "Select";
+}
+
+function wallTruthIdentityState() {
+  if (!state.scan) {
+    return { kind: "idle", label: "No plan loaded" };
+  }
+  const expectedId = state.placement?.document?.id ?? state.scan.documentId;
+  const idMatches = !state.wallTruth.documentId
+    || !expectedId
+    || state.wallTruth.documentId === expectedId;
+  const pageByNumber = new Map(
+    state.scan.pages.map((page) => [page.number ?? page.pageNumber, page]));
+  const pageMatches = !(state.wallTruth.pages ?? []).some((truthPage) => {
+    const page = pageByNumber.get(truthPage.pageNumber);
+    return !page
+      || Math.abs(page.width - truthPage.width) > Math.max(0.01, page.width * 0.000001)
+      || Math.abs(page.height - truthPage.height) > Math.max(0.01, page.height * 0.000001);
+  });
+  return idMatches && pageMatches
+    ? { kind: "ready", label: "Plan match" }
+    : { kind: "error", label: "Plan mismatch" };
+}
+
+function deleteSelectedWallTruthEntry() {
+  if (!state.wallTruthSelectedId) {
+    return;
+  }
+  state.wallTruth.entries = state.wallTruth.entries
+    .filter((entry) => entry.id !== state.wallTruthSelectedId);
+  state.wallTruthSelectedId = null;
+  state.selectedItem = null;
+  setSelection();
+  renderWallTruthTabDetails();
+  drawOverlay();
+  updateNavigation();
+}
+
+function clearCurrentWallTruthPage() {
+  const pageEntries = state.wallTruth.entries
+    .filter((entry) => entry.pageNumber === state.currentPage);
+  if (!pageEntries.length
+    || !window.confirm(`Remove ${pageEntries.length} wall truth entr${pageEntries.length === 1 ? "y" : "ies"} from page ${state.currentPage}?`)) {
+    return;
+  }
+  state.wallTruth.entries = state.wallTruth.entries
+    .filter((entry) => entry.pageNumber !== state.currentPage);
+  state.wallTruthSelectedId = null;
+  state.selectedItem = null;
+  setSelection();
+  renderWallTruthTabDetails();
+  drawOverlay();
+  updateNavigation();
+}
+
+function downloadWallTruthBenchmark() {
+  const dataset = wallTruthDatasetForExport();
+  const targets = dataset.entries
+    .filter((entry) => entry.labelKind === "Wall" && entry.centerLine)
+    .map((entry) => ({
+      id: entry.id,
+      pageNumber: entry.pageNumber,
+      bounds: entry.bounds ?? wallTruthLineBounds(entry.centerLine, entry.thicknessDrawingUnits),
+      centerLine: entry.centerLine,
+      maxLineDistance: entry.maxLineDistance,
+      maxEndpointDistance: entry.maxEndpointDistance,
+      maxAngularDifferenceDegrees: entry.maxAngularDifferenceDegrees,
+      minLengthOverlapRatio: entry.minLengthOverlapRatio,
+      wallType: entry.wallType,
+      label: entry.label,
+      evidence: entry.evidence
+    }));
+  const manifest = {
+    schemaVersion: "openplantrace.benchmark-manifest.v1",
+    name: dataset.name || "Reviewed wall truth benchmark",
+    fixtures: [
+      {
+        id: "reviewed-wall-truth",
+        name: dataset.name,
+        sourcePath: state.placement?.document?.sourcePath
+          ?? state.placement?.document?.sourceName
+          ?? dataset.sourceName
+          ?? "replace-with-source-plan.pdf",
+        expectations: {
+          wallMetrics: {
+            targets,
+            minRecall: dataset.qualityGate.minRecall,
+            minPrecision: dataset.completeTruthSet ? dataset.qualityGate.minPrecision : null,
+            completeTruthSet: dataset.completeTruthSet
+          }
+        },
+        properties: {
+          wallTruthSchemaVersion: currentWallTruthSchemaVersion,
+          wallTruthVersion: dataset.version || "",
+          sourceFingerprint: dataset.sourceFingerprint || ""
+        }
+      }
+    ]
+  };
+  downloadBlob(
+    new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }),
+    `${safeDocumentName()}-wall-truth-benchmark.json`);
 }
 
 function renderAiTabDetails() {
@@ -8223,6 +8880,104 @@ function renderGeneralTabDetails() {
       ["Calibration", state.placement.qualityGate.hasReliableCalibration ? "Reliable" : "Unreliable"]
     ], true));
   }
+
+  const wallSolutions = scan?.wallSolutions ?? state.placement?.wallSolutions;
+  if (wallSolutions) {
+    const selectedHypothesis = (wallSolutions.hypotheses ?? [])
+      .find((hypothesis) => hypothesis.selected)
+      ?? (wallSolutions.hypotheses ?? [])
+        .find((hypothesis) => hypothesis.id === wallSolutions.selectedHypothesisId)
+      ?? null;
+    const metrics = selectedHypothesis?.metrics ?? {};
+    const reconciliation = wallSolutions.reconciliation ?? {};
+    const topology = wallSolutions.topology ?? {};
+    const selectedCount = Number(wallSolutions.selectedCandidateCount) || 0;
+    const runCount = Number(wallSolutions.selectedWallRunCount) || 0;
+    const solvedRuns = Array.isArray(wallSolutions.selectedWallRuns)
+      ? wallSolutions.selectedWallRuns
+      : [];
+    const openingIntervals = solvedRuns.flatMap((run) => run.openingIntervals ?? []);
+    const solidIntervals = solvedRuns.flatMap((run) => run.solidIntervals ?? []);
+    const openingHostCount = solvedRuns
+      .filter((run) => (run.openingIntervals?.length ?? 0) > 0)
+      .length;
+    const reconstructedGapCount = solvedRuns
+      .reduce((sum, run) => sum + (Number(run.reconstructedOpeningGapCount) || 0), 0);
+    const logicalLength = solvedRuns
+      .reduce((sum, run) => sum + (Number(run.drawingLength) || 0), 0);
+    const solidLength = solvedRuns
+      .reduce((sum, run) => sum + (Number(run.solidDrawingLength) || 0), 0);
+    const compaction = selectedCount > 0
+      ? 1 - Math.min(1, runCount / selectedCount)
+      : 0;
+    container.append(
+      renderTabCard("Global wall solution", [
+        ["Solver", wallSolutions.solverVersion || "-"],
+        ["Selected profile", wallSolutions.selectedProfile || "-"],
+        ["Objective", formatNumber(wallSolutions.selectedScore, 3)],
+        ["Candidate pool", wallSolutions.candidateCount ?? 0],
+        ["Selected candidates", selectedCount],
+        ["Canonical runs", runCount],
+        ["Compaction", formatPercent(compaction)],
+        ["Iterations", wallSolutions.iterationCount ?? 0]
+      ]),
+      renderTabCard("Opening-aware walls", [
+        ["Logical opening hosts", openingHostCount],
+        ["Opening intervals", openingIntervals.length],
+        ["Solid intervals", solidIntervals.length],
+        ["Reconstructed gaps", reconstructedGapCount],
+        ["Logical length", formatNumber(logicalLength)],
+        ["Physical solid length", formatNumber(solidLength)]
+      ]),
+      renderTabCard("Evidence reconciliation", [
+        ["Reconciler", reconciliation.reconcilerVersion || "-"],
+        ["Adjusted runs", reconciliation.adjustedWallRunCount ?? 0],
+        ["Axis aligned", reconciliation.axisAlignedWallRunCount ?? 0],
+        ["Endpoints extended", reconciliation.extendedEndpointCount ?? 0],
+        ["Endpoints trimmed", reconciliation.trimmedEndpointCount ?? 0],
+        ["Junction snaps", reconciliation.junctionSnappedEndpointCount ?? 0],
+        ["Collapsed duplicates", reconciliation.collapsedDuplicateWallRunCount ?? 0],
+        ["Room-supported runs", reconciliation.roomBoundarySupportedWallRunCount ?? 0],
+        ["Opening-supported runs", reconciliation.openingSupportedWallRunCount ?? 0],
+        ["Maximum axis shift", formatNumber(reconciliation.maximumAxisShiftDrawingUnits)]
+      ]),
+      renderTabCard("Topology fit", [
+        ["Optimizer", topology.optimizerVersion || "-"],
+        ["Method", topology.method || "-"],
+        ["Junction nodes", topology.junctionNodeCount ?? 0],
+        ["Inline references", topology.inlineJunctionReferenceCount ?? 0],
+        ["T-junctions", topology.tJunctionNodeCount ?? 0],
+        ["Crossings", topology.crossingNodeCount ?? 0],
+        ["Endpoint anchors", topology.endpointAnchoredNodeCount ?? 0],
+        ["RMS residual", formatNumber(topology.rootMeanSquareResidualDrawingUnits)],
+        ["Maximum residual", formatNumber(topology.maximumResidualDrawingUnits)],
+        ["Robust objective", formatNumber(topology.robustObjective)]
+      ]),
+      renderTabCard("Solved wall graph", [
+        ["Major coverage", formatPercent(metrics.majorWallCoverageRatio)],
+        ["Long-wall coverage", formatPercent(metrics.longWallCoverageRatio)],
+        ["Endpoint connectivity", formatPercent(metrics.endpointConnectivityRatio)],
+        ["Room closure", formatPercent(metrics.roomBoundaryClosureRatio)],
+        ["Exterior continuity", formatPercent(metrics.exteriorContinuityRatio)],
+        ["Duplicate length", formatPercent(metrics.duplicateLengthRatio)],
+        ["Noise length", formatPercent(metrics.noiseLengthRatio)],
+        ["Unsupported endpoints", metrics.unsupportedEndpointCount ?? 0]
+      ]),
+      renderTabListCard(
+        "Solver hypotheses",
+        (wallSolutions.hypotheses ?? []).map((hypothesis) => ({
+          title: `${hypothesis.profile}${hypothesis.selected ? " / selected" : ""}`,
+          meta: [
+            `score ${formatNumber(hypothesis.score, 3)}`,
+            `${hypothesis.selectedCandidateCount ?? 0} candidates`,
+            `+${hypothesis.recoveredCandidateCount ?? 0} / -${hypothesis.removedCandidateCount ?? 0}`,
+            `major ${formatPercent(hypothesis.metrics?.majorWallCoverageRatio)}`
+          ].join(" / ")
+        })),
+        "No wall solver hypotheses",
+        true)
+    );
+  }
 }
 
 function renderPipelineTabDetails() {
@@ -8421,6 +9176,11 @@ function renderAdvancedTabDetails() {
         ["Requires review", snapshot.requiresReview ? "Yes" : "No"]
       ]),
       renderTabCard("Wall placement", visualSnapshotWallPlacementRows(snapshotPage)),
+      renderTabListCard(
+        "Under-covered major walls",
+        visualSnapshotUnderCoveredWallItems(snapshotPage),
+        "No under-covered major walls",
+        true),
       renderTabListCard(
         "Densest layers",
         visualSnapshotDensestLayers(snapshotPage, 14).map((layer) => ({
@@ -9765,6 +10525,7 @@ function visualSnapshotAnalysisRows(snapshot = state.visualSnapshot, page = visu
 function visualSnapshotWallPlacementRows(page = visualSnapshotCurrentPage()) {
   const wallPlacement = page?.wallPlacement;
   const residual = wallPlacement?.residualEndpointOnHostWall;
+  const cleanCoverage = wallPlacement?.cleanCoverage;
   const omissionCodes = Object.keys(wallPlacement?.omissionCounts ?? {}).length;
   return [
     ["Placement-ready walls", wallPlacement?.placementReadyWallCount ?? 0],
@@ -9778,6 +10539,10 @@ function visualSnapshotWallPlacementRows(page = visualSnapshotCurrentPage()) {
     ["Residual same-axis", residual?.sameAxisCandidateEndpointCount ?? 0],
     ["Residual perpendicular", residual?.perpendicularCandidateEndpointCount ?? 0],
     ["Residual max distance", formatCoordinateNumber(residual?.maxDistance ?? 0)],
+    ["Major walls tracked", cleanCoverage?.trackedMajorWallCount ?? 0],
+    ["Major walls under-covered", cleanCoverage?.underCoveredMajorWallCount ?? 0],
+    ["Average clean coverage", formatNumber(cleanCoverage?.averageCoverageRatio ?? 0)],
+    ["Minimum clean coverage", formatNumber(cleanCoverage?.minimumCoverageRatio ?? 0)],
     ["Top omission", visualSnapshotTopWallOmissionLabel(wallPlacement)]
   ];
 }
@@ -9821,6 +10586,24 @@ function visualSnapshotOmittedWallExampleItems(page = visualSnapshotCurrentPage(
         item.evidence?.[0] || ""
       ].filter(Boolean).join(" / "),
       className: item.isPriority ? "lifecycle-warning" : ""
+    }));
+}
+
+function visualSnapshotUnderCoveredWallItems(page = visualSnapshotCurrentPage()) {
+  return (page?.wallPlacement?.cleanCoverage?.underCoveredExamples ?? [])
+    .map((item) => ({
+      title: item.wallId || "under-covered wall",
+      meta: [
+        item.wallType ? `type ${item.wallType}` : "",
+        item.detectionKind || "",
+        Number.isFinite(Number(item.coverageRatio)) ? `coverage ${formatNumber(item.coverageRatio)}` : "",
+        Number.isFinite(Number(item.missingLengthDrawingUnits)) ? `missing ${formatNumber(item.missingLengthDrawingUnits)} units` : "",
+        Number.isFinite(Number(item.axisToleranceDrawingUnits)) ? `axis tol ${formatNumber(item.axisToleranceDrawingUnits)}` : "",
+        item.bounds ? `bounds ${formatRectCoordinates(item.bounds)}` : "",
+        item.centerLine ? `line ${formatLineCoordinates(item.centerLine)}` : "",
+        item.evidence?.[0] || ""
+      ].filter(Boolean).join(" / "),
+      className: "lifecycle-warning"
     }));
 }
 
@@ -10067,6 +10850,14 @@ function wallTopologySpanCount(scan = state.scan, pageNumber = null, predicate =
 }
 
 function wallReviewTopologySpanCount(scan = state.scan, pageNumber = null) {
+  const solvedReviewRuns = placementGraphWallEdges(scan)
+    .filter((edge) => edge.solverRun && !wallIsPlacementReady(edge))
+    .filter((edge) => pageNumber == null || edge.pageNumber == null || edge.pageNumber === pageNumber);
+  if (solvedReviewRuns.length) {
+    return solvedReviewRuns
+      .reduce((total, edge) => total + canonicalWallDrawableSpans(edge).length, 0);
+  }
+
   return (scan?.walls ?? [])
     .filter(shouldDrawWallAsReviewTopologySpan)
     .filter((wall) => pageNumber == null || wall.pageNumber == null || wall.pageNumber === pageNumber)
@@ -10110,7 +10901,7 @@ function overlayLegendItemsForCurrentPayload(scan = state.scan) {
 
   return overlayLegendItems
     .filter((item) => placementOverlayLayerKeys.has(item.key))
-    .filter((item) => layerTotalForKey(scan, item.key) > 0);
+    .filter((item) => item.key === "wallTruth" || layerTotalForKey(scan, item.key) > 0);
 }
 
 function availableOverlayLayerKeys(scan = state.scan) {
@@ -10138,8 +10929,10 @@ function layerTotalForKey(scan, key) {
     case "rawWalls":
       return rawWallAuditLineCount(scan);
     case "walls":
-      return placementGraphWallEdges(scan).length
+      return placementGraphWallEdges(scan).filter(wallIsPlacementReady).length
         || wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);
+    case "wallTruth":
+      return state.wallTruth?.entries?.length ?? 0;
     case "wallBodyFootprints":
       return wallBodyFootprintCount(scan);
     case "wallTopologySpans":
@@ -10201,8 +10994,10 @@ function layerCountForKey(scan, key) {
     case "rawWalls":
       return rawWallAuditLineCount(scan, state.currentPage);
     case "walls":
-      return placementGraphWallEdges(scan).filter(onCurrentPage).length
+      return placementGraphWallEdges(scan).filter(onCurrentPage).filter(wallIsPlacementReady).length
         || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);
+    case "wallTruth":
+      return currentPageOnly(state.wallTruth?.entries);
     case "wallBodyFootprints":
       return wallBodyFootprintCount(scan, state.currentPage);
     case "wallTopologySpans":
@@ -14429,6 +15224,7 @@ function updateNavigation() {
   elements.downloadObjectReviewDataset.disabled = !state.scan || !((state.scan.objectGroups?.length > 0) || (state.scan.objects?.length > 0) || state.scan.objectReviewDataset);
   elements.downloadObjectCorrectionDataset.disabled = !state.scan || !((state.scan.objectGroups?.length > 0) || state.scan.objectReviewDataset || state.scan.objectCorrectionDataset);
   elements.downloadBenchmark.disabled = !state.benchmarkManifest;
+  elements.downloadWallTruth.disabled = !state.scan && !(state.wallTruth?.entries?.length > 0);
   elements.downloadSvg.disabled = !scan || !total;
 }
 
@@ -14681,6 +15477,14 @@ function serializeCurrentOverlaySvg() {
         .wall.wall-halo.wall-exterior{stroke-width:4.8}
         .wall-interior{stroke:#0f7a48;stroke-width:1.55}
         .wall.wall-halo.wall-interior{stroke-width:4.2}
+        .wall-truth{fill:rgba(211,31,107,.06);stroke:#d31f6b;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+        .wall-truth-wall{stroke:#d31f6b}
+        .wall-truth-not-wall{fill:rgba(210,75,42,.08);stroke:#d24b2a;stroke-width:2;stroke-dasharray:6 4}
+        .wall-truth-halo{fill:none;stroke:#fff;stroke-width:5.8;stroke-opacity:.92;stroke-dasharray:none}
+        .wall-truth.selected{stroke-width:3.2}
+        .wall-truth-endpoint{fill:#fff;stroke:#94134f;stroke-width:1.5;vector-effect:non-scaling-stroke}
+        .wall-truth-draft{fill:none;stroke-width:2.5;stroke-dasharray:7 4;opacity:.92;vector-effect:non-scaling-stroke}
+        .wall-truth-draft-region{fill:rgba(210,75,42,.10);stroke:#d24b2a}
         .wall-unknown{stroke:#7a5f18;stroke-width:1.35}
         .wall-object-like{stroke:#c97c18;stroke-width:1.05;stroke-dasharray:5 4}
         .wall-fragment{stroke:#7854a8;stroke-width:.9;stroke-dasharray:3 5}
@@ -14737,6 +15541,309 @@ function serializeCurrentOverlaySvg() {
     </defs>`);
 
   return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
+}
+
+function createEmptyWallTruthDataset(scan = null) {
+  const pages = (scan?.pages ?? []).map((page) => ({
+    pageNumber: page.number ?? page.pageNumber,
+    width: page.width,
+    height: page.height
+  }));
+  return {
+    schemaVersion: currentWallTruthSchemaVersion,
+    name: null,
+    version: "1",
+    createdAt: new Date().toISOString(),
+    coordinateSpace: "OpenPlanTracePageCoordinates",
+    coordinateUnit: "drawing-unit",
+    coordinateOrigin: "TopLeft",
+    coordinateYAxisDirection: "Down",
+    documentId: scan?.documentId ?? null,
+    sourceName: null,
+    sourceFingerprint: null,
+    completeTruthSet: false,
+    pages,
+    entries: [],
+    qualityGate: defaultWallTruthQualityGate(),
+    properties: {
+      authoringTool: "OpenPlanTrace Viewer",
+      authoringSchema: "wall-truth-editor.v1"
+    }
+  };
+}
+
+function defaultWallTruthQualityGate() {
+  return {
+    minRecall: 0.90,
+    minPrecision: 0.85,
+    minLengthWeightedRecall: 0.94,
+    minMajorWallRecall: 0.98,
+    minExteriorWallRecall: 0.96,
+    minWallTypeAccuracy: 0.90,
+    maxMeanLineDistance: 4.0,
+    maxMeanEndpointDistance: 8.0,
+    maxNotWallViolationCount: 0
+  };
+}
+
+function syncWallTruthDocumentContext() {
+  state.wallTruth ??= createEmptyWallTruthDataset();
+  if (!state.scan) {
+    return;
+  }
+
+  if (!state.wallTruth.pages?.length) {
+    state.wallTruth.pages = state.scan.pages.map((page) => ({
+      pageNumber: page.number ?? page.pageNumber,
+      width: page.width,
+      height: page.height
+    }));
+  }
+
+  state.wallTruth.documentId ??= state.placement?.document?.id ?? state.scan.documentId ?? null;
+  state.wallTruth.sourceName ??=
+    state.placement?.document?.sourceName
+    ?? state.placement?.document?.sourcePath
+    ?? state.scan.documentId
+    ?? null;
+  state.wallTruth.name ??= state.wallTruth.sourceName
+    ? `${String(state.wallTruth.sourceName).replace(/\.[^.]+$/, "")} wall truth`
+    : "Reviewed wall truth";
+}
+
+function normalizeWallTruthPayload(payload) {
+  if (!isWallTruthPayload(payload)) {
+    throw new Error("JSON is not an OpenPlanTrace wall truth dataset.");
+  }
+
+  return {
+    ...createEmptyWallTruthDataset(),
+    ...payload,
+    schemaVersion: currentWallTruthSchemaVersion,
+    pages: (payload.pages ?? []).map((page) => ({
+      pageNumber: normalizedPageNumber(page.pageNumber) ?? 1,
+      width: Number(page.width),
+      height: Number(page.height)
+    })),
+    entries: (payload.entries ?? []).map((entry, index) => ({
+      ...entry,
+      id: String(entry.id || `wall-truth-${index + 1}`),
+      pageNumber: normalizedPageNumber(entry.pageNumber) ?? 1,
+      labelKind: entry.labelKind === "NotWall" ? "NotWall" : "Wall",
+      centerLine: normalizeLine(entry.centerLine),
+      bounds: normalizeRect(entry.bounds),
+      wallType: entry.wallType || null,
+      importance: entry.importance || "Standard",
+      sourceDetectionIds: normalizeStringArray(entry.sourceDetectionIds),
+      evidence: normalizeStringArray(entry.evidence)
+    })),
+    qualityGate: {
+      ...defaultWallTruthQualityGate(),
+      ...(payload.qualityGate ?? {})
+    },
+    properties: {
+      ...(payload.properties ?? {})
+    }
+  };
+}
+
+function loadWallTruthPayload(payload, label = "wall truth JSON") {
+  state.wallTruth = normalizeWallTruthPayload(payload);
+  state.wallTruthSelectedId = null;
+  state.wallTruthDraw = null;
+  state.wallTruthMode = "select";
+  state.enabledLayers.add("wallTruth");
+  syncLayerControls();
+  drawOverlay();
+  setLegend();
+  refreshWorkspaceTabs();
+  updateNavigation();
+  setWorkspaceTab("wallTruth");
+  setStatus(`Wall truth loaded: ${state.wallTruth.entries.length} entries`);
+  elements.fileMeta.textContent = `${label} - ${state.wallTruth.entries.length} reviewed geometries`;
+}
+
+function wallTruthDatasetForExport() {
+  syncWallTruthDocumentContext();
+  return {
+    ...state.wallTruth,
+    schemaVersion: currentWallTruthSchemaVersion,
+    createdAt: state.wallTruth.createdAt || new Date().toISOString(),
+    pages: [...(state.wallTruth.pages ?? [])]
+      .sort((first, second) => first.pageNumber - second.pageNumber),
+    entries: [...(state.wallTruth.entries ?? [])]
+      .sort((first, second) =>
+        first.pageNumber - second.pageNumber
+        || String(first.id).localeCompare(String(second.id))),
+    qualityGate: {
+      ...defaultWallTruthQualityGate(),
+      ...(state.wallTruth.qualityGate ?? {})
+    },
+    properties: {
+      ...(state.wallTruth.properties ?? {}),
+      exportedBy: "OpenPlanTrace Viewer"
+    }
+  };
+}
+
+function downloadWallTruthDataset() {
+  const dataset = wallTruthDatasetForExport();
+  downloadBlob(
+    new Blob([JSON.stringify(dataset, null, 2)], { type: "application/json" }),
+    `${safeDocumentName()}-wall-truth.json`);
+}
+
+function nextWallTruthId(labelKind) {
+  const prefix = labelKind === "NotWall" ? "not-wall" : "wall";
+  const used = new Set((state.wallTruth?.entries ?? []).map((entry) => String(entry.id)));
+  let sequence = 1;
+  while (used.has(`${prefix}-${sequence}`)) {
+    sequence += 1;
+  }
+  return `${prefix}-${sequence}`;
+}
+
+function addWallTruthEntryFromDraw(draw, endPoint) {
+  syncWallTruthDocumentContext();
+  const mode = draw.mode;
+  const isRegion = mode === "notWallRegion";
+  const labelKind = mode === "wall" ? "Wall" : "NotWall";
+  const centerLine = isRegion
+    ? null
+    : {
+      start: { x: draw.start.x, y: draw.start.y },
+      end: { x: endPoint.x, y: endPoint.y }
+    };
+  const bounds = isRegion
+    ? normalizeManualBounds(draw.start, endPoint)
+    : wallTruthLineBounds(
+      centerLine,
+      Number(state.wallTruthSettings.thicknessDrawingUnits) || 1);
+  if ((isRegion && (!bounds || bounds.width < 1 || bounds.height < 1))
+    || (!isRegion && wallTruthLineLength(centerLine) < 1)) {
+    return null;
+  }
+
+  const nearest = centerLine
+    ? nearestCanonicalWallRun(centerLine, draw.pageNumber)
+    : null;
+  const entry = {
+    id: nextWallTruthId(labelKind),
+    pageNumber: draw.pageNumber,
+    labelKind,
+    centerLine,
+    bounds,
+    wallType: labelKind === "Wall" ? state.wallTruthSettings.wallType : null,
+    thicknessDrawingUnits: labelKind === "Wall"
+      ? nullablePositiveNumber(state.wallTruthSettings.thicknessDrawingUnits)
+      : null,
+    importance: state.wallTruthSettings.importance,
+    maxLineDistance: 4.0,
+    maxEndpointDistance: 8.0,
+    maxAngularDifferenceDegrees: 4.0,
+    minLengthOverlapRatio: 0.75,
+    label: labelKind === "Wall" ? "Reviewed wall" : "Reviewed non-wall geometry",
+    reviewer: String(state.wallTruthSettings.reviewer || "").trim() || null,
+    reviewedAt: new Date().toISOString(),
+    sourceDetectionIds: nearest?.sourceWallIds?.length
+      ? [...nearest.sourceWallIds]
+      : nearest?.id
+        ? [nearest.id]
+        : [],
+    evidence: [
+      "human-reviewed in OpenPlanTrace Viewer",
+      centerLine
+        ? `reviewed centerline ${formatWallTruthLine(centerLine)}`
+        : `reviewed not-wall region ${formatRectCoordinates(bounds, 3)}`,
+      nearest ? `nearest canonical solver run ${nearest.id}` : "no nearby canonical solver run"
+    ]
+  };
+  state.wallTruth.entries.push(entry);
+  state.wallTruthSelectedId = entry.id;
+  state.selectedItem = describeWallTruthEntry(entry);
+  setSelection(state.selectedItem);
+  return entry;
+}
+
+function nullablePositiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function wallTruthLineBounds(line, thickness = 1) {
+  if (!line?.start || !line?.end) {
+    return null;
+  }
+  const half = Math.max(0.5, Number(thickness || 1) / 2);
+  return {
+    x: Math.min(line.start.x, line.end.x) - half,
+    y: Math.min(line.start.y, line.end.y) - half,
+    width: Math.abs(line.end.x - line.start.x) + (half * 2),
+    height: Math.abs(line.end.y - line.start.y) + (half * 2)
+  };
+}
+
+function wallTruthLineLength(line) {
+  if (!line?.start || !line?.end) {
+    return 0;
+  }
+  return Math.hypot(line.end.x - line.start.x, line.end.y - line.start.y);
+}
+
+function nearestCanonicalWallRun(line, pageNumber) {
+  const edges = placementGraphWallEdges(state.scan).filter((edge) => edge.pageNumber === pageNumber);
+  return edges
+    .map((edge) => ({
+      edge,
+      distance: wallTruthLineDistance(line, edge.centerLine)
+    }))
+    .filter((item) => Number.isFinite(item.distance))
+    .sort((first, second) => first.distance - second.distance)[0]
+    ?.edge ?? null;
+}
+
+function wallTruthLineDistance(first, second) {
+  if (!first?.start || !first?.end || !second?.start || !second?.end) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const firstMid = {
+    x: (first.start.x + first.end.x) / 2,
+    y: (first.start.y + first.end.y) / 2
+  };
+  const secondMid = {
+    x: (second.start.x + second.end.x) / 2,
+    y: (second.start.y + second.end.y) / 2
+  };
+  return Math.hypot(firstMid.x - secondMid.x, firstMid.y - secondMid.y);
+}
+
+function formatWallTruthLine(line) {
+  return `${formatNumber(line.start.x, 3)},${formatNumber(line.start.y, 3)} -> ${formatNumber(line.end.x, 3)},${formatNumber(line.end.y, 3)}`;
+}
+
+function describeWallTruthEntry(entry) {
+  return {
+    type: entry.labelKind === "Wall" ? "reviewed wall truth" : "reviewed not-wall truth",
+    id: entry.id,
+    kind: [
+      entry.labelKind,
+      entry.wallType,
+      entry.importance
+    ].filter(Boolean).join(" / "),
+    pageNumber: entry.pageNumber,
+    line: entry.centerLine,
+    bounds: entry.bounds ?? wallTruthLineBounds(entry.centerLine, entry.thicknessDrawingUnits),
+    confidence: 1,
+    sourcePrimitiveIds: entry.sourceDetectionIds ?? [],
+    sourceLayers: [],
+    evidence: entry.evidence ?? [],
+    metadata: [
+      entry.centerLine ? formatWallTruthLine(entry.centerLine) : formatRectCoordinates(entry.bounds, 3),
+      entry.thicknessDrawingUnits ? `thickness ${formatNumber(entry.thicknessDrawingUnits)}` : "",
+      entry.reviewer ? `reviewer ${entry.reviewer}` : "",
+      entry.reviewedAt ? `reviewed ${entry.reviewedAt}` : ""
+    ].filter(Boolean).join(" | ")
+  };
 }
 
 function downloadBlob(blob, fileName) {
@@ -14870,6 +15977,26 @@ function isPlacementPayload(payload) {
       && Array.isArray(payload?.openings));
 }
 
+function isViewerScanBundle(payload) {
+  return String(payload?.schemaVersion || "") === "openplantrace.viewer-scan.v1"
+    && payload?.scan
+    && isPlacementPayload(payload?.placement);
+}
+
+function placementPayloadFromViewerPayload(payload) {
+  if (isViewerScanBundle(payload)) {
+    return payload.placement;
+  }
+
+  return isPlacementPayload(payload) ? payload : null;
+}
+
+function isWallTruthPayload(payload) {
+  return String(payload?.schemaVersion || "") === currentWallTruthSchemaVersion
+    && Array.isArray(payload?.entries)
+    && Array.isArray(payload?.pages);
+}
+
 function isVisualSnapshotPayload(payload) {
   const schemaVersion = String(payload?.schemaVersion || "");
   return schemaVersion.startsWith("openplantrace.visual-snapshot.")
@@ -14962,6 +16089,7 @@ function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
       placementSuppressedWallCount: 0,
       placementReviewWallCount: 0,
       residualEndpointOnHostWall: normalizeVisualSnapshotWallGraphResidualSummary(),
+      cleanCoverage: normalizeVisualSnapshotWallCleanCoverageSummary(),
       omissionCounts: {},
       topOmissions: [],
       omittedWallExamples: []
@@ -14987,6 +16115,7 @@ function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
     placementSuppressedWallCount,
     placementReviewWallCount,
     residualEndpointOnHostWall: normalizeVisualSnapshotWallGraphResidualSummary(summary.residualEndpointOnHostWall),
+    cleanCoverage: normalizeVisualSnapshotWallCleanCoverageSummary(summary.cleanCoverage),
     omissionCounts,
     topOmissions: (Array.isArray(summary.topOmissions) ? summary.topOmissions : [])
       .map((item) => ({
@@ -14998,6 +16127,30 @@ function normalizeVisualSnapshotWallPlacementSummary(summary = null) {
       .filter((item) => item.code || item.count > 0),
     omittedWallExamples: (Array.isArray(summary.omittedWallExamples) ? summary.omittedWallExamples : [])
       .map(normalizeVisualSnapshotOmittedWallExample)
+      .filter(Boolean)
+  };
+}
+
+function normalizeVisualSnapshotWallCleanCoverageSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return {
+      trackedMajorWallCount: 0,
+      fullyCoveredMajorWallCount: 0,
+      underCoveredMajorWallCount: 0,
+      averageCoverageRatio: 0,
+      minimumCoverageRatio: 0,
+      underCoveredExamples: []
+    };
+  }
+
+  return {
+    trackedMajorWallCount: nonNegativeInteger(summary.trackedMajorWallCount),
+    fullyCoveredMajorWallCount: nonNegativeInteger(summary.fullyCoveredMajorWallCount),
+    underCoveredMajorWallCount: nonNegativeInteger(summary.underCoveredMajorWallCount),
+    averageCoverageRatio: nullableFiniteNumber(summary.averageCoverageRatio) ?? 0,
+    minimumCoverageRatio: nullableFiniteNumber(summary.minimumCoverageRatio) ?? 0,
+    underCoveredExamples: (Array.isArray(summary.underCoveredExamples) ? summary.underCoveredExamples : [])
+      .map(normalizeVisualSnapshotWallCleanCoverageExample)
       .filter(Boolean)
   };
 }
@@ -15032,6 +16185,32 @@ function visualSnapshotSuppressedWallCount(omissionCounts = {}) {
     "repeated_short_detail_review_required",
     "tiny_door_adjacent_topology_suppressed"
   ].reduce((sum, code) => sum + nonNegativeInteger(omissionCounts[code]), 0);
+}
+
+function normalizeVisualSnapshotWallCleanCoverageExample(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const wallId = String(item.wallId || "");
+  if (!wallId) {
+    return null;
+  }
+
+  return {
+    wallId,
+    pageNumber: nonNegativeInteger(item.pageNumber),
+    wallType: String(item.wallType || ""),
+    detectionKind: String(item.detectionKind || ""),
+    confidence: nullableFiniteNumber(item.confidence),
+    drawingLength: nullableFiniteNumber(item.drawingLength),
+    coverageRatio: nullableFiniteNumber(item.coverageRatio),
+    missingLengthDrawingUnits: nullableFiniteNumber(item.missingLengthDrawingUnits),
+    axisToleranceDrawingUnits: nullableFiniteNumber(item.axisToleranceDrawingUnits),
+    bounds: normalizeRect(item.bounds),
+    centerLine: normalizeLine(item.centerLine),
+    evidence: normalizeStringArray(item.evidence)
+  };
 }
 
 function normalizeVisualSnapshotOmittedWallExample(item) {
@@ -15116,6 +16295,18 @@ function normalizedLayerDensity(count, normalizedBounds) {
 }
 
 function normalizeScanPayload(payload) {
+  if (isViewerScanBundle(payload)) {
+    const trace = normalizeScanPayload(payload.scan);
+    const placement = normalizePlacementPayload(payload.placement);
+    return {
+      ...trace,
+      edges: placement.edges,
+      rawPlacementGraphEdges: placement.rawPlacementGraphEdges,
+      wallSolutions: placement.wallSolutions,
+      placementSource: payload.placement
+    };
+  }
+
   if (isPlacementPayload(payload)) {
     return normalizePlacementPayload(payload);
   }
@@ -15176,6 +16367,16 @@ function normalizePlacementPayload(payload) {
 
   const calibration = normalizePlacementCalibration(payload.calibration);
   const quality = normalizePlacementQuality(payload, calibration);
+  const solvedWallRuns = Array.isArray(payload.wallSolutions?.selectedWallRuns)
+    ? payload.wallSolutions.selectedWallRuns.map((run) => normalizePlacementItem({
+      ...run,
+      solverRun: true,
+      wallId: run.sourceWallIds?.[0] || "",
+      sourceWallIds: run.sourceWallIds ?? [],
+      sourceWallGraphEdgeIds: run.sourceWallGraphEdgeIds ?? [],
+      inlineJunctions: run.inlineJunctions ?? []
+    }))
+    : [];
   return {
     schemaVersion: payload.schemaVersion || "openplantrace.placement.v4",
     scanSchemaVersion: payload.scanSchemaVersion || "",
@@ -15196,7 +16397,11 @@ function normalizePlacementPayload(payload) {
     walls: normalizeWallItems(payload.walls ?? []),
     wallComponents: (payload.wallGraph?.components ?? []).map(normalizePlacementItem),
     nodes: payload.wallGraph?.nodes ?? [],
-    edges: (payload.wallGraph?.edges ?? []).map(normalizePlacementItem),
+    edges: solvedWallRuns.length
+      ? solvedWallRuns
+      : (payload.wallGraph?.edges ?? []).map(normalizePlacementItem),
+    rawPlacementGraphEdges: (payload.wallGraph?.edges ?? []).map(normalizePlacementItem),
+    wallSolutions: payload.wallSolutions ?? null,
     wallGraphRepairCandidates: (payload.wallGraphRepairCandidates ?? []).map(normalizePlacementItem),
     rooms: (payload.rooms ?? []).map(normalizePlacementItem),
     roomAdjacencyEdges: [],

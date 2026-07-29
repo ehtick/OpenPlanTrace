@@ -52,6 +52,10 @@ internal sealed class ScanContext
 
     public List<OpeningCandidate> Openings { get; } = new();
 
+    public StructuralEvidenceGraph StructuralEvidenceGraph { get; set; } = StructuralEvidenceGraph.Empty;
+
+    public StructuralPlanSolution StructuralPlanSolution { get; set; } = StructuralPlanSolution.Empty;
+
     public List<ObjectCandidate> ObjectCandidates { get; } = new();
 
     public List<ObjectCandidateGroup> ObjectGroups { get; } = new();
@@ -90,6 +94,8 @@ internal sealed class ScanContext
         + RoomAdjacencyGraph.Edges.Count
         + RoomAdjacencyGraph.Clusters.Count
         + Openings.Count
+        + StructuralEvidenceGraph.ArtifactCount
+        + StructuralPlanSolution.ArtifactCount
         + ObjectCandidates.Count
         + ObjectCandidates.Count(candidate => candidate.VisualAi is not null)
         + ObjectGroups.Count
@@ -154,6 +160,8 @@ internal sealed class ScanContext
             [PlanArtifactKind.Openings] = Openings.Count,
             [PlanArtifactKind.Rooms] = Rooms.Count,
             [PlanArtifactKind.RoomAdjacency] = RoomAdjacencyGraph.Edges.Count + RoomAdjacencyGraph.Clusters.Count,
+            [PlanArtifactKind.StructuralEvidence] = StructuralEvidenceGraph.ArtifactCount,
+            [PlanArtifactKind.StructuralSolution] = StructuralPlanSolution.ArtifactCount,
             [PlanArtifactKind.ObjectCandidates] = ObjectCandidates.Count,
             [PlanArtifactKind.ObjectGroups] = ObjectGroups.Count,
             [PlanArtifactKind.ObjectAggregates] = ObjectAggregates.Count,
@@ -257,7 +265,9 @@ internal sealed class ScanContext
         result = result with
         {
             WallEvidenceMap = WallEvidenceMap,
-            WallTopologyPreparation = WallTopologyPreparation
+            WallTopologyPreparation = WallTopologyPreparation,
+            StructuralEvidenceGraph = StructuralEvidenceGraph,
+            StructuralPlanSolution = StructuralPlanSolution
         };
 
         if (HasRoutingLayer)
@@ -295,7 +305,9 @@ internal sealed class ScanContext
         return result with
         {
             WallEvidenceMap = WallEvidenceMap,
-            WallTopologyPreparation = WallTopologyPreparation
+            WallTopologyPreparation = WallTopologyPreparation,
+            StructuralEvidenceGraph = StructuralEvidenceGraph,
+            StructuralPlanSolution = StructuralPlanSolution
         };
     }
 

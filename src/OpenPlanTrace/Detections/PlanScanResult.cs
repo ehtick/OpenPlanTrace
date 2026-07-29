@@ -26,6 +26,10 @@ public sealed record PlanScanResult(
 
     public WallTopologyPreparation WallTopologyPreparation { get; init; } = WallTopologyPreparation.Empty;
 
+    public StructuralEvidenceGraph StructuralEvidenceGraph { get; init; } = StructuralEvidenceGraph.Empty;
+
+    public StructuralPlanSolution StructuralPlanSolution { get; init; } = StructuralPlanSolution.Empty;
+
     public PlanScanQualityReport Quality { get; init; } = PlanScanQualityReport.Empty;
 
     public IEnumerable<SheetRegion> MainFloorPlanRegions =>

@@ -36,6 +36,8 @@ internal static class OpenPlanTraceCli
             "formats" => RunFormats(args.Skip(1).ToArray()),
             "schema" => await RunSchemaAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
             "validate" => await RunValidateAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
+            "wall-truth-evaluate" or "wall-truth-eval" =>
+                await RunWallTruthEvaluateAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
             "kvemo-report" => await RunKvemoReportAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
             "kvemo-profile-template" or "kvemo-crops-to-profile" =>
                 await RunKvemoProfileTemplateAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
@@ -43,6 +45,135 @@ internal static class OpenPlanTraceCli
                 await RunCorrectionsToProfileAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
             _ => UnknownCommand(args[0])
         };
+    }
+
+    private static async Task<int> RunWallTruthEvaluateAsync(string[] args)
+    {
+        if (args.Length == 0 || args.Any(IsHelp))
+        {
+            WriteWallTruthEvaluateUsage();
+            return args.Length == 0 ? 2 : 0;
+        }
+
+        var positional = new List<string>();
+        string? jsonPath = null;
+        var prettyJson = true;
+        var failOnGate = true;
+        try
+        {
+            for (var index = 0; index < args.Length; index++)
+            {
+                switch (args[index].ToLowerInvariant())
+                {
+                    case "--json":
+                    case "--out":
+                        if (++index >= args.Length)
+                        {
+                            throw new ArgumentException($"{args[index - 1]} requires a path.");
+                        }
+
+                        jsonPath = args[index];
+                        break;
+                    case "--compact-json":
+                        prettyJson = false;
+                        break;
+                    case "--no-fail-on-gate":
+                        failOnGate = false;
+                        break;
+                    default:
+                        if (args[index].StartsWith("--", StringComparison.Ordinal))
+                        {
+                            throw new ArgumentException($"Unknown wall truth evaluation option: {args[index]}");
+                        }
+
+                        positional.Add(args[index]);
+                        break;
+                }
+            }
+        }
+        catch (ArgumentException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            WriteWallTruthEvaluateUsage();
+            return 2;
+        }
+
+        if (positional.Count != 2)
+        {
+            Console.Error.WriteLine("Wall truth evaluation requires a wall-truth JSON file and a structure JSON file.");
+            WriteWallTruthEvaluateUsage();
+            return 2;
+        }
+
+        var truthPath = Path.GetFullPath(positional[0]);
+        var structurePath = Path.GetFullPath(positional[1]);
+        if (!File.Exists(truthPath))
+        {
+            Console.Error.WriteLine($"Wall truth file not found: {truthPath}");
+            return 2;
+        }
+
+        if (!File.Exists(structurePath))
+        {
+            Console.Error.WriteLine($"Structure file not found: {structurePath}");
+            return 2;
+        }
+
+        try
+        {
+            var dataset = WallTruthDataset.ParseJson(await File.ReadAllTextAsync(truthPath).ConfigureAwait(false));
+            var structure = JsonSerializer.Deserialize<PlanStructureExport>(
+                await File.ReadAllTextAsync(structurePath).ConfigureAwait(false),
+                CreateValidationJsonOptions(writeIndented: false));
+            if (structure is null)
+            {
+                Console.Error.WriteLine("Structure JSON could not be deserialized.");
+                return 2;
+            }
+
+            var structureErrors = PlanStructureValidator.Validate(structure)
+                .Where(message => string.Equals(message.Severity, "Error", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (structureErrors.Length > 0)
+            {
+                Console.Error.WriteLine($"Structure JSON contains {structureErrors.Length} validation error(s).");
+                foreach (var error in structureErrors.Take(10))
+                {
+                    Console.Error.WriteLine($"  {error.Code} at {error.Path}: {error.Message}");
+                }
+
+                return 2;
+            }
+
+            var evaluation = WallTruthEvaluator.Evaluate(dataset, structure);
+            var json = WallTruthEvaluationJsonSerializer.Serialize(evaluation, prettyJson);
+            if (jsonPath is null)
+            {
+                Console.WriteLine(json);
+            }
+            else
+            {
+                var fullOutputPath = Path.GetFullPath(jsonPath);
+                Directory.CreateDirectory(Path.GetDirectoryName(fullOutputPath)!);
+                await File.WriteAllTextAsync(fullOutputPath, json).ConfigureAwait(false);
+                Console.WriteLine($"Wall truth evaluation: {fullOutputPath}");
+                Console.WriteLine(
+                    $"Result: {(evaluation.Passed ? "PASS" : "FAIL")}; "
+                    + $"recall {evaluation.Metrics.Recall:0.###}; "
+                    + $"major recall {evaluation.Metrics.MajorWallRecall:0.###}; "
+                    + $"not-wall violations {evaluation.Metrics.NotWallViolationCount}");
+            }
+
+            return evaluation.Passed || !failOnGate ? 0 : 1;
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or JsonException
+            or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Wall truth evaluation failed: {exception.Message}");
+            return 2;
+        }
     }
 
     private static async Task<int> RunInspectAsync(string[] args)
@@ -168,6 +299,7 @@ internal static class OpenPlanTraceCli
             parsed.CompactScanGZipPath ??= Path.Combine(parsed.OutDirectory, "scan.compact.json.gz");
             parsed.GeoJsonPath ??= Path.Combine(parsed.OutDirectory, "scan.geojson");
             parsed.PlacementPath ??= Path.Combine(parsed.OutDirectory, "placement.json");
+            parsed.StructurePath ??= Path.Combine(parsed.OutDirectory, "structure.json");
             parsed.SvgDirectory ??= Path.Combine(parsed.OutDirectory, "overlays");
             parsed.VisualSnapshotPath ??= Path.Combine(parsed.OutDirectory, "visual-snapshot.json");
         }
@@ -277,6 +409,17 @@ internal static class OpenPlanTraceCli
                         result,
                         placementStream,
                         new PlanPlacementJsonExportOptions { WriteIndented = parsed.PrettyJson })
+                    .ConfigureAwait(false);
+            }
+
+            if (parsed.StructurePath is not null)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(parsed.StructurePath))!);
+                await using var structureStream = File.Create(parsed.StructurePath);
+                await PlanStructureJsonExporter.WriteAsync(
+                        result,
+                        structureStream,
+                        new PlanStructureJsonExportOptions { WriteIndented = parsed.PrettyJson })
                     .ConfigureAwait(false);
             }
 
@@ -1606,6 +1749,27 @@ internal static class OpenPlanTraceCli
             return new SchemaContent("placement", PlanPlacementJsonSchema.ReadCurrent());
         }
 
+        if (string.Equals(schemaName, "structure", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schemaName, "structural-plan", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schemaName, "canonical-structure", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SchemaContent("structure", PlanStructureJsonSchema.ReadCurrent());
+        }
+
+        if (string.Equals(schemaName, "wall-truth", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schemaName, "wall-truth-dataset", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SchemaContent("wall-truth", WallTruthJsonSchema.ReadCurrent());
+        }
+
+        if (string.Equals(schemaName, "wall-truth-evaluation", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schemaName, "wall-truth-result", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SchemaContent(
+                "wall-truth-evaluation",
+                WallTruthEvaluationJsonSchema.ReadCurrent());
+        }
+
         if (string.Equals(schemaName, "visual-snapshot", StringComparison.OrdinalIgnoreCase)
             || string.Equals(schemaName, "overlay-snapshot", StringComparison.OrdinalIgnoreCase)
             || string.Equals(schemaName, "visual-qa", StringComparison.OrdinalIgnoreCase))
@@ -1662,7 +1826,7 @@ internal static class OpenPlanTraceCli
             {
                 messages.Add(new ArtifactValidationMessage(
                 "error",
-                    "Could not infer artifact kind. Provide --kind scan, scan-compact, object-review-dataset, object-correction-dataset, benchmark-manifest, benchmark-result, benchmark-comparison, viewer-benchmark-review-session, batch-manifest, batch-result, batch-comparison, layer-profile, object-label-profile, kvemo-crops, placement, visual-snapshot, or geojson."));
+                    "Could not infer artifact kind. Provide --kind scan, scan-compact, object-review-dataset, object-correction-dataset, benchmark-manifest, benchmark-result, benchmark-comparison, viewer-benchmark-review-session, batch-manifest, batch-result, batch-comparison, layer-profile, object-label-profile, kvemo-crops, placement, structure, wall-truth, wall-truth-evaluation, visual-snapshot, or geojson."));
                 return new ArtifactValidationResult(inputPath, "unknown", schemaVersion, false, messages);
             }
 
@@ -1912,6 +2076,20 @@ internal static class OpenPlanTraceCli
             ValidatePlacementWallGraph(wallGraph, repairCandidates.Length, messages);
         }
 
+        if (root.TryGetProperty("wallSolutions", out var wallSolutions))
+        {
+            if (wallSolutions.ValueKind == JsonValueKind.Object)
+            {
+                ValidatePlacementWallSolutions(wallSolutions, messages);
+            }
+            else
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    "Placement export wallSolutions must be an object when present."));
+            }
+        }
+
         var routingLayer = default(JsonElement);
         var hasRoutingLayer = false;
         if (TryReadObjectProperty(root, "routingLayer", "Placement export", messages, out routingLayer))
@@ -1936,6 +2114,563 @@ internal static class OpenPlanTraceCli
                 hasRoutingLayer,
                 issues,
                 messages);
+        }
+    }
+
+    private static void ValidatePlacementWallSolutions(
+        JsonElement solutions,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        const string Prefix = "Placement wallSolutions";
+        RequireConstStringProperty(
+            solutions,
+            Prefix,
+            "solverVersion",
+            GlobalWallSolutionBuilder.SolverVersion,
+            messages);
+        RequireNonEmptyStringProperty(solutions, Prefix, "selectedHypothesisId", messages);
+        RequireNonEmptyStringProperty(solutions, Prefix, "selectedProfile", messages);
+        ValidateRequiredRatioProperty(solutions, Prefix, "selectedScore", messages);
+        var candidateCount = TryReadNonNegativeIntegerProperty(
+            solutions,
+            Prefix,
+            "candidateCount",
+            messages);
+        var selectedCandidateCount = TryReadNonNegativeIntegerProperty(
+            solutions,
+            Prefix,
+            "selectedCandidateCount",
+            messages);
+        var selectedWallRunCount = TryReadNonNegativeIntegerProperty(
+            solutions,
+            Prefix,
+            "selectedWallRunCount",
+            messages);
+        TryReadNonNegativeIntegerProperty(solutions, Prefix, "iterationCount", messages);
+        var hypotheses = ReadArrayProperty(solutions, "hypotheses", Prefix, messages);
+        var selectedWallRuns = ReadArrayProperty(solutions, "selectedWallRuns", Prefix, messages);
+        var candidateDecisions = ReadArrayProperty(solutions, "candidateDecisions", Prefix, messages);
+        ValidateRequiredStringArrayProperty(solutions, Prefix, "evidence", messages);
+        for (var index = 0; index < selectedWallRuns.Length; index++)
+        {
+            ValidatePlacementSolvedWallRunReconciliation(
+                selectedWallRuns[index],
+                $"{Prefix}.selectedWallRuns[{index}]",
+                messages);
+            ValidatePlacementSolvedWallRunTopology(
+                selectedWallRuns[index],
+                $"{Prefix}.selectedWallRuns[{index}]",
+                messages);
+        }
+
+        if (TryReadObjectProperty(
+                solutions,
+                "reconciliation",
+                Prefix,
+                messages,
+                out var reconciliation))
+        {
+            ValidatePlacementWallReconciliationSummary(
+                reconciliation,
+                selectedWallRuns,
+                messages);
+        }
+
+        if (TryReadObjectProperty(
+                solutions,
+                "topology",
+                Prefix,
+                messages,
+                out var topology))
+        {
+            ValidatePlacementWallTopologySummary(
+                topology,
+                selectedWallRuns,
+                messages);
+        }
+
+        if (hypotheses.Length == 0)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} requires at least one wall hypothesis."));
+        }
+
+        var selectedHypothesisId = ReadStringProperty(solutions, "selectedHypothesisId");
+        var selectedHypotheses = hypotheses
+            .Where(hypothesis => ReadBooleanProperty(hypothesis, "selected") == true)
+            .ToArray();
+        if (selectedHypotheses.Length != 1
+            || !string.Equals(
+                ReadStringProperty(selectedHypotheses.FirstOrDefault(), "id"),
+                selectedHypothesisId,
+                StringComparison.Ordinal))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} must select exactly one hypothesis matching selectedHypothesisId."));
+        }
+
+        if (candidateCount is not null && candidateCount.Value != candidateDecisions.Length)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} candidateCount must match candidateDecisions length."));
+        }
+
+        if (selectedCandidateCount is not null
+            && candidateCount is not null
+            && selectedCandidateCount.Value > candidateCount.Value)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} selectedCandidateCount cannot exceed candidateCount."));
+        }
+
+        if (selectedWallRunCount is not null
+            && selectedWallRunCount.Value != selectedWallRuns.Length)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} selectedWallRunCount must match selectedWallRuns length."));
+        }
+    }
+
+    private static void ValidatePlacementSolvedWallRunTopology(
+        JsonElement run,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (run.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var junctions = ReadArrayProperty(run, "inlineJunctions", prefix, messages);
+        var runId = ReadStringProperty(run, "id");
+        var runPageNumber = ReadInt32Property(run, "pageNumber");
+        var drawingLength = ReadDoubleForDeep(run, "drawingLength");
+        var hasCenterLine = TryReadValidationLine(run, "centerLine", out var centerLine);
+        for (var index = 0; index < junctions.Length; index++)
+        {
+            var junction = junctions[index];
+            var junctionPrefix = $"{prefix}.inlineJunctions[{index}]";
+            if (junction.ValueKind != JsonValueKind.Object)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{junctionPrefix} must be an object."));
+                continue;
+            }
+
+            RequireNonEmptyStringProperty(junction, junctionPrefix, "id", messages);
+            RequireNonEmptyStringProperty(junction, junctionPrefix, "wallRunId", messages);
+            RequireNonEmptyStringProperty(junction, junctionPrefix, "nodeId", messages);
+            TryReadPositiveIntegerProperty(junction, junctionPrefix, "pageNumber", messages);
+            RequireNonEmptyStringProperty(junction, junctionPrefix, "kind", messages);
+            ValidatePlacementPointProperty(junction, junctionPrefix, "nodePosition", messages);
+            ValidatePlacementPointProperty(junction, junctionPrefix, "wallPosition", messages);
+            ValidateRequiredRatioProperty(junction, junctionPrefix, "parameter", messages);
+            ValidateNonNegativeNumberProperty(junction, junctionPrefix, "offsetDrawingUnits", messages);
+            ValidateNonNegativeNumberProperty(
+                junction,
+                junctionPrefix,
+                "projectionResidualDrawingUnits",
+                messages);
+            ValidateRequiredStringArrayProperty(
+                junction,
+                junctionPrefix,
+                "incidentWallRunIds",
+                messages);
+            ValidateRequiredRatioProperty(junction, junctionPrefix, "confidence", messages);
+            ValidateBooleanProperty(junction, junctionPrefix, "requiresReview", messages);
+            ValidateRequiredStringArrayProperty(junction, junctionPrefix, "evidence", messages);
+
+            var kind = ReadStringProperty(junction, "kind");
+            if (kind is not "TJunction" and not "Crossing" and not "MultiJunction")
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{junctionPrefix} kind must be TJunction, Crossing, or MultiJunction."));
+            }
+
+            if (!string.Equals(
+                    ReadStringProperty(junction, "wallRunId"),
+                    runId,
+                    StringComparison.Ordinal)
+                || ReadInt32Property(junction, "pageNumber") != runPageNumber)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{junctionPrefix} wallRunId and pageNumber must match its containing wall run."));
+            }
+
+            var parameter = ReadDoubleForDeep(junction, "parameter");
+            var offset = ReadDoubleForDeep(junction, "offsetDrawingUnits");
+            if (hasCenterLine
+                && drawingLength is > 0
+                && parameter is > 0 and < 1
+                && offset is not null
+                && TryReadValidationPointProperty(junction, "wallPosition", out var wallPosition))
+            {
+                var expectedWallPosition = new PlacementValidationPoint(
+                    centerLine.Start.X + (centerLine.End.X - centerLine.Start.X) * parameter.Value,
+                    centerLine.Start.Y + (centerLine.End.Y - centerLine.Start.Y) * parameter.Value);
+                var wallPositionDeltaX = expectedWallPosition.X - wallPosition.X;
+                var wallPositionDeltaY = expectedWallPosition.Y - wallPosition.Y;
+                if (Math.Sqrt(
+                        wallPositionDeltaX * wallPositionDeltaX
+                        + wallPositionDeltaY * wallPositionDeltaY)
+                    > PlacementValidationTolerance
+                    || Math.Abs(offset.Value - parameter.Value * drawingLength.Value)
+                    > Math.Max(PlacementValidationTolerance, drawingLength.Value * 0.0001))
+                {
+                    messages.Add(new ArtifactValidationMessage(
+                        "error",
+                        $"{junctionPrefix} wallPosition and offset must agree with parameter and the unsplit wall centerLine."));
+                }
+            }
+
+            if (TryReadObjectProperty(
+                    junction,
+                    "optimization",
+                    junctionPrefix,
+                    messages,
+                    out var optimization))
+            {
+                ValidatePlacementJunctionOptimization(
+                    optimization,
+                    $"{junctionPrefix}.optimization",
+                    messages);
+            }
+        }
+    }
+
+    private static void ValidatePlacementJunctionOptimization(
+        JsonElement optimization,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        RequireConstStringProperty(
+            optimization,
+            prefix,
+            "optimizerVersion",
+            GlobalWallSolutionBuilder.TopologyOptimizerVersion,
+            messages);
+        RequireConstStringProperty(
+            optimization,
+            prefix,
+            "method",
+            "RobustWeightedLeastSquaresHuber",
+            messages);
+        ValidateBooleanProperty(optimization, prefix, "endpointAnchored", messages);
+        TryReadNonNegativeIntegerProperty(optimization, prefix, "iterationCount", messages);
+        TryReadNonNegativeIntegerProperty(optimization, prefix, "observationCount", messages);
+        TryReadNonNegativeIntegerProperty(optimization, prefix, "lineConstraintCount", messages);
+        ValidateNonNegativeNumberProperty(
+            optimization,
+            prefix,
+            "rootMeanSquareResidualDrawingUnits",
+            messages);
+        ValidateNonNegativeNumberProperty(
+            optimization,
+            prefix,
+            "maximumResidualDrawingUnits",
+            messages);
+        ValidateNonNegativeNumberProperty(optimization, prefix, "robustObjective", messages);
+        ValidateBooleanProperty(optimization, prefix, "converged", messages);
+        ValidateRequiredStringArrayProperty(optimization, prefix, "evidence", messages);
+    }
+
+    private static void ValidatePlacementWallTopologySummary(
+        JsonElement summary,
+        IReadOnlyList<JsonElement> selectedWallRuns,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        const string Prefix = "Placement wallSolutions.topology";
+        RequireConstStringProperty(
+            summary,
+            Prefix,
+            "optimizerVersion",
+            GlobalWallSolutionBuilder.TopologyOptimizerVersion,
+            messages);
+        RequireConstStringProperty(
+            summary,
+            Prefix,
+            "method",
+            "RobustWeightedLeastSquaresHuber",
+            messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "evaluatedWallPairCount", messages);
+        var junctionNodeCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "junctionNodeCount",
+            messages);
+        var referenceCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "inlineJunctionReferenceCount",
+            messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "tJunctionNodeCount", messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "crossingNodeCount", messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "endpointAnchoredNodeCount", messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "observationCount", messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "lineConstraintCount", messages);
+        TryReadNonNegativeIntegerProperty(summary, Prefix, "maximumIterationCount", messages);
+        ValidateNonNegativeNumberProperty(
+            summary,
+            Prefix,
+            "rootMeanSquareResidualDrawingUnits",
+            messages);
+        ValidateNonNegativeNumberProperty(
+            summary,
+            Prefix,
+            "maximumResidualDrawingUnits",
+            messages);
+        ValidateNonNegativeNumberProperty(summary, Prefix, "robustObjective", messages);
+        ValidateRequiredStringArrayProperty(summary, Prefix, "evidence", messages);
+
+        var junctions = selectedWallRuns
+            .Where(run => run.ValueKind == JsonValueKind.Object)
+            .SelectMany(run =>
+                run.TryGetProperty("inlineJunctions", out var value)
+                && value.ValueKind == JsonValueKind.Array
+                    ? value.EnumerateArray().ToArray()
+                    : Array.Empty<JsonElement>())
+            .Where(junction => junction.ValueKind == JsonValueKind.Object)
+            .ToArray();
+        var distinctNodeCount = junctions
+            .Select(junction => ReadStringProperty(junction, "nodeId"))
+            .Where(nodeId => !string.IsNullOrWhiteSpace(nodeId))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        if (referenceCount is not null && referenceCount.Value != junctions.Length
+            || junctionNodeCount is not null && junctionNodeCount.Value != distinctNodeCount)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} node/reference counts must match selected wall inline junctions."));
+        }
+    }
+
+    private static void ValidatePlacementSolvedWallRunReconciliation(
+        JsonElement run,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (run.ValueKind != JsonValueKind.Object)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{prefix} must be an object."));
+            return;
+        }
+
+        if (!TryReadObjectProperty(run, "reconciliation", prefix, messages, out var reconciliation))
+        {
+            return;
+        }
+
+        var reconciliationPrefix = $"{prefix}.reconciliation";
+        RequireNonEmptyStringProperty(reconciliation, reconciliationPrefix, "status", messages);
+        ValidatePlacementLineProperty(reconciliation, reconciliationPrefix, "originalCenterLine", messages);
+        ValidatePlacementLineProperty(reconciliation, reconciliationPrefix, "reconciledCenterLine", messages);
+        ValidateNumberProperty(reconciliation, reconciliationPrefix, "axisShiftDrawingUnits", messages);
+        ValidateNumberProperty(reconciliation, reconciliationPrefix, "startEndpointDeltaDrawingUnits", messages);
+        ValidateNumberProperty(reconciliation, reconciliationPrefix, "endEndpointDeltaDrawingUnits", messages);
+        TryReadNonNegativeIntegerProperty(reconciliation, reconciliationPrefix, "candidateVoteCount", messages);
+        TryReadNonNegativeIntegerProperty(reconciliation, reconciliationPrefix, "roomBoundaryVoteCount", messages);
+        TryReadNonNegativeIntegerProperty(reconciliation, reconciliationPrefix, "openingVoteCount", messages);
+        TryReadNonNegativeIntegerProperty(reconciliation, reconciliationPrefix, "neighborVoteCount", messages);
+        TryReadNonNegativeIntegerProperty(reconciliation, reconciliationPrefix, "junctionSnapCount", messages);
+        TryReadNonNegativeIntegerProperty(reconciliation, reconciliationPrefix, "collapsedDuplicateRunCount", messages);
+        ValidateRequiredRatioProperty(reconciliation, reconciliationPrefix, "confidence", messages);
+        ValidateRequiredStringArrayProperty(reconciliation, reconciliationPrefix, "actions", messages);
+        ValidateRequiredStringArrayProperty(reconciliation, reconciliationPrefix, "evidence", messages);
+
+        var status = ReadStringProperty(reconciliation, "status");
+        if (status is not "Unchanged" and not "Adjusted" and not "PreservedForReview")
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{reconciliationPrefix} status must be Unchanged, Adjusted, or PreservedForReview."));
+        }
+
+        var allowedActions = new HashSet<string>(
+            [
+                "AxisAligned",
+                "ExtendedStart",
+                "TrimmedStart",
+                "ExtendedEnd",
+                "TrimmedEnd",
+                "JunctionSnapped",
+                "PreservedForReview",
+                "Unchanged"
+            ],
+            StringComparer.Ordinal);
+        var actions = ReadStringArrayForDeep(reconciliation, "actions").ToArray();
+        if (actions.Length == 0
+            || actions.Any(action => !allowedActions.Contains(action))
+            || (status == "Unchanged"
+                && (actions.Length != 1 || actions[0] != "Unchanged"))
+            || (status == "Adjusted"
+                && actions.All(action => action is "Unchanged" or "PreservedForReview"))
+            || (status == "PreservedForReview"
+                && !actions.Contains("PreservedForReview", StringComparer.Ordinal)))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{reconciliationPrefix} status and actions must describe a valid wall reconciliation decision."));
+        }
+
+        if (TryReadValidationLine(reconciliation, "originalCenterLine", out var originalLine)
+            && originalLine.Length <= PlacementValidationTolerance)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{reconciliationPrefix} originalCenterLine must have positive length."));
+        }
+
+        if (TryReadValidationLine(run, "centerLine", out var runLine)
+            && TryReadValidationLine(reconciliation, "reconciledCenterLine", out var reconciledLine)
+            && (Math.Abs(runLine.Start.X - reconciledLine.Start.X) > PlacementValidationTolerance
+                || Math.Abs(runLine.Start.Y - reconciledLine.Start.Y) > PlacementValidationTolerance
+                || Math.Abs(runLine.End.X - reconciledLine.End.X) > PlacementValidationTolerance
+                || Math.Abs(runLine.End.Y - reconciledLine.End.Y) > PlacementValidationTolerance))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{reconciliationPrefix} reconciledCenterLine must match the selected wall run centerLine."));
+        }
+    }
+
+    private static void ValidatePlacementWallReconciliationSummary(
+        JsonElement summary,
+        IReadOnlyList<JsonElement> selectedWallRuns,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        const string Prefix = "Placement wallSolutions.reconciliation";
+        RequireConstStringProperty(
+            summary,
+            Prefix,
+            "reconcilerVersion",
+            GlobalWallSolutionBuilder.ReconcilerVersion,
+            messages);
+
+        var evaluatedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "evaluatedWallRunCount",
+            messages);
+        var adjustedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "adjustedWallRunCount",
+            messages);
+        var axisAlignedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "axisAlignedWallRunCount",
+            messages);
+        var extendedEndpointCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "extendedEndpointCount",
+            messages);
+        var trimmedEndpointCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "trimmedEndpointCount",
+            messages);
+        var junctionSnappedEndpointCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "junctionSnappedEndpointCount",
+            messages);
+        var collapsedDuplicateWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "collapsedDuplicateWallRunCount",
+            messages);
+        var candidateSupportedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "candidateSupportedWallRunCount",
+            messages);
+        var roomBoundarySupportedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "roomBoundarySupportedWallRunCount",
+            messages);
+        var openingSupportedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "openingSupportedWallRunCount",
+            messages);
+        var neighborSupportedWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "neighborSupportedWallRunCount",
+            messages);
+        var preservedForReviewWallRunCount = TryReadNonNegativeIntegerProperty(
+            summary,
+            Prefix,
+            "preservedForReviewWallRunCount",
+            messages);
+        ValidateNonNegativeNumberProperty(summary, Prefix, "totalAxisShiftDrawingUnits", messages);
+        ValidateNonNegativeNumberProperty(summary, Prefix, "maximumAxisShiftDrawingUnits", messages);
+        ValidateRequiredStringArrayProperty(summary, Prefix, "evidence", messages);
+
+        var reconciliations = selectedWallRuns
+            .Where(run => run.ValueKind == JsonValueKind.Object)
+            .Select(run => run.TryGetProperty("reconciliation", out var reconciliation)
+                && reconciliation.ValueKind == JsonValueKind.Object
+                    ? reconciliation
+                    : default)
+            .Where(reconciliation => reconciliation.ValueKind == JsonValueKind.Object)
+            .ToArray();
+        var expectations = new[]
+        {
+            ("evaluatedWallRunCount", evaluatedWallRunCount, selectedWallRuns.Count),
+            ("adjustedWallRunCount", adjustedWallRunCount, reconciliations.Count(item => ReadStringProperty(item, "status") == "Adjusted")),
+            ("axisAlignedWallRunCount", axisAlignedWallRunCount, reconciliations.Count(item => ReadStringArrayForDeep(item, "actions").Contains("AxisAligned", StringComparer.Ordinal))),
+            ("extendedEndpointCount", extendedEndpointCount, reconciliations.Sum(item => ReadStringArrayForDeep(item, "actions").Count(action => action is "ExtendedStart" or "ExtendedEnd"))),
+            ("trimmedEndpointCount", trimmedEndpointCount, reconciliations.Sum(item => ReadStringArrayForDeep(item, "actions").Count(action => action is "TrimmedStart" or "TrimmedEnd"))),
+            ("junctionSnappedEndpointCount", junctionSnappedEndpointCount, reconciliations.Sum(item => ReadNonNegativeIntegerPropertyOrZero(item, "junctionSnapCount"))),
+            ("collapsedDuplicateWallRunCount", collapsedDuplicateWallRunCount, reconciliations.Sum(item => ReadNonNegativeIntegerPropertyOrZero(item, "collapsedDuplicateRunCount"))),
+            ("candidateSupportedWallRunCount", candidateSupportedWallRunCount, reconciliations.Count(item => ReadNonNegativeIntegerPropertyOrZero(item, "candidateVoteCount") > 0)),
+            ("roomBoundarySupportedWallRunCount", roomBoundarySupportedWallRunCount, reconciliations.Count(item => ReadNonNegativeIntegerPropertyOrZero(item, "roomBoundaryVoteCount") > 0)),
+            ("openingSupportedWallRunCount", openingSupportedWallRunCount, reconciliations.Count(item => ReadNonNegativeIntegerPropertyOrZero(item, "openingVoteCount") > 0)),
+            ("neighborSupportedWallRunCount", neighborSupportedWallRunCount, reconciliations.Count(item => ReadNonNegativeIntegerPropertyOrZero(item, "neighborVoteCount") > 0)),
+            ("preservedForReviewWallRunCount", preservedForReviewWallRunCount, reconciliations.Count(item => ReadStringProperty(item, "status") == "PreservedForReview"))
+        };
+        foreach (var (name, actual, expected) in expectations)
+        {
+            if (actual is not null && actual.Value != expected)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    $"{Prefix} {name} must match the selected wall run reconciliation decisions."));
+            }
+        }
+
+        var axisShifts = reconciliations
+            .Select(item => ReadDoubleForDeep(item, "axisShiftDrawingUnits"))
+            .Where(value => value is not null)
+            .Select(value => Math.Abs(value!.Value))
+            .ToArray();
+        var expectedTotalAxisShift = axisShifts.Sum();
+        var expectedMaximumAxisShift = axisShifts.Length == 0 ? 0 : axisShifts.Max();
+        var reportedTotalAxisShift = ReadDoubleForDeep(summary, "totalAxisShiftDrawingUnits");
+        var reportedMaximumAxisShift = ReadDoubleForDeep(summary, "maximumAxisShiftDrawingUnits");
+        if ((reportedTotalAxisShift is not null
+                && Math.Abs(reportedTotalAxisShift.Value - expectedTotalAxisShift) > PlacementValidationTolerance)
+            || (reportedMaximumAxisShift is not null
+                && Math.Abs(reportedMaximumAxisShift.Value - expectedMaximumAxisShift) > PlacementValidationTolerance))
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"{Prefix} movement totals must match the selected wall run reconciliation decisions."));
         }
     }
 
@@ -4027,6 +4762,49 @@ internal static class OpenPlanTraceCli
                     break;
                 case "placement":
                     ValidatePlacementExport(root, messages);
+                    break;
+                case "structure":
+                    ValidateSchemaVersion(
+                        root,
+                        PlanStructureExport.CurrentSchemaVersion,
+                        "canonical structure",
+                        messages);
+                    var structure = JsonSerializer.Deserialize<PlanStructureExport>(
+                        json,
+                        CreateValidationJsonOptions(writeIndented: false));
+                    if (structure is null)
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            "error",
+                            "Canonical structure JSON could not be deserialized."));
+                        break;
+                    }
+
+                    foreach (var validationMessage in PlanStructureValidator.Validate(structure))
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            validationMessage.Severity.ToLowerInvariant(),
+                            $"{validationMessage.Code} at {validationMessage.Path}: {validationMessage.Message}"));
+                    }
+                    break;
+                case "wall-truth":
+                    _ = WallTruthDataset.ParseJson(json);
+                    break;
+                case "wall-truth-evaluation":
+                    ValidateSchemaVersion(
+                        root,
+                        WallTruthEvaluationResult.CurrentSchemaVersion,
+                        "wall truth evaluation",
+                        messages);
+                    var evaluation = JsonSerializer.Deserialize<WallTruthEvaluationResult>(
+                        json,
+                        CreateValidationJsonOptions(writeIndented: false));
+                    if (evaluation is null)
+                    {
+                        messages.Add(new ArtifactValidationMessage(
+                            "error",
+                            "Wall truth evaluation JSON could not be deserialized."));
+                    }
                     break;
                 case "visual-snapshot":
                     ValidateVisualSnapshot(root, messages);
@@ -6444,6 +7222,12 @@ internal static class OpenPlanTraceCli
             return;
         }
 
+        if (kind == "structure")
+        {
+            ValidateDeepStructureExport(root, messages);
+            return;
+        }
+
         if (kind == "scan")
         {
             ValidateDeepScanExport(root, messages);
@@ -6762,10 +7546,100 @@ internal static class OpenPlanTraceCli
         ValidateDeepPlacementRoutingLayer(root, pages, wallIds, roomIds, openingIds, objectAggregateIds, messages);
         ValidateDeepPlacementQualityGate(root, messages);
         ValidateDeepPlacementIssueReferences(root, wallIds, messages);
+        ValidateDeepPlacementStructure(root, messages);
 
         messages.Add(new ArtifactValidationMessage(
             "info",
-            "Placement deep validation checked coordinate frames, page references, positive geometry, page containment, metric coordinate consistency, wall lengths, opening anchors, placement offsets, routing references, suppression links, and issue-to-entity references."));
+            "Placement deep validation checked coordinate frames, page references, positive geometry, page containment, metric coordinate consistency, wall lengths, canonical solid/opening intervals, opening anchors, placement offsets, routing references, suppression links, and issue-to-entity references."));
+    }
+
+    private static void ValidateDeepPlacementStructure(
+        JsonElement root,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        if (!root.TryGetProperty("wallSolutions", out var wallSolutions)
+            || wallSolutions.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        try
+        {
+            var placement = JsonSerializer.Deserialize<PlanPlacementExport>(
+                root.GetRawText(),
+                CreateValidationJsonOptions(writeIndented: false));
+            if (placement?.WallSolutions is null)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    "Placement deep validation could not deserialize wallSolutions."));
+                return;
+            }
+
+            var structure = PlanStructureExport.From(placement);
+            AddStructureValidationMessages(
+                PlanStructureValidator.Validate(structure),
+                "Placement canonical structure",
+                messages);
+        }
+        catch (Exception exception) when (
+            exception is JsonException
+            or InvalidOperationException
+            or ArgumentException)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"Placement canonical structure could not be validated: {exception.Message}"));
+        }
+    }
+
+    private static void ValidateDeepStructureExport(
+        JsonElement root,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        try
+        {
+            var structure = JsonSerializer.Deserialize<PlanStructureExport>(
+                root.GetRawText(),
+                CreateValidationJsonOptions(writeIndented: false));
+            if (structure is null)
+            {
+                messages.Add(new ArtifactValidationMessage(
+                    "error",
+                    "Structure deep validation could not deserialize the artifact."));
+                return;
+            }
+
+            AddStructureValidationMessages(
+                PlanStructureValidator.Validate(structure),
+                "Structure",
+                messages);
+            messages.Add(new ArtifactValidationMessage(
+                "info",
+                "Structure deep validation checked canonical wall identity, node references, opening-host intervals, solid/opening partitions, metric lengths, summaries, and topology integrity."));
+        }
+        catch (Exception exception) when (
+            exception is JsonException
+            or InvalidOperationException
+            or ArgumentException)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                "error",
+                $"Structure deep validation could not deserialize the artifact: {exception.Message}"));
+        }
+    }
+
+    private static void AddStructureValidationMessages(
+        IReadOnlyList<PlanStructureValidationMessage> validationMessages,
+        string prefix,
+        ICollection<ArtifactValidationMessage> messages)
+    {
+        foreach (var validation in validationMessages)
+        {
+            messages.Add(new ArtifactValidationMessage(
+                validation.Severity,
+                $"{prefix} {validation.Code} at {validation.Path}: {validation.Message}"));
+        }
     }
 
     private static void ValidateDeepPlacementIssueReferences(
@@ -9442,6 +10316,9 @@ internal static class OpenPlanTraceCli
             "object-label-profile" => ObjectLabelProfileJsonSchema.ReadCurrent(),
             "kvemo-crops" => VisualAiCropManifestJsonSchema.ReadCurrent(),
             "placement" => PlanPlacementJsonSchema.ReadCurrent(),
+            "structure" => PlanStructureJsonSchema.ReadCurrent(),
+            "wall-truth" => WallTruthJsonSchema.ReadCurrent(),
+            "wall-truth-evaluation" => WallTruthEvaluationJsonSchema.ReadCurrent(),
             "visual-snapshot" => PlanOverlaySnapshotJsonSchema.ReadCurrent(),
             "geojson" => null,
             _ => null
@@ -9497,6 +10374,9 @@ internal static class OpenPlanTraceCli
             LayerCategoryProfile.CurrentSchemaVersion => "layer-profile",
             ObjectLabelProfile.CurrentSchemaVersion => "object-label-profile",
             PlanPlacementExport.CurrentSchemaVersion => "placement",
+            PlanStructureExport.CurrentSchemaVersion => "structure",
+            WallTruthDataset.CurrentSchemaVersion => "wall-truth",
+            WallTruthEvaluationResult.CurrentSchemaVersion => "wall-truth-evaluation",
             PlanOverlaySnapshot.CurrentSchemaVersion => "visual-snapshot",
             PlanTraceGeoJsonExporter.CurrentSchemaVersion => "geojson",
             _ => InferValidationKind(root)
@@ -9522,6 +10402,9 @@ internal static class OpenPlanTraceCli
             "object-label-profile" or "object-labels" => "object-label-profile",
             "kvemo-crops" or "visual-ai-crops" => "kvemo-crops",
             "placement" or "placement-export" or "consumer-placement" => "placement",
+            "structure" or "structural-plan" or "canonical-structure" => "structure",
+            "wall-truth" or "wall-truth-dataset" => "wall-truth",
+            "wall-truth-evaluation" or "wall-truth-result" => "wall-truth-evaluation",
             "visual-snapshot" or "overlay-snapshot" or "visual-qa" => "visual-snapshot",
             "geojson" or "geo-json" => "geojson",
             "auto" => null,
@@ -9634,6 +10517,14 @@ internal static class OpenPlanTraceCli
             && root.TryGetProperty("issues", out _))
         {
             return "visual-snapshot";
+        }
+
+        if (root.TryGetProperty("sourcePlacementSchemaVersion", out _)
+            && root.TryGetProperty("wallRuns", out _)
+            && root.TryGetProperty("nodes", out _)
+            && root.TryGetProperty("quality", out _))
+        {
+            return "structure";
         }
 
         if (root.TryGetProperty("type", out var type)
@@ -9973,6 +10864,11 @@ internal static class OpenPlanTraceCli
         if (parsed.PlacementPath is not null)
         {
             Console.WriteLine($"Placement: {Path.GetFullPath(parsed.PlacementPath)}");
+        }
+
+        if (parsed.StructurePath is not null)
+        {
+            Console.WriteLine($"Canonical structure: {Path.GetFullPath(parsed.StructurePath)}");
         }
 
         if (parsed.SvgPath is not null)
@@ -10468,8 +11364,14 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  schema object-label-profile Print or write the current object label profile schema");
         Console.WriteLine("  schema kvemo-crops          Print or write the Kvemo crop JSONL entry schema");
         Console.WriteLine("  schema placement            Print or write the downstream placement export schema");
+        Console.WriteLine("  schema structure            Print or write the canonical structural plan schema");
+        Console.WriteLine("  schema wall-truth           Print or write the reviewed wall truth schema");
+        Console.WriteLine("  schema wall-truth-evaluation");
+        Console.WriteLine("                              Print or write the wall truth evaluation schema");
         Console.WriteLine("  schema visual-snapshot      Print or write the visual QA snapshot schema");
         Console.WriteLine("  validate <artifact.json>    Validate a schema-versioned OpenPlanTrace JSON artifact");
+        Console.WriteLine("  wall-truth-evaluate <truth.json> <structure.json>");
+        Console.WriteLine("                              Score canonical walls against reviewed geometry");
         Console.WriteLine("  kvemo-report <kvemo-crops.jsonl>");
         Console.WriteLine("                              Summarize Kvemo crop priority/training signals");
         Console.WriteLine("  kvemo-profile-template <kvemo-crops.jsonl>");
@@ -10478,6 +11380,19 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("                              Convert reviewed object corrections into a label profile");
         Console.WriteLine();
         Console.WriteLine("Run 'openplantrace scan --help' for scan options.");
+    }
+
+    private static void WriteWallTruthEvaluateUsage()
+    {
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  openplantrace wall-truth-evaluate <wall-truth.json> <structure.json> [--json evaluation.json]");
+        Console.WriteLine();
+        Console.WriteLine("Options:");
+        Console.WriteLine("  --json <path>             Write the evaluation JSON to a file");
+        Console.WriteLine("  --compact-json            Disable pretty JSON");
+        Console.WriteLine("  --no-fail-on-gate         Return exit code 0 even when a quality gate fails");
+        Console.WriteLine();
+        Console.WriteLine("Exit code 1 means the reviewed wall-quality gate failed; exit code 2 means the inputs were invalid.");
     }
 
     private static void WriteInspectUsage()
@@ -10494,7 +11409,7 @@ internal static class OpenPlanTraceCli
     private static void WriteScanUsage()
     {
         Console.WriteLine("Usage:");
-        Console.WriteLine("  openplantrace scan <input.pdf|input.dxf> [--json result.json] [--geojson result.geojson] [--placement placement.json] [--svg page.svg] [--svg-dir overlays] [--visual-snapshot snapshot.json] [--out-dir scan-output]");
+        Console.WriteLine("  openplantrace scan <input.pdf|input.dxf> [--json result.json] [--geojson result.geojson] [--placement placement.json] [--structure structure.json] [--svg page.svg] [--svg-dir overlays] [--visual-snapshot snapshot.json] [--out-dir scan-output]");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  --json <path>             Write schema-versioned scan JSON");
@@ -10502,6 +11417,7 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --compact-scan-gzip <path> Write gzipped compact scan JSON");
         Console.WriteLine("  --geojson <path>          Write page-coordinate GeoJSON feature collection");
         Console.WriteLine("  --placement <path>        Write compact downstream placement JSON with coordinates, metric transforms, routing, and trust gates");
+        Console.WriteLine("  --structure <path>        Write canonical walls, nodes, rooms, openings, provenance, and integrity diagnostics");
         Console.WriteLine("  --svg <path>              Write one SVG overlay");
         Console.WriteLine("  --svg-dir <directory>     Write one SVG overlay per page");
         Console.WriteLine("  --svg-profile <name>      SVG overlay profile: placement-review (default), placement-graph-qa, wall-qa-focus, wall-qa-recall, wall-qa-review, wall-qa, structural-review, or full");
@@ -10510,7 +11426,7 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  --svg-background-embed    Store SVG background images as data URIs for portable/headless QA screenshots");
         Console.WriteLine("  --svg-background-opacity <0..1>  Background image opacity for SVG alignment QA (default 0.68)");
         Console.WriteLine("  --visual-snapshot <path>  Write visual QA snapshot JSON with per-page overlay counts, bounds, and issues");
-        Console.WriteLine("  --out-dir <directory>     Write scan.json, scan.compact.json, scan.compact.json.gz, scan.geojson, placement.json, overlays/page-N.svg, and visual-snapshot.json");
+        Console.WriteLine("  --out-dir <directory>     Write scan, compact, GeoJSON, placement, structure, SVG overlay, and visual QA artifacts");
         Console.WriteLine("  --page <number>           Page used with --svg, default first page");
         Console.WriteLine("  --compact-json            Disable pretty JSON");
         Console.WriteLine("  --trace-stages            Print scanner stage start/completion timing to stderr");
@@ -10740,6 +11656,9 @@ internal static class OpenPlanTraceCli
         Console.WriteLine("  openplantrace schema object-label-profile [--json openplantrace.object-label-profile.schema.json]");
         Console.WriteLine("  openplantrace schema kvemo-crops [--json openplantrace.kvemo-crops.schema.json]");
         Console.WriteLine("  openplantrace schema placement [--json openplantrace.placement.schema.json]");
+        Console.WriteLine("  openplantrace schema structure [--json openplantrace.structure.schema.json]");
+        Console.WriteLine("  openplantrace schema wall-truth [--json openplantrace.wall-truth.schema.json]");
+        Console.WriteLine("  openplantrace schema wall-truth-evaluation [--json openplantrace.wall-truth-evaluation.schema.json]");
         Console.WriteLine("  openplantrace schema visual-snapshot [--json openplantrace.visual-snapshot.schema.json]");
         Console.WriteLine();
         Console.WriteLine("Options:");
@@ -10750,11 +11669,11 @@ internal static class OpenPlanTraceCli
     private static void WriteValidateUsage()
     {
         Console.WriteLine("Usage:");
-        Console.WriteLine("  openplantrace validate <artifact.json> [--kind auto|scan|object-review-dataset|object-correction-dataset|benchmark-manifest|benchmark-result|benchmark-comparison|viewer-benchmark-review-session|batch-manifest|batch-result|batch-comparison|layer-profile|object-label-profile|kvemo-crops|placement|visual-snapshot|geojson] [--deep] [--json validation.json]");
+        Console.WriteLine("  openplantrace validate <artifact.json> [--kind auto|scan|object-review-dataset|object-correction-dataset|benchmark-manifest|benchmark-result|benchmark-comparison|viewer-benchmark-review-session|batch-manifest|batch-result|batch-comparison|layer-profile|object-label-profile|kvemo-crops|placement|structure|wall-truth|wall-truth-evaluation|visual-snapshot|geojson] [--deep] [--json validation.json]");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  --kind <kind>             Override schemaVersion-based kind detection");
-        Console.WriteLine("  --deep                    For batch results/comparisons, also validate referenced scan, visual-snapshot, GeoJSON, overlay, and SVG files");
+        Console.WriteLine("  --deep                    Validate placement/structure semantics or referenced batch artifacts");
         Console.WriteLine("  --json <path>             Write validation result JSON");
         Console.WriteLine("  --compact-json            Disable pretty JSON");
     }
@@ -12054,6 +12973,8 @@ internal sealed class ScanArguments : IVisualAiCliArguments
 
     public string? PlacementPath { get; set; }
 
+    public string? StructurePath { get; set; }
+
     public string? VisualSnapshotPath { get; set; }
 
     public string? OutDirectory { get; set; }
@@ -12217,6 +13138,10 @@ internal sealed class ScanArguments : IVisualAiCliArguments
                     break;
                 case "--placement":
                     parsed.PlacementPath = ReadValue(args, ref index, arg);
+                    break;
+                case "--structure":
+                case "--canonical-structure":
+                    parsed.StructurePath = ReadValue(args, ref index, arg);
                     break;
                 case "--visual-snapshot":
                     parsed.VisualSnapshotPath = ReadValue(args, ref index, arg);

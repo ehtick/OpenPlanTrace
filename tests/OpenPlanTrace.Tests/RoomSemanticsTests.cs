@@ -74,7 +74,8 @@ public sealed class RoomSemanticsTests
                         RoomText("glazing-fragment", "frostet sidelfelt", new PlanRect(430, 190, 118, 16)),
                         RoomText("door-note", "d\u00f8r L\u00d8FTE-", new PlanRect(210, 220, 80, 16)),
                         RoomText("gross-area-note", "1.etg BTA", new PlanRect(310, 220, 74, 16)),
-                        RoomText("floor-note", "1.etg", new PlanRect(410, 220, 46, 16))
+                        RoomText("floor-note", "1.etg", new PlanRect(410, 220, 46, 16)),
+                        RoomText("unit-only-note", "cm", new PlanRect(292, 248, 20, 16))
                     })
             });
 
@@ -84,6 +85,37 @@ public sealed class RoomSemanticsTests
         Assert.Null(room.Label);
         Assert.Empty(room.LabelSourcePrimitiveIds);
         Assert.DoesNotContain(room.Evidence, item => item.Contains("matched room label", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ScanAsync_PrefersOutdoorRoomLabelOverCloserUnitOnlyText()
+    {
+        var document = new PlanDocument(
+            "room-label-unit-conflict",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-top", new PlanPoint(100, 100), new PlanPoint(500, 100)),
+                        Wall("wall-right", new PlanPoint(500, 100), new PlanPoint(500, 350)),
+                        Wall("wall-bottom", new PlanPoint(500, 350), new PlanPoint(100, 350)),
+                        Wall("wall-left", new PlanPoint(100, 350), new PlanPoint(100, 100)),
+                        RoomText("unit-only-label", "cm", new PlanRect(292, 212, 20, 16)),
+                        RoomText("terrace-label", "Terrasse", new PlanRect(178, 176, 72, 16)),
+                        RoomText("terrace-area", "21.7 m2", new PlanRect(184, 200, 62, 16))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        var room = Assert.Single(result.Rooms);
+
+        Assert.Equal("Terrasse", room.Label);
+        Assert.Equal(RoomUseKind.Outdoor, room.UseKind);
+        Assert.Contains("terrace-label", room.LabelSourcePrimitiveIds);
+        Assert.DoesNotContain("unit-only-label", room.LabelSourcePrimitiveIds);
     }
 
     [Fact]
@@ -119,6 +151,59 @@ public sealed class RoomSemanticsTests
         Assert.Contains(room.Evidence, item => item.Contains("semantic room seed", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(room.Evidence, item => item.Contains("requires wall-boundary review", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.Diagnostics.Messages, diagnostic => diagnostic.Code == "rooms.semantic_label_seeds.detected");
+    }
+
+    [Fact]
+    public async Task RoomDetectionStage_SeparatesAdjacentRoomLabelsOnTheSameBaseline()
+    {
+        var document = new PlanDocument(
+            "adjacent-room-label-segmentation",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        RoomText("restroom-label", "WC", new PlanRect(100, 200, 13, 8)),
+                        RoomText("bathroom-label", "BATHROOM", new PlanRect(149, 200, 50, 8)),
+                        RoomText("restroom-area", "2.1 m2", new PlanRect(100, 224, 24, 8)),
+                        RoomText("bathroom-area", "10.7 m2", new PlanRect(149, 224, 30, 8))
+                    })
+            });
+        var context = SemanticRoomTextContext(document);
+
+        await new RoomDetectionStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Contains(context.Rooms, room => room.Label == "WC" && room.UseKind == RoomUseKind.Restroom);
+        Assert.Contains(context.Rooms, room => room.Label == "BATHROOM" && room.UseKind == RoomUseKind.Bathroom);
+        Assert.DoesNotContain(context.Rooms, room => room.Label is not null && room.Label.Contains("WC BATHROOM", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RoomDetectionStage_PreservesCloselySpacedMultiwordRoomLabel()
+    {
+        var document = new PlanDocument(
+            "multiword-room-label-segmentation",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        RoomText("utility-label", "UTILITY", new PlanRect(200, 200, 40, 8)),
+                        RoomText("room-label", "ROOM", new PlanRect(245, 200, 25, 8)),
+                        RoomText("utility-area", "8.4 m2", new PlanRect(210, 224, 30, 8))
+                    })
+            });
+        var context = SemanticRoomTextContext(document);
+
+        await new RoomDetectionStage().ExecuteAsync(context, CancellationToken.None);
+
+        var room = Assert.Single(context.Rooms);
+        Assert.Equal("UTILITY ROOM", room.Label);
+        Assert.Equal(RoomUseKind.Utility, room.UseKind);
     }
 
     [Fact]
@@ -206,6 +291,138 @@ public sealed class RoomSemanticsTests
             context.Diagnostics.Build().Messages,
             diagnostic => diagnostic.Code == "rooms.semantic_label_seeds.detected"
                 && diagnostic.Properties["wallBoundedSeedCount"] == "1");
+    }
+
+    [Fact]
+    public async Task RoomDetectionStage_RetainsDistinctWallBoundedIndoorRoomInsideLeakedOutdoorRoom()
+    {
+        var document = new PlanDocument(
+            "semantic-room-inside-leaked-outdoor-region",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        RoomText("bathroom-label", "BATHROOM", new PlanRect(270, 205, 80, 16)),
+                        RoomText("bathroom-area", "12.0 m2", new PlanRect(278, 229, 64, 16))
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                MinRoomArea = 1_000,
+                WallSnapTolerance = 4,
+                GeometryTolerance = new GeometryTolerance(Distance: 1.5)
+            });
+        context.SheetRegions.AddRange(new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 700, 500), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(40, 60, 560, 380), Confidence.High)
+        });
+        context.Walls.AddRange(new[]
+        {
+            GraphWall("bathroom-top-fragment", new PlanPoint(200, 120), new PlanPoint(280, 120)),
+            GraphWall("bathroom-right", new PlanPoint(400, 120), new PlanPoint(400, 320)),
+            GraphWall("bathroom-bottom", new PlanPoint(400, 320), new PlanPoint(200, 320)),
+            GraphWall("bathroom-left", new PlanPoint(200, 320), new PlanPoint(200, 120))
+        });
+        context.Rooms.Add(
+            new RoomRegion(
+                "leaked-outdoor-room",
+                1,
+                new PlanRect(100, 60, 400, 330),
+                new[]
+                {
+                    new PlanPoint(100, 60),
+                    new PlanPoint(500, 60),
+                    new PlanPoint(500, 390),
+                    new PlanPoint(100, 390)
+                },
+                Array.Empty<string>(),
+                Confidence.Medium)
+            {
+                Label = "TERRACE",
+                UseKind = RoomUseKind.Outdoor,
+                LabelSourcePrimitiveIds = new[] { "terrace-label" }
+            });
+
+        await new RoomDetectionStage().ExecuteAsync(context, CancellationToken.None);
+
+        var bathroom = Assert.Single(context.Rooms, room => room.UseKind == RoomUseKind.Bathroom);
+        Assert.Equal(new PlanRect(200, 120, 200, 200), bathroom.Bounds);
+        Assert.True(bathroom.WallIds.Count >= 4);
+        Assert.Contains(
+            bathroom.Evidence,
+            item => item.Contains("geometrically distinct from overlapping room", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "rooms.semantic_label_seeds.detected"
+                && diagnostic.Properties["resolvedOverlapSeedCount"] == "1");
+    }
+
+    [Fact]
+    public async Task RoomDetectionStage_DoesNotDuplicateEquivalentWallBoundedSemanticRoom()
+    {
+        var document = new PlanDocument(
+            "semantic-room-equivalent-existing-region",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 500),
+                    new PlanPrimitive[]
+                    {
+                        RoomText("bathroom-label", "BATHROOM", new PlanRect(270, 205, 80, 16)),
+                        RoomText("bathroom-area", "12.0 m2", new PlanRect(278, 229, 64, 16))
+                    })
+            });
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                MinRoomArea = 1_000,
+                WallSnapTolerance = 4,
+                GeometryTolerance = new GeometryTolerance(Distance: 1.5)
+            });
+        context.SheetRegions.AddRange(new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 700, 500), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(40, 60, 560, 380), Confidence.High)
+        });
+        context.Walls.AddRange(new[]
+        {
+            GraphWall("bathroom-top-fragment", new PlanPoint(200, 120), new PlanPoint(280, 120)),
+            GraphWall("bathroom-right", new PlanPoint(400, 120), new PlanPoint(400, 320)),
+            GraphWall("bathroom-bottom", new PlanPoint(400, 320), new PlanPoint(200, 320)),
+            GraphWall("bathroom-left", new PlanPoint(200, 320), new PlanPoint(200, 120))
+        });
+        context.Rooms.Add(
+            new RoomRegion(
+                "existing-bathroom",
+                1,
+                new PlanRect(200, 120, 200, 200),
+                new[]
+                {
+                    new PlanPoint(200, 120),
+                    new PlanPoint(400, 120),
+                    new PlanPoint(400, 320),
+                    new PlanPoint(200, 320)
+                },
+                Array.Empty<string>(),
+                Confidence.High)
+            {
+                UseKind = RoomUseKind.Bathroom
+            });
+
+        await new RoomDetectionStage().ExecuteAsync(context, CancellationToken.None);
+
+        Assert.Single(context.Rooms);
+        Assert.DoesNotContain(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "rooms.semantic_label_seeds.detected");
     }
 
     [Fact]
@@ -1212,6 +1429,25 @@ public sealed class RoomSemanticsTests
             SourcePrimitiveIds = new[] { id },
             Evidence = new[] { "test graph wall requires review" }
         };
+
+    private static ScanContext SemanticRoomTextContext(PlanDocument document)
+    {
+        var context = new ScanContext(
+            document,
+            new ScannerOptions
+            {
+                MinRoomArea = 1_000,
+                WallSnapTolerance = 4,
+                GeometryTolerance = new GeometryTolerance(Distance: 1.5)
+            });
+        context.SheetRegions.AddRange(new[]
+        {
+            new SheetRegion("sheet", 1, RegionKind.Sheet, new PlanRect(0, 0, 700, 500), Confidence.High),
+            new SheetRegion("main", 1, RegionKind.MainFloorPlan, new PlanRect(40, 60, 560, 380), Confidence.High)
+        });
+        context.Walls.Add(GraphWall("page-wall-anchor", new PlanPoint(80, 100), new PlanPoint(80, 360)));
+        return context;
+    }
 
     private static WallNode GraphNode(string id, PlanPoint position) =>
         new(

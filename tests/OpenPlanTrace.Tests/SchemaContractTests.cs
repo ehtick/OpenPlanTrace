@@ -463,8 +463,14 @@ public sealed class SchemaContractTests
             .Select(property => ToCamelCase(property.Name))
             .Order(StringComparer.Ordinal)
             .ToArray();
+        var optionalProperties = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "wallSolutions"
+        };
 
-        Assert.Equal(placementProperties, requiredProperties.Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            placementProperties.Where(property => !optionalProperties.Contains(property)),
+            requiredProperties.Order(StringComparer.Ordinal));
         foreach (var placementProperty in placementProperties)
         {
             Assert.Contains(placementProperty, schemaProperties);
@@ -485,6 +491,9 @@ public sealed class SchemaContractTests
                 exportedDocument.RootElement.TryGetProperty(requiredProperty, out _),
                 $"Placement JSON is missing schema-required top-level property '{requiredProperty}'.");
         }
+        Assert.True(
+            exportedDocument.RootElement.TryGetProperty("wallSolutions", out _),
+            "Newly generated placement JSON should include additive wall solver metadata.");
 
         var coordinateSystem = exportedDocument.RootElement.GetProperty("coordinateSystem");
         Assert.Equal("OpenPlanTracePageCoordinates", coordinateSystem.GetProperty("coordinateSpace").GetString());
@@ -510,14 +519,169 @@ public sealed class SchemaContractTests
     }
 
     [Fact]
+    public void StructureSchema_DefinesOpeningAwareCanonicalWallContract()
+    {
+        using var schemaDocument = JsonDocument.Parse(PlanStructureJsonSchema.ReadCurrent());
+
+        AssertDefinitionRequires(
+            schemaDocument,
+            "summary",
+            "pageCount",
+            "wallRunCount",
+            "openingCount",
+            "canonicallyAnchoredOpeningCount",
+            "logicalOpeningHostWallRunCount",
+            "openingIntervalCount",
+            "solidIntervalCount",
+            "totalWallLengthDrawingUnits",
+            "totalWallLengthMeters",
+            "totalSolidWallLengthDrawingUnits",
+            "totalSolidWallLengthMeters",
+            "totalOpeningLengthDrawingUnits",
+            "pageSummaries");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "pageSummary",
+            "pageNumber",
+            "wallRunCount",
+            "openingCount",
+            "canonicallyAnchoredOpeningCount",
+            "logicalOpeningHostWallRunCount",
+            "openingIntervalCount",
+            "solidIntervalCount",
+            "wallLengthDrawingUnits",
+            "wallLengthMeters",
+            "solidWallLengthDrawingUnits",
+            "solidWallLengthMeters",
+            "openingLengthDrawingUnits");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "wallRun",
+            "id",
+            "pageNumber",
+            "centerLine",
+            "drawingLength",
+            "solidDrawingLength",
+            "solidLengthMeters",
+            "openingDrawingLength",
+            "reconstructedOpeningGapCount",
+            "openingIntervals",
+            "solidIntervals",
+            "reconciliation");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "wallRunReconciliation",
+            "status",
+            "originalCenterLine",
+            "reconciledCenterLine",
+            "axisShiftDrawingUnits",
+            "startEndpointDeltaDrawingUnits",
+            "endEndpointDeltaDrawingUnits",
+            "candidateVoteCount",
+            "roomBoundaryVoteCount",
+            "openingVoteCount",
+            "neighborVoteCount",
+            "junctionSnapCount",
+            "collapsedDuplicateRunCount",
+            "confidence",
+            "actions",
+            "evidence");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "wallReconciliationSummary",
+            "reconcilerVersion",
+            "evaluatedWallRunCount",
+            "adjustedWallRunCount",
+            "axisAlignedWallRunCount",
+            "extendedEndpointCount",
+            "trimmedEndpointCount",
+            "junctionSnappedEndpointCount",
+            "collapsedDuplicateWallRunCount",
+            "candidateSupportedWallRunCount",
+            "roomBoundarySupportedWallRunCount",
+            "openingSupportedWallRunCount",
+            "neighborSupportedWallRunCount",
+            "preservedForReviewWallRunCount",
+            "totalAxisShiftDrawingUnits",
+            "maximumAxisShiftDrawingUnits",
+            "evidence");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "wallSolver",
+            "solverVersion",
+            "reconciliation");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "wallOpeningInterval",
+            "id",
+            "wallRunId",
+            "openingId",
+            "attachmentKind",
+            "centerLine",
+            "startParameter",
+            "endParameter",
+            "lengthDrawingUnits");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "wallSolidInterval",
+            "id",
+            "wallRunId",
+            "sequence",
+            "centerLine",
+            "bodyPolygon",
+            "startParameter",
+            "endParameter",
+            "drawingLength");
+        AssertDefinitionRequires(
+            schemaDocument,
+            "opening",
+            "id",
+            "hostWallRunIds",
+            "hostWallOpeningIntervalIds");
+
+        var solverVersion = schemaDocument.RootElement
+            .GetProperty("$defs")
+            .GetProperty("wallSolver")
+            .GetProperty("properties")
+            .GetProperty("solverVersion")
+            .GetProperty("const")
+            .GetString();
+        Assert.Equal(GlobalWallSolutionBuilder.SolverVersion, solverVersion);
+        var selectedProfiles = schemaDocument.RootElement
+            .GetProperty("$defs")
+            .GetProperty("wallSolver")
+            .GetProperty("properties")
+            .GetProperty("selectedProfile")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Contains("joint-structural", selectedProfiles);
+        var reconcilerVersion = schemaDocument.RootElement
+            .GetProperty("$defs")
+            .GetProperty("wallReconciliationSummary")
+            .GetProperty("properties")
+            .GetProperty("reconcilerVersion")
+            .GetProperty("const")
+            .GetString();
+        Assert.Equal(GlobalWallSolutionBuilder.ReconcilerVersion, reconcilerVersion);
+
+        var rootProperties = schemaDocument.RootElement.GetProperty("properties");
+        Assert.False(rootProperties.TryGetProperty("wallRunReconciliation", out _));
+        Assert.False(rootProperties.TryGetProperty("wallReconciliationSummary", out _));
+    }
+
+    [Fact]
     public void VisualSnapshotSchema_DefinesPageLayerBoundsAndIssueShapes()
     {
         using var schemaDocument = JsonDocument.Parse(PlanOverlaySnapshotJsonSchema.ReadCurrent());
 
         AssertDefinitionRequires(schemaDocument, "pageSnapshot", "pageNumber", "width", "height", "pageBounds", "detectionBounds", "detectionCoverage", "drawableItemCount", "primitiveCount", "svgPath", "svgProfile", "visibleDrawableItemCount", "hiddenDrawableItemCount", "visibleLayerNames", "hiddenLayerNames", "layers", "wallPlacement", "reviewQueueCount", "reviewQueueKindBreakdown", "reviewQueueSeverityBreakdown", "reviewQueue", "issues");
         AssertDefinitionRequires(schemaDocument, "layerSnapshot", "name", "count", "bounds", "normalizedBounds", "normalizedDensity", "averageConfidence", "minimumConfidence", "maximumConfidence", "breakdown");
-        AssertDefinitionRequires(schemaDocument, "wallPlacementSummary", "placementReadyWallCount", "placementOmittedWallCount", "representedWallCount", "placementSuppressedWallCount", "placementReviewWallCount", "residualEndpointOnHostWall", "omissionCounts", "topOmissions");
+        AssertDefinitionRequires(schemaDocument, "wallPlacementSummary", "placementReadyWallCount", "placementOmittedWallCount", "representedWallCount", "placementSuppressedWallCount", "placementReviewWallCount", "residualEndpointOnHostWall", "cleanCoverage", "omissionCounts", "topOmissions");
         AssertDefinitionRequires(schemaDocument, "wallGraphResidualSummary", "candidateEndpointCount", "coincidentCandidateEndpointCount", "sameAxisCandidateEndpointCount", "perpendicularCandidateEndpointCount", "maxDistance");
+        AssertDefinitionRequires(schemaDocument, "wallCleanCoverageSummary", "trackedMajorWallCount", "fullyCoveredMajorWallCount", "underCoveredMajorWallCount", "averageCoverageRatio", "minimumCoverageRatio", "underCoveredExamples");
+        AssertDefinitionRequires(schemaDocument, "wallCleanCoverageExample", "wallId", "pageNumber", "wallType", "detectionKind", "confidence", "drawingLength", "coverageRatio", "missingLengthDrawingUnits", "axisToleranceDrawingUnits", "bounds", "centerLine", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallPlacementOmissionSummary", "code", "label", "count", "isPriority");
         AssertDefinitionRequires(schemaDocument, "wallPlacementOmittedWallExample", "wallId", "pageNumber", "code", "label", "isPriority", "wallType", "detectionKind", "confidence", "drawingLength", "bounds", "centerLine", "topologySpanCount", "sourcePrimitiveCount", "evidence");
         AssertDefinitionRequires(schemaDocument, "reviewQueueItem", "id", "kind", "detector", "itemId", "priority", "severity", "pageNumber", "bounds", "confidence", "recommendedAction", "sourcePrimitiveCount", "sourceLayerCount", "evidence");
@@ -594,6 +758,22 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "wallGraphResidualEndpointOnHostCandidate", "id", "pageNumber", "endpointEdgeId", "hostEdgeId", "endpointWallId", "hostWallId", "endpointNodeId", "endpointRole", "relationship", "endpoint", "hostPoint", "endpointMillimeters", "hostPointMillimeters", "distanceDrawingUnits", "distanceMillimeters", "repairLine", "repairLineMillimeters", "severity", "recommendedAction", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallGraphComponent", "id", "pageNumber", "kind", "bounds", "boundsMillimeters", "wallIds", "nodeIds", "edgeIds", "sourcePrimitiveIds", "sourceLayers", "wallCount", "nodeCount", "edgeCount", "drawingLength", "lengthMeters", "confidence", "excludedFromStructuralTopology", "evidence");
         AssertDefinitionRequires(schemaDocument, "wallGraphRepairCandidate", "id", "pageNumber", "kind", "suggestedAction", "severity", "importImpact", "applicability", "sourceNodeId", "sourcePoint", "sourcePointMillimeters", "targetPoint", "targetPointMillimeters", "targetNodeId", "hostWallId", "gapDistanceDrawingUnits", "gapDistanceMillimeters", "safeSnapDistanceDrawingUnits", "safeSnapDistanceMillimeters", "reviewDistanceLimitDrawingUnits", "reviewDistanceLimitMillimeters", "excessDistanceBeyondSafeSnapDrawingUnits", "excessDistanceBeyondSafeSnapMillimeters", "repairLine", "repairLineMillimeters", "bounds", "boundsMillimeters", "wallIds", "sourcePrimitiveIds", "sourceLayers", "confidence", "requiresReview", "recommendedAction", "evidence");
+        AssertDefinitionRequires(schemaDocument, "solvedWallOpeningInterval", "id", "wallRunId", "openingId", "pageNumber", "type", "operation", "attachmentKind", "centerLine", "centerLineMillimeters", "startPoint", "startPointMillimeters", "endPoint", "endPointMillimeters", "startParameter", "endParameter", "centerParameter", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "lengthDrawingUnits", "startOffsetMillimeters", "endOffsetMillimeters", "centerOffsetMillimeters", "lengthMillimeters", "sourceOpeningWidthDrawingUnits", "sourceOpeningWidthMillimeters", "crossWallOffsetDrawingUnits", "crossWallOffsetMillimeters", "readyForCoordinatePlacement", "requiresReview", "confidence", "sourceHostWallIds", "sourcePrimitiveIds", "sourceLayers", "evidence");
+        AssertDefinitionRequires(schemaDocument, "solvedWallSolidInterval", "id", "wallRunId", "pageNumber", "sequence", "centerLine", "centerLineMillimeters", "bodyPolygon", "bodyPolygonMillimeters", "bodyBounds", "bodyBoundsMillimeters", "alongVector", "normalVector", "thicknessDrawingUnits", "thicknessMillimeters", "startParameter", "endParameter", "centerParameter", "startOffsetDrawingUnits", "endOffsetDrawingUnits", "centerOffsetDrawingUnits", "drawingLength", "lengthMeters", "readyForCoordinatePlacement", "readyForMetricPlacement", "requiresReview", "reviewReasons", "adjacentOpeningIds", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallRunReconciliation", "status", "originalCenterLine", "reconciledCenterLine", "axisShiftDrawingUnits", "startEndpointDeltaDrawingUnits", "endEndpointDeltaDrawingUnits", "candidateVoteCount", "roomBoundaryVoteCount", "openingVoteCount", "neighborVoteCount", "junctionSnapCount", "collapsedDuplicateRunCount", "confidence", "actions", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallReconciliationSummary", "reconcilerVersion", "evaluatedWallRunCount", "adjustedWallRunCount", "axisAlignedWallRunCount", "extendedEndpointCount", "trimmedEndpointCount", "junctionSnappedEndpointCount", "collapsedDuplicateWallRunCount", "candidateSupportedWallRunCount", "roomBoundarySupportedWallRunCount", "openingSupportedWallRunCount", "neighborSupportedWallRunCount", "preservedForReviewWallRunCount", "totalAxisShiftDrawingUnits", "maximumAxisShiftDrawingUnits", "evidence");
+        AssertDefinitionRequires(schemaDocument, "solvedWallRun", "id", "pageNumber", "fromNodeId", "toNodeId", "wallType", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "drawingLength", "lengthMeters", "thicknessDrawingUnits", "thicknessMillimeters", "millimetersPerDrawingUnit", "solidDrawingLength", "solidLengthMeters", "openingDrawingLength", "reconstructedOpeningGapCount", "confidence", "reliability", "openingIntervals", "solidIntervals", "candidateIds", "candidateOrigins", "sourceWallIds", "sourceWallGraphEdgeIds", "sourcePrimitiveIds", "sourceLayers", "reconciliation", "evidence");
+        AssertDefinitionRequires(schemaDocument, "wallSolutions", "solverVersion", "selectedHypothesisId", "selectedProfile", "selectedScore", "candidateCount", "selectedCandidateCount", "selectedWallRunCount", "iterationCount", "hypotheses", "selectedWallRuns", "candidateDecisions", "reconciliation", "evidence");
+        var selectedProfiles = schemaDocument.RootElement
+            .GetProperty("$defs")
+            .GetProperty("wallSolutions")
+            .GetProperty("properties")
+            .GetProperty("selectedProfile")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Contains("joint-structural", selectedProfiles);
         AssertDefinitionRequires(schemaDocument, "routingLayer", "barriers", "passages", "obstacles", "roomUseHints", "suppressedObjects", "ignoredObjects", "suppressedObjectCandidateIds", "ignoredObjectCandidateIds", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingBarrier", "id", "pageNumber", "sourceId", "sourceKind", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "thickness", "drawingLength", "lengthMeters", "thicknessMillimeters", "measurementScaleGroupId", "millimetersPerDrawingUnit", "wallComponentId", "wallComponentKind", "excludedFromStructuralTopology", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
         AssertDefinitionRequires(schemaDocument, "routingPassage", "id", "pageNumber", "sourceId", "sourceKind", "type", "operation", "orientation", "centerLine", "centerLineMillimeters", "bounds", "boundsMillimeters", "drawingWidth", "widthMillimeters", "measurementScaleGroupId", "millimetersPerDrawingUnit", "hostWallIds", "connectedRoomIds", "connectedRoomLabels", "connectedRoomLinks", "roomAdjacencyIds", "placement", "placementStatus", "readyForCoordinatePlacement", "requiresReview", "reviewReasons", "confidence", "sourcePrimitiveIds", "sourceLayers", "evidence");
@@ -606,6 +786,13 @@ public sealed class SchemaContractTests
         AssertDefinitionRequires(schemaDocument, "line", "start", "end");
         AssertDefinitionRequires(schemaDocument, "point", "x", "y");
         AssertDefinitionRequires(schemaDocument, "vector", "x", "y");
+
+        var rootProperties = schemaDocument.RootElement.GetProperty("properties");
+        Assert.False(rootProperties.TryGetProperty("solvedWallOpeningInterval", out _));
+        Assert.False(rootProperties.TryGetProperty("solvedWallSolidInterval", out _));
+        Assert.False(rootProperties.TryGetProperty("solvedWallRun", out _));
+        Assert.False(rootProperties.TryGetProperty("wallRunReconciliation", out _));
+        Assert.False(rootProperties.TryGetProperty("wallReconciliationSummary", out _));
 
         var routingLayerProperty = schemaDocument.RootElement
             .GetProperty("properties")

@@ -108,6 +108,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var evidenceUpdated = 0;
         var roomReferenced = 0;
         var twoSidedRoomEvidence = 0;
+        var sameRoomOnBothSidesEvidence = 0;
         var oneSidedRoomEvidence = 0;
         var rejectedEvidenceProtected = 0;
         var roomConfirmedPlacementPromoted = 0;
@@ -145,9 +146,13 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             var sideEvidence = roomsByPage.TryGetValue(wall.PageNumber, out var pageRooms)
                 ? AnalyzeRoomSides(wall, pageRooms, context.Options)
                 : RoomSideEvidence.Empty;
-            if (sideEvidence.PositiveRoomHits > 0 && sideEvidence.NegativeRoomHits > 0)
+            if (sideEvidence.HasRoomsOnBothSides)
             {
                 twoSidedRoomEvidence++;
+            }
+            else if (sideEvidence.HasSameRoomOnBothSidesOnly)
+            {
+                sameRoomOnBothSidesEvidence++;
             }
             else if (sideEvidence.PositiveRoomHits > 0 || sideEvidence.NegativeRoomHits > 0)
             {
@@ -668,6 +673,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             roomBoundaryRepairSupport);
         var sourceBackedExteriorShellClosureInferred = InferSourceBackedExteriorShellClosureWalls(context);
         var exteriorShellGapInferred = InferExteriorShellGapWalls(context);
+        DemoteParallelOffsetDetailShadowWalls(context);
+        DemoteExteriorOpeningClearanceRectangleWalls(context);
 
         AddDiagnostics(
             context,
@@ -675,6 +682,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             evidenceUpdated,
             roomReferenced,
             twoSidedRoomEvidence,
+            sameRoomOnBothSidesEvidence,
             oneSidedRoomEvidence,
             rejectedEvidenceProtected,
             roomConfirmedPlacementPromoted,
@@ -1029,7 +1037,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         {
             if (hasOutdoorRoomReference)
             {
-                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment))
+                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment, options))
                 {
                     var refinedType = IsRecoveredMissingWallCandidate(wall)
                         ? WallType.Interior
@@ -1062,7 +1070,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         {
             if (sideEvidence.HasOutdoorRoomSide)
             {
-                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment))
+                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment, options))
                 {
                     var refinedType = IsRecoveredMissingWallCandidate(wall)
                         ? WallType.Interior
@@ -1097,7 +1105,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         {
             if (sideEvidence.HasOutdoorRoomSide)
             {
-                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment))
+                if (IsUntrustedOutdoorExteriorPromotionCandidate(wall, assessment, options))
                 {
                     var refinedType = IsRecoveredMissingWallCandidate(wall)
                         ? WallType.Interior
@@ -1339,13 +1347,19 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
 
     private static bool IsUntrustedOutdoorExteriorPromotionCandidate(
         WallSegment wall,
-        WallEvidenceWallAssessment? assessment)
+        WallEvidenceWallAssessment? assessment,
+        ScannerOptions options)
     {
         var evidence = wall.Evidence
             .Concat(assessment?.Evidence ?? Array.Empty<string>())
             .Concat(assessment?.ScoreBreakdown.PositiveEvidence ?? Array.Empty<string>())
             .Concat(assessment?.ScoreBreakdown.NegativeEvidence ?? Array.Empty<string>())
             .ToArray();
+        if (IsAsymmetricDimensionFacePair(wall, evidence, options))
+        {
+            return true;
+        }
+
         if (HasTrustedExteriorShellSupport(evidence))
         {
             return false;
@@ -2398,6 +2412,28 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var evidence = assessment.Evidence
             .Concat(wall.Evidence)
             .ToArray();
+        if (wall.WallType == WallType.Unknown
+            && EvidenceContainsAny(
+                evidence,
+                "not trusted as exterior without shell support",
+                "outdoor covered-area boundary")
+            && IsAsymmetricDimensionFacePair(wall, evidence, options))
+        {
+            demotionEvidence =
+            [
+                "wall evidence: demoted from placement-ready because asymmetric dimension/structural face pairing healed substantially different gap coverage"
+            ];
+            demotedAssessment = assessment with
+            {
+                Category = WallEvidenceCategory.MediumWallBody,
+                PlacementReady = false,
+                RequiresReview = true,
+                Decision = WallEvidenceDecision.Review,
+                Evidence = AppendEvidence(assessment.Evidence, demotionEvidence)
+            };
+            return true;
+        }
+
         if (!HasUnknownOrWeakLayerEvidence(evidence)
             || !TryReadPairScore(evidence, out var pairScore)
             || !TryReadFaceFragmentCounts(evidence, out var faceFragments))
@@ -2838,7 +2874,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var offAxisRatio = OffAxisRatio(wall.CenterLine);
         demotionEvidence =
         [
-            $"wall evidence: demoted from placement-ready because non-orthogonal single-line candidate has dimension-like weak layer evidence and no explicit room-boundary support; off-axis ratio {offAxisRatio.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}, room refs {roomReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, side room hits {(sideEvidence.PositiveRoomHits + sideEvidence.NegativeRoomHits).ToString(System.Globalization.CultureInfo.InvariantCulture)}, component {component?.Kind.ToString() ?? "Unknown"}"
+            $"wall evidence: demoted from placement-ready because non-orthogonal single-line candidate has dimension-like weak layer evidence and no explicit room-boundary support; off-axis ratio {offAxisRatio.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}, room refs {roomReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, side room hits {(sideEvidence.PositiveRoomHits + sideEvidence.NegativeRoomHits).ToString(System.Globalization.CultureInfo.InvariantCulture)}, same room on both sides {sideEvidence.HasSameRoomOnBothSidesOnly.ToString(System.Globalization.CultureInfo.InvariantCulture)}, component {component?.Kind.ToString() ?? "Unknown"}"
         ];
         demotedAssessment = assessment with
         {
@@ -3233,6 +3269,81 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         return maxHealedGap > 0;
     }
 
+    private static bool IsAsymmetricDimensionFacePair(
+        WallSegment wall,
+        IReadOnlyList<string> evidence,
+        ScannerOptions options)
+    {
+        if (wall.PairEvidence is not { } pair
+            || pair.Score >= 0.90
+            || pair.OverlapRatio < 0.95
+            || pair.FaceSeparation < Math.Max(9.0, options.DefaultWallThickness * 2.25)
+            || wall.DrawingLength > Math.Max(180.0, options.MinWallLength * 7.5)
+            || Math.Max(pair.FirstFaceFragmentCount, pair.SecondFaceFragmentCount) < 10
+            || pair.FirstFaceFragmentCount + pair.SecondFaceFragmentCount < 24
+            || !IsDimensionLikeWeakLayerEvidence(evidence)
+            || !EvidenceContainsAny(evidence, "wall type interior", "supported wall evidence inside exterior envelope")
+            || HasTrustedExteriorShellSupport(evidence)
+            || !TryReadHealedFaceGapTotals(evidence, out var healedGaps))
+        {
+            return false;
+        }
+
+        var largerHealedGap = Math.Max(healedGaps.FirstFace, healedGaps.SecondFace);
+        var smallerHealedGap = Math.Min(healedGaps.FirstFace, healedGaps.SecondFace);
+        return largerHealedGap >= Math.Max(12.0, wall.DrawingLength * 0.25)
+            && smallerHealedGap <= largerHealedGap * 0.35;
+    }
+
+    private static bool TryReadHealedFaceGapTotals(
+        IEnumerable<string> evidence,
+        out FaceHealedGapTotals healedGaps)
+    {
+        double? firstFace = null;
+        double? secondFace = null;
+        foreach (var item in evidence)
+        {
+            if (TryReadHealedFaceGapTotal(item, "first face healed ", out var first))
+            {
+                firstFace = Math.Max(firstFace ?? 0, first);
+            }
+
+            if (TryReadHealedFaceGapTotal(item, "second face healed ", out var second))
+            {
+                secondFace = Math.Max(secondFace ?? 0, second);
+            }
+        }
+
+        healedGaps = new FaceHealedGapTotals(firstFace ?? 0, secondFace ?? 0);
+        return firstFace is not null || secondFace is not null;
+    }
+
+    private static bool TryReadHealedFaceGapTotal(
+        string evidence,
+        string prefix,
+        out double healedGap)
+    {
+        healedGap = 0;
+        var start = evidence.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return false;
+        }
+
+        start += prefix.Length;
+        var end = evidence.IndexOf(" drawing units", start, StringComparison.OrdinalIgnoreCase);
+        if (end < 0)
+        {
+            return false;
+        }
+
+        return double.TryParse(
+            evidence[start..end].Trim().Replace(',', '.'),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out healedGap);
+    }
+
     private static bool TryReadPairScore(IEnumerable<string> evidence, out double pairScore)
     {
         foreach (var item in evidence)
@@ -3567,6 +3678,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var negativeHits = 0;
         var positiveOutdoorHits = 0;
         var negativeOutdoorHits = 0;
+        var positiveRoomIds = new HashSet<string>(StringComparer.Ordinal);
+        var negativeRoomIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var t in new[] { 0.25, 0.5, 0.75 })
         {
@@ -3575,6 +3688,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             if (positiveRooms.Count > 0)
             {
                 positiveHits++;
+                positiveRoomIds.UnionWith(positiveRooms.Select(room => room.Id));
                 if (positiveRooms.Any(room => room.UseKind == RoomUseKind.Outdoor))
                 {
                     positiveOutdoorHits++;
@@ -3585,6 +3699,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             if (negativeRooms.Count > 0)
             {
                 negativeHits++;
+                negativeRoomIds.UnionWith(negativeRooms.Select(room => room.Id));
                 if (negativeRooms.Any(room => room.UseKind == RoomUseKind.Outdoor))
                 {
                     negativeOutdoorHits++;
@@ -3592,7 +3707,15 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             }
         }
 
-        return new RoomSideEvidence(positiveHits, negativeHits, positiveOutdoorHits, negativeOutdoorHits);
+        var hasDistinctRoomsAcrossSides = positiveRoomIds.Any(positiveRoomId =>
+            negativeRoomIds.Any(negativeRoomId =>
+                !StringComparer.Ordinal.Equals(positiveRoomId, negativeRoomId)));
+        return new RoomSideEvidence(
+            positiveHits,
+            negativeHits,
+            positiveOutdoorHits,
+            negativeOutdoorHits,
+            hasDistinctRoomsAcrossSides);
     }
 
     private static IReadOnlyList<RoomRegion> RoomsContaining(
@@ -4100,16 +4223,45 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var sequenceByPage = new Dictionary<int, int>();
         var minLength = Math.Max(160.0, context.Options.MinWallLength * 6.0);
         var maxPerPage = Math.Min(12, Math.Max(2, context.Options.MaxWallEvidenceRecoveredWallsPerPage / 4));
+        var dimensionSuppressedSourceIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var page in context.Document.Pages)
         {
             var pageCount = 0;
-            var candidates = PrimitiveGeometry
+            var primitiveLines = PrimitiveGeometry
                 .EnumerateLines(page, context)
+                .ToArray();
+            var dimensionSourceIds = context.Dimensions
+                .Where(dimension => dimension.PageNumber == page.Number)
+                .SelectMany(dimension => dimension.SourcePrimitiveIds)
+                .ToHashSet(StringComparer.Ordinal);
+            var dimensionBaselines = primitiveLines
+                .Where(line => dimensionSourceIds.Contains(line.PrimitiveId))
+                .Select(line => TryCreateSourceBackedExteriorShellClosureCandidate(line, context.Options))
+                .Where(candidate => candidate is not null)
+                .Select(candidate => candidate!)
+                .ToArray();
+            var sourceCandidates = primitiveLines
                 .Select(line => TryCreateSourceBackedExteriorShellClosureCandidate(line, context.Options))
                 .Where(candidate => candidate is not null)
                 .Select(candidate => candidate!)
                 .Where(candidate => candidate.Line.Length >= minLength)
+                .ToArray();
+            var candidates = sourceCandidates
+                .Where(candidate =>
+                {
+                    if (!IsDimensionBaselineOrContinuation(
+                            candidate,
+                            dimensionSourceIds,
+                            dimensionBaselines,
+                            context.Options))
+                    {
+                        return true;
+                    }
+
+                    dimensionSuppressedSourceIds.UnionWith(candidate.SourcePrimitiveIds);
+                    return false;
+                })
                 .GroupBy(candidate => SourceBackedExteriorShellClosureKey(
                     page.Number,
                     candidate.Orientation,
@@ -4254,6 +4406,22 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             }
         }
 
+        if (dimensionSuppressedSourceIds.Count > 0)
+        {
+            context.AddDiagnostic(
+                "walls.source_backed_shell_dimension_candidates_suppressed",
+                DiagnosticSeverity.Info,
+                StageName,
+                $"{dimensionSuppressedSourceIds.Count} dimension baseline or continuation line(s) were blocked from exterior-shell recovery.",
+                confidence: Confidence.High,
+                scope: DiagnosticScope.Detection,
+                sourcePrimitiveIds: dimensionSuppressedSourceIds,
+                properties: new Dictionary<string, string>
+                {
+                    ["suppressedSourcePrimitiveCount"] = dimensionSuppressedSourceIds.Count.ToString(CultureInfo.InvariantCulture)
+                });
+        }
+
         if (inferredWalls.Count == 0)
         {
             return 0;
@@ -4268,6 +4436,525 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         };
         return inferredWalls.Count;
     }
+
+    private static int DemoteParallelOffsetDetailShadowWalls(ScanContext context)
+    {
+        if (context.Walls.Count < 2 || context.WallEvidenceMap.WallAssessments.Count == 0)
+        {
+            return 0;
+        }
+
+        var assessmentsByWallId = BuildEvidenceByWallId(context.WallEvidenceMap);
+        var updatedAssessments = new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal);
+        var demotedWallIds = new HashSet<string>(StringComparer.Ordinal);
+        var sourcePrimitiveIds = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var index = 0; index < context.Walls.Count; index++)
+        {
+            var wall = context.Walls[index];
+            if (!assessmentsByWallId.TryGetValue(wall.Id, out var assessment)
+                || !TryFindParallelOffsetStructuralShadow(
+                    wall,
+                    assessment,
+                    context.Walls,
+                    assessmentsByWallId,
+                    context.Options,
+                    out var shadow,
+                    out var separation,
+                    out var overlapRatio))
+            {
+                continue;
+            }
+
+            var evidence = new[]
+            {
+                $"wall evidence: demoted from placement-ready because weak unpaired linework is shadowed by stronger parallel wall {shadow.Id}; separation {separation.ToString("0.###", CultureInfo.InvariantCulture)}, overlap ratio {overlapRatio.ToString("0.###", CultureInfo.InvariantCulture)}",
+                "wall evidence: parallel offset detail shadow retained for review instead of canonical coordinate placement"
+            };
+            var updatedAssessment = assessment with
+            {
+                Category = assessment.Category == WallEvidenceCategory.StrongWallBody
+                    ? WallEvidenceCategory.MediumWallBody
+                    : assessment.Category,
+                PlacementReady = false,
+                RequiresReview = true,
+                Decision = WallEvidenceDecision.Review,
+                Evidence = AppendEvidence(assessment.Evidence, evidence)
+            };
+
+            updatedAssessments[wall.Id] = updatedAssessment;
+            assessmentsByWallId[wall.Id] = updatedAssessment;
+            context.Walls[index] = wall with
+            {
+                Evidence = AppendEvidence(wall.Evidence, evidence)
+            };
+            demotedWallIds.Add(wall.Id);
+            sourcePrimitiveIds.UnionWith(wall.SourcePrimitiveIds);
+        }
+
+        if (updatedAssessments.Count == 0)
+        {
+            return 0;
+        }
+
+        context.WallEvidenceMap = context.WallEvidenceMap with
+        {
+            WallAssessments = context.WallEvidenceMap.WallAssessments
+                .Select(assessment => updatedAssessments.TryGetValue(assessment.WallId, out var updated)
+                    ? updated
+                    : assessment)
+                .ToArray()
+        };
+        context.AddDiagnostic(
+            "walls.parallel_offset_detail_shadows_demoted",
+            DiagnosticSeverity.Info,
+            StageName,
+            $"{demotedWallIds.Count} weak unpaired wall candidate(s) were retained for review after stronger parallel wall bodies explained their placement.",
+            confidence: Confidence.High,
+            scope: DiagnosticScope.Detection,
+            sourcePrimitiveIds: sourcePrimitiveIds,
+            properties: new Dictionary<string, string>
+            {
+                ["demotedWallCount"] = demotedWallIds.Count.ToString(CultureInfo.InvariantCulture),
+                ["wallIds"] = string.Join(",", demotedWallIds.OrderBy(id => id, StringComparer.Ordinal).Take(20))
+            });
+        return demotedWallIds.Count;
+    }
+
+    private static bool TryFindParallelOffsetStructuralShadow(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        IReadOnlyList<WallSegment> walls,
+        IReadOnlyDictionary<string, WallEvidenceWallAssessment> assessmentsByWallId,
+        ScannerOptions options,
+        out WallSegment shadow,
+        out double separation,
+        out double overlapRatio)
+    {
+        shadow = null!;
+        separation = 0;
+        overlapRatio = 0;
+        if (!assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision != WallEvidenceDecision.Accept
+            || wall.WallType == WallType.Exterior
+            || wall.PairEvidence is not null
+            || wall.DetectionKind is not (WallDetectionKind.SingleLine or WallDetectionKind.FragmentMerged)
+            || wall.DrawingLength < Math.Max(72.0, options.MinWallLength * 3.0)
+            || !TryResolveAxisInterval(
+                wall.CenterLine,
+                out var orientation,
+                out var coordinate,
+                out var start,
+                out var end))
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        if (!HasUnknownOrWeakLayerEvidence(evidence)
+            || EvidenceContainsAny(
+                evidence,
+                "filled wall-solid",
+                "filled closed vector wall body",
+                "strong double-edge wall body",
+                "wall evidence: recovered wall body"))
+        {
+            return false;
+        }
+
+        var minimumSeparation = Math.Max(10.0, options.DefaultWallThickness * 1.5);
+        var maximumSeparation = Math.Min(
+            72.0,
+            Math.Max(48.0, options.DefaultWallThickness * 12.0));
+        var minimumOverlap = Math.Max(48.0, wall.DrawingLength * 0.72);
+        var matches = new List<(WallSegment Wall, double Separation, double Overlap, double OverlapRatio)>();
+        foreach (var other in walls)
+        {
+            if (string.Equals(other.Id, wall.Id, StringComparison.Ordinal)
+                || other.PageNumber != wall.PageNumber
+                || !assessmentsByWallId.TryGetValue(other.Id, out var otherAssessment)
+                || !IsTrustedParallelStructuralShadow(other, otherAssessment)
+                || !TryResolveAxisInterval(
+                    other.CenterLine,
+                    out var otherOrientation,
+                    out var otherCoordinate,
+                    out var otherStart,
+                    out var otherEnd)
+                || otherOrientation != orientation)
+            {
+                continue;
+            }
+
+            var candidateSeparation = Math.Abs(otherCoordinate - coordinate);
+            if (candidateSeparation < minimumSeparation || candidateSeparation > maximumSeparation)
+            {
+                continue;
+            }
+
+            var overlap = Math.Max(0, Math.Min(end, otherEnd) - Math.Max(start, otherStart));
+            var candidateOverlapRatio = overlap / Math.Max(wall.DrawingLength, 0.001);
+            if (overlap < minimumOverlap || candidateOverlapRatio < 0.72)
+            {
+                continue;
+            }
+
+            matches.Add((other, candidateSeparation, overlap, candidateOverlapRatio));
+        }
+
+        if (matches.Count == 0)
+        {
+            return false;
+        }
+
+        var best = matches
+            .OrderByDescending(match => match.OverlapRatio)
+            .ThenBy(match => match.Separation)
+            .ThenByDescending(match => match.Wall.Confidence.Value)
+            .ThenBy(match => match.Wall.Id, StringComparer.Ordinal)
+            .First();
+        shadow = best.Wall;
+        separation = best.Separation;
+        overlapRatio = best.OverlapRatio;
+        return true;
+    }
+
+    private static bool IsTrustedParallelStructuralShadow(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment)
+    {
+        if (!assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision != WallEvidenceDecision.Accept)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        if (EvidenceContainsAny(
+                evidence,
+                "object/fixture detail",
+                "surface pattern detail",
+                "dimension/annotation",
+                "door swing",
+                "door leaf",
+                "repeated short detail"))
+        {
+            return false;
+        }
+
+        var trustedPair = wall.PairEvidence is { } pair
+            && pair.Score >= 0.68
+            && pair.OverlapRatio >= 0.85;
+        return trustedPair
+            || EvidenceContainsAny(
+                evidence,
+                "filled wall-solid",
+                "filled closed vector wall body",
+                "strong double-edge wall body",
+                "source-backed exterior shell closure");
+    }
+
+    private static int DemoteExteriorOpeningClearanceRectangleWalls(ScanContext context)
+    {
+        if (context.Openings.Count == 0
+            || context.Walls.Count < 3
+            || !TryBuildTrustedExteriorWallEnvelope(context, out var exteriorEnvelope))
+        {
+            return 0;
+        }
+
+        var assessmentsByWallId = BuildEvidenceByWallId(context.WallEvidenceMap);
+        var updatedAssessments = new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal);
+        var demotedWallIds = new HashSet<string>(StringComparer.Ordinal);
+        var sourcePrimitiveIds = new HashSet<string>(StringComparer.Ordinal);
+        var shellContactTolerance = Math.Max(
+            8.0,
+            Math.Max(context.Options.WallSnapTolerance * 4.0, context.Options.DefaultWallThickness * 2.0));
+
+        for (var index = 0; index < context.Walls.Count; index++)
+        {
+            var wall = context.Walls[index];
+            if (!assessmentsByWallId.TryGetValue(wall.Id, out var assessment)
+                || !IsWeakUnpairedPlacementWall(wall, assessment)
+                || exteriorEnvelope.Inflate(context.Options.WallSnapTolerance).Contains(wall.CenterLine.Midpoint)
+                || !TryFindUnfilledSourceRectangle(
+                    context,
+                    wall,
+                    out var rectangleBounds,
+                    out var rectangleSourcePrimitiveIds)
+                || rectangleBounds.Area <= 0
+                || rectangleBounds.OverlapArea(exteriorEnvelope) / rectangleBounds.Area > 0.25
+                || !rectangleBounds.Inflate(shellContactTolerance).Intersects(exteriorEnvelope)
+                || !context.Openings.Any(opening =>
+                    opening.PageNumber == wall.PageNumber
+                    && opening.Bounds.Inflate(shellContactTolerance).Intersects(wall.Bounds)))
+            {
+                continue;
+            }
+
+            var evidence = new[]
+            {
+                $"wall evidence: demoted from placement-ready because source line belongs to an unfilled exterior opening-clearance rectangle {rectangleBounds.Width.ToString("0.###", CultureInfo.InvariantCulture)} x {rectangleBounds.Height.ToString("0.###", CultureInfo.InvariantCulture)} drawing units",
+                "wall evidence: exterior opening-clearance rectangle retained as review geometry instead of canonical wall placement"
+            };
+            var updatedAssessment = assessment with
+            {
+                PlacementReady = false,
+                RequiresReview = true,
+                Decision = WallEvidenceDecision.Review,
+                Evidence = AppendEvidence(assessment.Evidence, evidence)
+            };
+
+            updatedAssessments[wall.Id] = updatedAssessment;
+            assessmentsByWallId[wall.Id] = updatedAssessment;
+            context.Walls[index] = wall with
+            {
+                Evidence = AppendEvidence(wall.Evidence, evidence)
+            };
+            demotedWallIds.Add(wall.Id);
+            sourcePrimitiveIds.UnionWith(rectangleSourcePrimitiveIds);
+        }
+
+        if (updatedAssessments.Count == 0)
+        {
+            return 0;
+        }
+
+        context.WallEvidenceMap = context.WallEvidenceMap with
+        {
+            WallAssessments = context.WallEvidenceMap.WallAssessments
+                .Select(assessment => updatedAssessments.TryGetValue(assessment.WallId, out var updated)
+                    ? updated
+                    : assessment)
+                .ToArray()
+        };
+        context.AddDiagnostic(
+            "walls.exterior_opening_clearance_rectangles_demoted",
+            DiagnosticSeverity.Info,
+            StageName,
+            $"{demotedWallIds.Count} exterior opening-clearance rectangle edge(s) were retained for review instead of wall placement.",
+            confidence: Confidence.High,
+            scope: DiagnosticScope.Detection,
+            sourcePrimitiveIds: sourcePrimitiveIds,
+            properties: new Dictionary<string, string>
+            {
+                ["demotedWallCount"] = demotedWallIds.Count.ToString(CultureInfo.InvariantCulture),
+                ["wallIds"] = string.Join(",", demotedWallIds.OrderBy(id => id, StringComparer.Ordinal).Take(20))
+            });
+        return demotedWallIds.Count;
+    }
+
+    private static bool IsWeakUnpairedPlacementWall(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment)
+    {
+        if (!assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision != WallEvidenceDecision.Accept
+            || wall.WallType == WallType.Exterior
+            || wall.PairEvidence is not null
+            || wall.DetectionKind is not (WallDetectionKind.SingleLine or WallDetectionKind.FragmentMerged))
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        return HasUnknownOrWeakLayerEvidence(evidence)
+            && !EvidenceContainsAny(
+                evidence,
+                "filled wall-solid",
+                "filled closed vector wall body",
+                "strong double-edge wall body",
+                "wall evidence: recovered wall body");
+    }
+
+    private static bool TryBuildTrustedExteriorWallEnvelope(
+        ScanContext context,
+        out PlanRect envelope)
+    {
+        var assessmentsByWallId = BuildEvidenceByWallId(context.WallEvidenceMap);
+        var trustedWalls = context.Walls
+            .Where(wall =>
+                wall.WallType == WallType.Exterior
+                && assessmentsByWallId.TryGetValue(wall.Id, out var assessment)
+                && assessment.PlacementReady
+                && !assessment.RequiresReview
+                && assessment.Decision == WallEvidenceDecision.Accept
+                && IsTrustedParallelStructuralShadow(wall, assessment))
+            .ToArray();
+        var orientations = trustedWalls
+            .Select(wall => TryResolveAxisInterval(wall.CenterLine, out var orientation, out _, out _, out _)
+                ? orientation
+                : AxisOrientation.Unknown)
+            .Where(orientation => orientation != AxisOrientation.Unknown)
+            .Distinct()
+            .Count();
+        if (trustedWalls.Length < 3 || orientations < 2)
+        {
+            envelope = PlanRect.Empty;
+            return false;
+        }
+
+        envelope = PlanRect.Union(trustedWalls.Select(wall => wall.Bounds));
+        return !envelope.IsEmpty && envelope.Area > 0;
+    }
+
+    private static bool TryFindUnfilledSourceRectangle(
+        ScanContext context,
+        WallSegment wall,
+        out PlanRect rectangleBounds,
+        out IReadOnlyList<string> sourcePrimitiveIds)
+    {
+        rectangleBounds = PlanRect.Empty;
+        sourcePrimitiveIds = Array.Empty<string>();
+        var page = context.Document.Pages.FirstOrDefault(candidate => candidate.Number == wall.PageNumber);
+        if (page is null)
+        {
+            return false;
+        }
+
+        var tolerance = Math.Max(0.5, context.Options.GeometryTolerance.Distance * 2.0);
+        var minimumSide = Math.Max(24.0, context.Options.MinWallLength);
+        const double maximumSide = 240.0;
+        var lines = PrimitiveGeometry
+            .EnumerateLines(page, context)
+            .Where(line => IsUnfilledSourcePrimitive(line.Primitive))
+            .Where(line => TryResolveAxisInterval(line.Segment, out _, out _, out _, out _))
+            .ToArray();
+        var sourceIds = wall.SourcePrimitiveIds.ToHashSet(StringComparer.Ordinal);
+        foreach (var sourceLine in lines.Where(line => sourceIds.Contains(line.PrimitiveId)))
+        {
+            if (!TryResolveAxisInterval(
+                    sourceLine.Segment,
+                    out var orientation,
+                    out var coordinate,
+                    out var start,
+                    out var end))
+            {
+                continue;
+            }
+
+            foreach (var opposite in lines)
+            {
+                if (string.Equals(opposite.PrimitiveId, sourceLine.PrimitiveId, StringComparison.Ordinal)
+                    || !TryResolveAxisInterval(
+                        opposite.Segment,
+                        out var oppositeOrientation,
+                        out var oppositeCoordinate,
+                        out var oppositeStart,
+                        out var oppositeEnd)
+                    || oppositeOrientation != orientation
+                    || Math.Abs(oppositeStart - start) > tolerance
+                    || Math.Abs(oppositeEnd - end) > tolerance)
+                {
+                    continue;
+                }
+
+                var parallelLength = end - start;
+                var perpendicularLength = Math.Abs(oppositeCoordinate - coordinate);
+                if (parallelLength < minimumSide
+                    || parallelLength > maximumSide
+                    || perpendicularLength < minimumSide
+                    || perpendicularLength > maximumSide)
+                {
+                    continue;
+                }
+
+                var connectorOrientation = orientation == AxisOrientation.Horizontal
+                    ? AxisOrientation.Vertical
+                    : AxisOrientation.Horizontal;
+                var connectorStart = Math.Min(coordinate, oppositeCoordinate);
+                var connectorEnd = Math.Max(coordinate, oppositeCoordinate);
+                var firstConnector = lines.FirstOrDefault(line =>
+                    TryResolveAxisInterval(line.Segment, out var lineOrientation, out var lineCoordinate, out var lineStart, out var lineEnd)
+                    && lineOrientation == connectorOrientation
+                    && Math.Abs(lineCoordinate - start) <= tolerance
+                    && Math.Abs(lineStart - connectorStart) <= tolerance
+                    && Math.Abs(lineEnd - connectorEnd) <= tolerance);
+                var secondConnector = lines.FirstOrDefault(line =>
+                    TryResolveAxisInterval(line.Segment, out var lineOrientation, out var lineCoordinate, out var lineStart, out var lineEnd)
+                    && lineOrientation == connectorOrientation
+                    && Math.Abs(lineCoordinate - end) <= tolerance
+                    && Math.Abs(lineStart - connectorStart) <= tolerance
+                    && Math.Abs(lineEnd - connectorEnd) <= tolerance);
+                if (firstConnector is null || secondConnector is null)
+                {
+                    continue;
+                }
+
+                rectangleBounds = orientation == AxisOrientation.Horizontal
+                    ? PlanRect.FromEdges(start, connectorStart, end, connectorEnd)
+                    : PlanRect.FromEdges(connectorStart, start, connectorEnd, end);
+                sourcePrimitiveIds = new[]
+                {
+                    sourceLine.PrimitiveId,
+                    opposite.PrimitiveId,
+                    firstConnector.PrimitiveId,
+                    secondConnector.PrimitiveId
+                }
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsUnfilledSourcePrimitive(PlanPrimitive primitive) =>
+        !primitive.Source.Properties.TryGetValue("isFilled", out var value)
+        || !bool.TryParse(value, out var isFilled)
+        || !isFilled;
+
+    private static bool IsDimensionBaselineOrContinuation(
+        SourceBackedExteriorShellClosureCandidate candidate,
+        IReadOnlySet<string> dimensionSourceIds,
+        IReadOnlyList<SourceBackedExteriorShellClosureCandidate> dimensionBaselines,
+        ScannerOptions options)
+    {
+        if (candidate.SourcePrimitiveIds.Any(dimensionSourceIds.Contains))
+        {
+            return true;
+        }
+
+        var coordinateTolerance = Math.Max(
+            options.GeometryTolerance.Distance * 2.0,
+            options.WallSnapTolerance);
+        var continuationGap = Math.Max(
+            10.0,
+            Math.Max(options.MaxWallFragmentGap, options.WallSnapTolerance * 5.0));
+        return dimensionBaselines.Any(baseline =>
+            baseline.Orientation == candidate.Orientation
+            && Math.Abs(baseline.Coordinate - candidate.Coordinate) <= coordinateTolerance
+            && AxisIntervalGap(
+                baseline.Start,
+                baseline.End,
+                candidate.Start,
+                candidate.End) <= continuationGap);
+    }
+
+    private static double AxisIntervalGap(
+        double firstStart,
+        double firstEnd,
+        double secondStart,
+        double secondEnd) =>
+        Math.Max(0, Math.Max(secondStart - firstEnd, firstStart - secondEnd));
 
     private static SourceBackedExteriorShellClosureCandidate? TryCreateSourceBackedExteriorShellClosureCandidate(
         PrimitiveLine primitiveLine,
@@ -4670,7 +5357,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             && room.Confidence.Value >= 0.58
             && !room.Bounds.IsEmpty
             && room.Bounds.Area >= 64.0
-            && HasReliableRoomBoundaryEvidence(room));
+            && RoomBoundaryReliability.HasReliableExteriorShellBoundaryEvidence(room));
 
     private static IEnumerable<ExteriorShellInferenceEdge> ReliableIndoorExteriorBoundaryEdgesForInference(
         IReadOnlyList<RoomRegion> rooms,
@@ -4817,12 +5504,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
 
             hasEndpointAnchor =
                 hasEndpointAnchor
-                || EndpointTouchesAxisLine(wall.CenterLine.Start, orientation, coordinate, start, end, endpointTolerance)
-                || EndpointTouchesAxisLine(wall.CenterLine.End, orientation, coordinate, start, end, endpointTolerance)
-                || line.Start.DistanceTo(wall.CenterLine.Start) <= endpointTolerance
-                || line.Start.DistanceTo(wall.CenterLine.End) <= endpointTolerance
-                || line.End.DistanceTo(wall.CenterLine.Start) <= endpointTolerance
-                || line.End.DistanceTo(wall.CenterLine.End) <= endpointTolerance;
+                || WallEndpointAnchorsCandidateEndpoint(wall.CenterLine, line, endpointTolerance);
         }
 
         if (collinearIntervals.Count == 0)
@@ -4950,12 +5632,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 continue;
             }
 
-            if (EndpointTouchesAxisLine(wall.CenterLine.Start, orientation, coordinate, start, end, endpointTolerance)
-                || EndpointTouchesAxisLine(wall.CenterLine.End, orientation, coordinate, start, end, endpointTolerance)
-                || line.Start.DistanceTo(wall.CenterLine.Start) <= endpointTolerance
-                || line.Start.DistanceTo(wall.CenterLine.End) <= endpointTolerance
-                || line.End.DistanceTo(wall.CenterLine.Start) <= endpointTolerance
-                || line.End.DistanceTo(wall.CenterLine.End) <= endpointTolerance)
+            if (WallEndpointAnchorsCandidateEndpoint(wall.CenterLine, line, endpointTolerance))
             {
                 return true;
             }
@@ -4964,20 +5641,14 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         return false;
     }
 
-    private static bool EndpointTouchesAxisLine(
-        PlanPoint endpoint,
-        AxisOrientation orientation,
-        double coordinate,
-        double start,
-        double end,
-        double tolerance)
-    {
-        var endpointCoordinate = orientation == AxisOrientation.Horizontal ? endpoint.Y : endpoint.X;
-        var endpointAlong = orientation == AxisOrientation.Horizontal ? endpoint.X : endpoint.Y;
-        return Math.Abs(endpointCoordinate - coordinate) <= tolerance
-            && endpointAlong >= Math.Min(start, end) - tolerance
-            && endpointAlong <= Math.Max(start, end) + tolerance;
-    }
+    private static bool WallEndpointAnchorsCandidateEndpoint(
+        PlanLineSegment wall,
+        PlanLineSegment candidate,
+        double tolerance) =>
+        candidate.Start.DistanceTo(wall.Start) <= tolerance
+        || candidate.Start.DistanceTo(wall.End) <= tolerance
+        || candidate.End.DistanceTo(wall.Start) <= tolerance
+        || candidate.End.DistanceTo(wall.End) <= tolerance;
 
     private static bool IsExistingExteriorWallTrustedForInferenceCoverage(
         WallSegment wall,
@@ -5546,6 +6217,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int evidenceUpdated,
         int roomReferenced,
         int twoSidedRoomEvidence,
+        int sameRoomOnBothSidesEvidence,
         int oneSidedRoomEvidence,
         int rejectedEvidenceProtected,
         int roomConfirmedPlacementPromoted,
@@ -5593,6 +6265,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["geometricRoomBoundaryReferenceCount"] = geometricRoomBoundaryReferenceCount.ToString(),
                 ["geometricRoomBoundaryEvidenceAddedWallCount"] = geometricRoomBoundaryEvidenceAdded.ToString(),
                 ["twoSidedRoomEvidenceWallCount"] = twoSidedRoomEvidence.ToString(),
+                ["sameRoomOnBothSidesEvidenceWallCount"] = sameRoomOnBothSidesEvidence.ToString(),
                 ["oneSidedRoomEvidenceWallCount"] = oneSidedRoomEvidence.ToString(),
                 ["rejectedEvidenceProtectedWallCount"] = rejectedEvidenceProtected.ToString(),
                 ["roomConfirmedPlacementPromotedWallCount"] = roomConfirmedPlacementPromoted.ToString(),
@@ -5626,11 +6299,16 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int PositiveRoomHits,
         int NegativeRoomHits,
         int PositiveOutdoorRoomHits,
-        int NegativeOutdoorRoomHits)
+        int NegativeOutdoorRoomHits,
+        bool HasDistinctRoomsAcrossSides)
     {
-        public static RoomSideEvidence Empty { get; } = new(0, 0, 0, 0);
+        public static RoomSideEvidence Empty { get; } = new(0, 0, 0, 0, false);
 
-        public bool HasRoomsOnBothSides => PositiveRoomHits > 0 && NegativeRoomHits > 0;
+        public bool HasRawRoomsOnBothSides => PositiveRoomHits > 0 && NegativeRoomHits > 0;
+
+        public bool HasRoomsOnBothSides => HasRawRoomsOnBothSides && HasDistinctRoomsAcrossSides;
+
+        public bool HasSameRoomOnBothSidesOnly => HasRawRoomsOnBothSides && !HasDistinctRoomsAcrossSides;
 
         public bool HasRoomsOnExactlyOneSide => PositiveRoomHits > 0 != NegativeRoomHits > 0;
 
@@ -5643,6 +6321,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
 
         public int TotalFaceFragmentCount => FirstFaceFragmentCount + SecondFaceFragmentCount;
     }
+
+    private readonly record struct FaceHealedGapTotals(double FirstFace, double SecondFace);
 
     private readonly record struct RoomBoundaryInferenceEdge(
         string RoomId,

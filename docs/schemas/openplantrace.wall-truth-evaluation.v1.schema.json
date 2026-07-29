@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openplantrace.org/schemas/openplantrace.wall-truth-evaluation.v1.schema.json",
+  "title": "OpenPlanTrace Wall Truth Evaluation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "evaluatedAt",
+    "wallTruthSchemaVersion",
+    "structureSchemaVersion",
+    "completeTruthSet",
+    "passed",
+    "metrics",
+    "matches",
+    "misses",
+    "falsePositives",
+    "notWallViolations",
+    "assertions",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "openplantrace.wall-truth-evaluation.v1" },
+    "evaluatedAt": { "type": "string", "format": "date-time" },
+    "wallTruthSchemaVersion": { "const": "openplantrace.wall-truth.v1" },
+    "structureSchemaVersion": { "const": "openplantrace.structure.v1" },
+    "datasetName": { "type": ["string", "null"] },
+    "datasetVersion": { "type": ["string", "null"] },
+    "documentId": { "type": ["string", "null"] },
+    "completeTruthSet": { "type": "boolean" },
+    "passed": { "type": "boolean" },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "truthWallCount",
+        "predictedWallCount",
+        "matchedWallCount",
+        "missedWallCount",
+        "falsePositiveWallCount",
+        "notWallViolationCount",
+        "recall",
+        "precision",
+        "f1Score",
+        "lengthWeightedRecall",
+        "lengthWeightedPrecision",
+        "majorWallRecall",
+        "criticalWallRecall",
+        "exteriorWallRecall",
+        "interiorWallRecall",
+        "wallTypeAccuracy",
+        "meanLineDistance",
+        "meanEndpointDistance",
+        "meanAngularDifferenceDegrees",
+        "meanLengthOverlapRatio",
+        "truthWallDrawingLength",
+        "matchedTruthDrawingLength",
+        "predictedWallDrawingLength",
+        "falsePositiveDrawingLength",
+        "notWallViolationDrawingLength",
+        "solverObjectiveScore",
+        "solverEndpointConnectivityRatio",
+        "solverRoomBoundaryClosureRatio"
+      ],
+      "properties": {
+        "truthWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "predictedWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "matchedWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "missedWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "falsePositiveWallCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "notWallViolationCount": { "$ref": "#/$defs/nonNegativeInteger" },
+        "recall": { "$ref": "#/$defs/ratio" },
+        "precision": { "$ref": "#/$defs/nullableRatio" },
+        "f1Score": { "$ref": "#/$defs/nullableRatio" },
+        "lengthWeightedRecall": { "$ref": "#/$defs/ratio" },
+        "lengthWeightedPrecision": { "$ref": "#/$defs/nullableRatio" },
+        "majorWallRecall": { "$ref": "#/$defs/ratio" },
+        "criticalWallRecall": { "$ref": "#/$defs/ratio" },
+        "exteriorWallRecall": { "$ref": "#/$defs/ratio" },
+        "interiorWallRecall": { "$ref": "#/$defs/ratio" },
+        "wallTypeAccuracy": { "$ref": "#/$defs/ratio" },
+        "meanLineDistance": { "type": "number", "minimum": 0 },
+        "meanEndpointDistance": { "type": "number", "minimum": 0 },
+        "meanAngularDifferenceDegrees": { "type": "number", "minimum": 0 },
+        "meanLengthOverlapRatio": { "$ref": "#/$defs/ratio" },
+        "truthWallDrawingLength": { "type": "number", "minimum": 0 },
+        "matchedTruthDrawingLength": { "type": "number", "minimum": 0 },
+        "predictedWallDrawingLength": { "type": "number", "minimum": 0 },
+        "falsePositiveDrawingLength": { "type": "number", "minimum": 0 },
+        "notWallViolationDrawingLength": { "type": "number", "minimum": 0 },
+        "solverObjectiveScore": { "$ref": "#/$defs/ratio" },
+        "solverEndpointConnectivityRatio": { "$ref": "#/$defs/ratio" },
+        "solverRoomBoundaryClosureRatio": { "$ref": "#/$defs/ratio" }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "misses": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "falsePositives": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "notWallViolations": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "assertions": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "ratio": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "nullableRatio": {
+      "oneOf": [
+        { "$ref": "#/$defs/ratio" },
+        { "type": "null" }
+      ]
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

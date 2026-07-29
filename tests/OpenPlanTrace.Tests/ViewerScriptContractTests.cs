@@ -140,9 +140,105 @@ public sealed class ViewerScriptContractTests
             "Program.cs"));
 
         Assert.Contains("IReadOnlyList<WallExport> Walls", program);
-        Assert.Contains("var traceExport = PlanTraceExport.From(result);", program);
-        Assert.Contains("traceExport.Walls", program);
+        Assert.Contains("Results.Ok(ViewerScanBundle.From(result))", program);
+        Assert.Contains("PlanTraceExport Scan", program);
+        Assert.Contains("PlanPlacementExport Placement", program);
+        Assert.Contains("openplantrace.viewer-scan.v1", program);
         Assert.DoesNotContain("IReadOnlyList<WallDto> Walls", program);
+    }
+
+    [Fact]
+    public void ViewerPdfScans_UseGlobalWallSolutionsWithoutLosingTraceData()
+    {
+        var script = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "app.js"));
+        var normalized = script.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains("function isViewerScanBundle(payload)", normalized);
+        Assert.Contains("function placementPayloadFromViewerPayload(payload)", normalized);
+        Assert.Contains("state.placement = placementPayloadFromViewerPayload(payload);", normalized);
+        Assert.Contains("const trace = normalizeScanPayload(payload.scan);", normalized);
+        Assert.Contains("const placement = normalizePlacementPayload(payload.placement);", normalized);
+        Assert.Contains("edges: placement.edges", normalized);
+        Assert.Contains("rawPlacementGraphEdges: placement.rawPlacementGraphEdges", normalized);
+        Assert.Contains("wallSolutions: placement.wallSolutions", normalized);
+        Assert.Contains("renderTabCard(\"Global wall solution\"", normalized);
+        Assert.Contains("renderTabCard(\"Opening-aware walls\"", normalized);
+        Assert.Contains("renderTabCard(\"Evidence reconciliation\"", normalized);
+        Assert.Contains("Collapsed duplicates", normalized);
+        Assert.Contains("reconciliation.adjustedWallRunCount", normalized);
+        Assert.Contains("reconciliation.axisAlignedWallRunCount", normalized);
+        Assert.Contains("reconciliation.maximumAxisShiftDrawingUnits", normalized);
+        Assert.Contains("edge.reconciliation?.actions", normalized);
+        Assert.Contains("renderTabCard(\"Solved wall graph\"", normalized);
+        Assert.Contains("\"Solver hypotheses\"", normalized);
+        Assert.Contains("function canonicalWallDrawableSpans(edge)", normalized);
+        Assert.Contains("edge.solidIntervals", normalized);
+        Assert.Contains("canonical solid wall interval", normalized);
+        Assert.Contains("canonicalWallDrawableSpans(edge).forEach((span)", normalized);
+    }
+
+    [Fact]
+    public void ViewerWalls_CanonicalRunsDoNotInheritLegacySourceReviewState()
+    {
+        var script = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "app.js"));
+        var normalized = script.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.Contains(
+            "const sourceEvidenceAssessment = edge.solverRun\n        ? null\n        : sourceWall?.evidenceAssessment ?? null;",
+            normalized);
+        Assert.Contains(
+            "evidenceAssessment: edge.evidenceAssessment ?? sourceEvidenceAssessment",
+            normalized);
+        Assert.DoesNotContain(
+            "evidenceAssessment: edge.evidenceAssessment ?? sourceWall?.evidenceAssessment ?? null",
+            normalized);
+    }
+
+    [Fact]
+    public void ViewerWallTruth_ProvidesCoordinateFirstReviewAndExportWorkspace()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var html = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "index.html"));
+        var script = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "app.js"));
+        var styles = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "tools",
+            "OpenPlanTrace.Viewer",
+            "wwwroot",
+            "styles.css"));
+
+        Assert.Contains("data-workspace-tab=\"wallTruth\"", html);
+        Assert.Contains("id=\"wallTruthTabDetails\"", html);
+        Assert.Contains("data-layer=\"wallTruth\"", html);
+        Assert.Contains("id=\"downloadWallTruth\"", html);
+        Assert.Contains("function drawWallTruthOverlay", script);
+        Assert.Contains("function addWallTruthEntryFromDraw", script);
+        Assert.Contains("function wallTruthDatasetForExport", script);
+        Assert.Contains("function downloadWallTruthBenchmark", script);
+        Assert.Contains("OpenPlanTracePageCoordinates", script);
+        Assert.Contains(".wall-truth-wall", styles);
+        Assert.Contains(".wall-truth-not-wall", styles);
+        Assert.Contains(".wall-truth-workspace", styles);
     }
 
     [Fact]
@@ -161,16 +257,19 @@ public sealed class ViewerScriptContractTests
         Assert.DoesNotContain("return wallRawDrawLines(wall)", normalized);
 
         Assert.Contains("const wallQaEnabledLayers = [\n  \"walls\"\n];", normalized);
-        Assert.Contains("const graphEdges = placementGraphWallEdges(state.scan).filter(onCurrentPage);", normalized);
-        Assert.Contains("if (graphEdges.length) {", normalized);
+        Assert.Contains("const allGraphEdges = placementGraphWallEdges(state.scan).filter(onCurrentPage);", normalized);
+        Assert.Contains("const graphEdges = allGraphEdges.filter(wallIsPlacementReady);", normalized);
+        Assert.Contains("if (allGraphEdges.length) {", normalized);
         Assert.Contains("placement graph edge", normalized);
         Assert.Contains("} else {\n      state.scan.walls.filter(onCurrentPage).forEach((wall) => {", normalized);
         Assert.Contains("if (!shouldDrawWallAsPlacementWall(wall))", normalized);
         Assert.Contains("function placementGraphWallEdges", normalized);
         Assert.Contains("function placementGraphWallEdgeClassName", normalized);
-        Assert.Contains("return placementGraphWallEdges(scan).length\n        || wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);", normalized);
-        Assert.Contains("return placementGraphWallEdges(scan).filter(onCurrentPage).length\n        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);", normalized);
+        Assert.Contains("return placementGraphWallEdges(scan).filter(wallIsPlacementReady).length\n        || wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);", normalized);
+        Assert.Contains("return placementGraphWallEdges(scan).filter(onCurrentPage).filter(wallIsPlacementReady).length\n        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);", normalized);
         Assert.Contains("function wallReviewTopologySpans", normalized);
+        Assert.Contains("const solvedReviewRuns = placementGraphWallEdges(state.scan)", normalized);
+        Assert.Contains(".filter((edge) => edge.solverRun && !wallIsPlacementReady(edge));", normalized);
         Assert.Contains("case \"wallTopologyReviewSpans\":\n      return wallReviewTopologySpanCount(scan);", normalized);
         Assert.Contains("case \"wallTopologyReviewSpans\":\n      return wallReviewTopologySpanCount(scan, state.currentPage);", normalized);
     }
@@ -220,11 +319,16 @@ public sealed class ViewerScriptContractTests
         Assert.Contains("[\"Review walls\", wallPlacement?.placementReviewWallCount ?? 0]", normalized);
         Assert.Contains("[\"Suppressed/noise walls\", wallPlacement?.placementSuppressedWallCount ?? 0]", normalized);
         Assert.Contains("[\"Represented duplicate/context walls\", wallPlacement?.representedWallCount ?? 0]", normalized);
+        Assert.Contains("[\"Major walls under-covered\", cleanCoverage?.underCoveredMajorWallCount ?? 0]", normalized);
         Assert.Contains("function visualSnapshotWallPlacementRows", normalized);
+        Assert.Contains("function visualSnapshotUnderCoveredWallItems", normalized);
         Assert.Contains("function visualSnapshotWallOmissionItems", normalized);
         Assert.Contains("function visualSnapshotOmittedWallExampleItems", normalized);
+        Assert.Contains("function normalizeVisualSnapshotWallCleanCoverageSummary", normalized);
+        Assert.Contains("function normalizeVisualSnapshotWallCleanCoverageExample", normalized);
         Assert.Contains("function normalizeVisualSnapshotOmittedWallExample", normalized);
         Assert.Contains("renderTabCard(\"Wall placement\", visualSnapshotWallPlacementRows(snapshotPage))", normalized);
+        Assert.Contains("Under-covered major walls", normalized);
         Assert.Contains("Top wall omissions", normalized);
         Assert.Contains("Omitted wall examples", normalized);
     }

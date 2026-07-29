@@ -39,6 +39,43 @@ public sealed class RoomBoundaryReliabilityTests
     }
 
     [Fact]
+    public void HasReliableExteriorShellBoundaryEvidence_BlocksGrossSemanticAreaMismatch()
+    {
+        var room = Room(
+            [
+                "wall-a",
+                "wall-b",
+                "wall-c",
+                "wall-d"
+            ],
+            "semantic room boundary inferred from nearby wall candidates wall-a,wall-b,wall-c,wall-d",
+            "semantic room boundary wall coverage 0.82 across 4 strong side(s)",
+            "semantic room boundary trusted wall support 0.75 across 4 side(s)",
+            "semantic room boundary area match ratio 4.951 from printed room area");
+
+        Assert.True(RoomBoundaryReliability.HasReliableBoundaryEvidence(room));
+        Assert.False(RoomBoundaryReliability.HasReliableExteriorShellBoundaryEvidence(room));
+    }
+
+    [Fact]
+    public void HasReliableExteriorShellBoundaryEvidence_AllowsCalibratedSemanticRoom()
+    {
+        var room = Room(
+            [
+                "wall-a",
+                "wall-b",
+                "wall-c",
+                "wall-d"
+            ],
+            "semantic room boundary inferred from nearby wall candidates wall-a,wall-b,wall-c,wall-d",
+            "semantic room boundary wall coverage 0.82 across 4 strong side(s)",
+            "semantic room boundary trusted wall support 0.75 across 4 side(s)",
+            "semantic room boundary area match ratio 1.241 from printed room area");
+
+        Assert.True(RoomBoundaryReliability.HasReliableExteriorShellBoundaryEvidence(room));
+    }
+
+    [Fact]
     public void RoomBoundaryWallReferenceBuilder_DoesNotUseWeakReviewSupportedRoomWallIdsAsStructuralSupport()
     {
         var wall = Wall("wall-a", 0, 0, 0, 100);

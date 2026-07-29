@@ -28,6 +28,8 @@ public enum PlanArtifactKind
     Openings,
     Rooms,
     RoomAdjacency,
+    StructuralEvidence,
+    StructuralSolution,
     ObjectCandidates,
     ObjectGroups,
     ObjectAggregates,

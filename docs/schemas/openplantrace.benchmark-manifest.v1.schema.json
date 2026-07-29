@@ -62,11 +62,40 @@
             }
           ]
         },
+        "centerLine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/line"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Exact expected detector centerline. Wall targets should prefer this over rectangle-only matching."
+        },
         "minIntersectionOverUnion": {
           "$ref": "#/$defs/confidenceOrRatio"
         },
         "maxCenterDistance": {
           "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "maxLineDistance": {
+          "$ref": "#/$defs/nonNegativeNumber",
+          "description": "Maximum symmetric lateral distance between expected and detected centerline axes in drawing units."
+        },
+        "maxEndpointDistance": {
+          "$ref": "#/$defs/nonNegativeNumber",
+          "description": "Maximum direction-independent paired endpoint distance in drawing units."
+        },
+        "maxAngularDifferenceDegrees": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 90,
+          "description": "Maximum acute direction difference between expected and detected centerlines."
+        },
+        "minLengthOverlapRatio": {
+          "$ref": "#/$defs/confidenceOrRatio",
+          "description": "Minimum fraction of the expected centerline covered by the detected centerline projection."
         },
         "label": {
           "$ref": "#/$defs/nullableString"
@@ -131,6 +160,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/gridAxisOrientation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wallType": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/wallType"
             },
             {
               "type": "null"
@@ -892,6 +931,22 @@
         "SurfacePattern"
       ]
     },
+    "line": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/point"
+        },
+        "end": {
+          "$ref": "#/$defs/point"
+        }
+      }
+    },
     "metricExpectations": {
       "type": "object",
       "additionalProperties": true,
@@ -1007,6 +1062,22 @@
     "pageNumber": {
       "type": "integer",
       "minimum": 1
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      }
     },
     "rect": {
       "type": "object",
@@ -1202,6 +1273,14 @@
           }
         }
       }
+    },
+    "wallType": {
+      "type": "string",
+      "enum": [
+        "Unknown",
+        "Exterior",
+        "Interior"
+      ]
     },
     "artifactExpectation": {
       "type": "object",

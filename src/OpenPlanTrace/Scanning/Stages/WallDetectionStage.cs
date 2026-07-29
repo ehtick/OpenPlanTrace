@@ -4244,31 +4244,39 @@ internal sealed class WallDetectionStage : IPipelineStage
             .OrderBy(run => run.Coordinate)
             .ThenBy(run => run.Start)
             .ToArray();
+        var candidates = new List<WallPairRun>();
 
-        for (var index = 0; index < ordered.Length; index++)
+        for (var firstIndex = 0; firstIndex < ordered.Length; firstIndex++)
         {
-            var run = ordered[index];
-            if (consumed.Contains(run))
+            for (var secondIndex = firstIndex + 1; secondIndex < ordered.Length; secondIndex++)
+            {
+                var pair = WallPairRun.TryCreate(
+                    ordered[firstIndex],
+                    ordered[secondIndex],
+                    options,
+                    profile);
+                if (pair is not null)
+                {
+                    candidates.Add(pair);
+                }
+            }
+        }
+
+        foreach (var pair in candidates
+                     .OrderByDescending(pair => WallPairSelectionPriority(pair.Score, pair.End - pair.Start, options))
+                     .ThenByDescending(pair => pair.Score)
+                     .ThenByDescending(pair => pair.End - pair.Start)
+                     .ThenBy(pair => Math.Min(pair.First.Coordinate, pair.Second.Coordinate))
+                     .ThenBy(pair => pair.Start))
+        {
+            if (consumed.Contains(pair.First) || consumed.Contains(pair.Second))
             {
                 continue;
             }
 
-            var match = ordered
-                .Where(candidate => !ReferenceEquals(candidate, run) && !consumed.Contains(candidate))
-                .Select(candidate => WallPairRun.TryCreate(run, candidate, options, profile))
-                .Where(pair => pair is not null)
-                .Select(pair => pair!)
-                .OrderByDescending(pair => pair.Score)
-                .FirstOrDefault();
-
-            if (match is null)
-            {
-                continue;
-            }
-
-            consumed.Add(match.First);
-            consumed.Add(match.Second);
-            yield return match;
+            consumed.Add(pair.First);
+            consumed.Add(pair.Second);
+            yield return pair;
         }
     }
 
@@ -4283,32 +4291,51 @@ internal sealed class WallDetectionStage : IPipelineStage
             .ThenBy(run => run.NormalCoordinate)
             .ThenBy(run => run.Start)
             .ToArray();
+        var candidates = new List<NonAxisWallPairRun>();
 
-        for (var index = 0; index < ordered.Length; index++)
+        for (var firstIndex = 0; firstIndex < ordered.Length; firstIndex++)
         {
-            var run = ordered[index];
-            if (consumed.Contains(run))
+            for (var secondIndex = firstIndex + 1; secondIndex < ordered.Length; secondIndex++)
             {
-                continue;
+                var pair = NonAxisWallPairRun.TryCreate(
+                    ordered[firstIndex],
+                    ordered[secondIndex],
+                    options,
+                    profile);
+                if (pair is not null)
+                {
+                    candidates.Add(pair);
+                }
             }
-
-            var match = ordered
-                .Where(candidate => !ReferenceEquals(candidate, run) && !consumed.Contains(candidate))
-                .Select(candidate => NonAxisWallPairRun.TryCreate(run, candidate, options, profile))
-                .Where(pair => pair is not null)
-                .Select(pair => pair!)
-                .OrderByDescending(pair => pair.Score)
-                .FirstOrDefault();
-
-            if (match is null)
-            {
-                continue;
-            }
-
-            consumed.Add(match.First);
-            consumed.Add(match.Second);
-            yield return match;
         }
+
+        foreach (var pair in candidates
+                     .OrderByDescending(pair => WallPairSelectionPriority(pair.Score, pair.End - pair.Start, options))
+                     .ThenByDescending(pair => pair.Score)
+                     .ThenByDescending(pair => pair.End - pair.Start)
+                     .ThenBy(pair => pair.AngleDegrees)
+                     .ThenBy(pair => pair.CenterNormalCoordinate)
+                     .ThenBy(pair => pair.Start))
+        {
+            if (consumed.Contains(pair.First) || consumed.Contains(pair.Second))
+            {
+                continue;
+            }
+
+            consumed.Add(pair.First);
+            consumed.Add(pair.Second);
+            yield return pair;
+        }
+    }
+
+    private static double WallPairSelectionPriority(
+        double pairScore,
+        double overlapLength,
+        ScannerOptions options)
+    {
+        var longWallScale = Math.Max(options.MinWallLength, options.MinWallLength * 10.0);
+        var longWallSupport = Math.Min(1.0, overlapLength / longWallScale);
+        return pairScore + (longWallSupport * 0.08);
     }
 
     private static IEnumerable<AxisRun> MergeAxisRuns(IEnumerable<WallSeed> seeds, ScannerOptions options)
@@ -4381,7 +4408,7 @@ internal sealed class WallDetectionStage : IPipelineStage
     private static bool CanMergeAxisRuns(AxisRun existing, AxisRun run, ScannerOptions options)
     {
         if (existing.Orientation != run.Orientation
-            || Math.Abs(existing.Coordinate - run.Coordinate) > options.WallMergeTolerance)
+            || !existing.FitsCoordinateSpan(run, options.WallMergeTolerance))
         {
             return false;
         }
@@ -5164,6 +5191,9 @@ internal sealed class WallDetectionStage : IPipelineStage
 
     private sealed class AxisRun
     {
+        private const double CoordinateObservationTolerance = 0.0001;
+        private readonly List<double> _coordinateObservations;
+
         private AxisRun(
             WallOrientation orientation,
             double coordinate,
@@ -5175,6 +5205,9 @@ internal sealed class WallDetectionStage : IPipelineStage
         {
             Orientation = orientation;
             Coordinate = coordinate;
+            MinCoordinate = coordinate;
+            MaxCoordinate = coordinate;
+            _coordinateObservations = new List<double> { coordinate };
             Start = start;
             End = end;
             StrokeWidth = strokeWidth;
@@ -5185,6 +5218,10 @@ internal sealed class WallDetectionStage : IPipelineStage
         public WallOrientation Orientation { get; }
 
         public double Coordinate { get; private set; }
+
+        public double MinCoordinate { get; private set; }
+
+        public double MaxCoordinate { get; private set; }
 
         public double Start { get; private set; }
 
@@ -5238,7 +5275,7 @@ internal sealed class WallDetectionStage : IPipelineStage
             }
 
             var tolerance = Math.Max(options.WallMergeTolerance, options.WallSnapTolerance);
-            if (Math.Abs(Coordinate - run.Coordinate) > tolerance)
+            if (!FitsCoordinateSpan(run, tolerance))
             {
                 return false;
             }
@@ -5261,14 +5298,17 @@ internal sealed class WallDetectionStage : IPipelineStage
             return overlapRatio >= 0.95 && lengthBalance >= 0.9;
         }
 
+        public bool FitsCoordinateSpan(AxisRun run, double tolerance) =>
+            Math.Max(MaxCoordinate, run.MaxCoordinate) - Math.Min(MinCoordinate, run.MinCoordinate)
+            <= Math.Max(0, tolerance);
+
         public void MergeFragment(AxisRun run)
         {
-            var currentLength = End - Start;
-            var nextLength = run.End - run.Start;
-            var totalLength = Math.Max(1, currentLength + nextLength);
             var gap = GapTo(run);
 
-            Coordinate = ((Coordinate * currentLength) + (run.Coordinate * nextLength)) / totalLength;
+            AddCoordinateObservations(run);
+            MinCoordinate = Math.Min(MinCoordinate, run.MinCoordinate);
+            MaxCoordinate = Math.Max(MaxCoordinate, run.MaxCoordinate);
             Start = Math.Min(Start, run.Start);
             End = Math.Max(End, run.End);
             StrokeWidth = Math.Max(StrokeWidth, run.StrokeWidth);
@@ -5282,11 +5322,9 @@ internal sealed class WallDetectionStage : IPipelineStage
 
         public void MergeDuplicate(AxisRun run)
         {
-            var currentLength = End - Start;
-            var nextLength = run.End - run.Start;
-            var totalLength = Math.Max(1, currentLength + nextLength);
-
-            Coordinate = ((Coordinate * currentLength) + (run.Coordinate * nextLength)) / totalLength;
+            AddCoordinateObservations(run);
+            MinCoordinate = Math.Min(MinCoordinate, run.MinCoordinate);
+            MaxCoordinate = Math.Max(MaxCoordinate, run.MaxCoordinate);
             Start = Math.Min(Start, run.Start);
             End = Math.Max(End, run.End);
             StrokeWidth = Math.Max(StrokeWidth, run.StrokeWidth);
@@ -5296,6 +5334,23 @@ internal sealed class WallDetectionStage : IPipelineStage
             MaxGapLength = Math.Max(MaxGapLength, run.MaxGapLength);
             SourcePrimitiveIds.AddRange(run.SourcePrimitiveIds);
             LayerEvidence.AddRange(run.LayerEvidence);
+        }
+
+        private void AddCoordinateObservations(AxisRun run)
+        {
+            foreach (var coordinate in run._coordinateObservations)
+            {
+                if (_coordinateObservations.Any(existing =>
+                        Math.Abs(existing - coordinate) <= CoordinateObservationTolerance))
+                {
+                    continue;
+                }
+
+                _coordinateObservations.Add(coordinate);
+            }
+
+            _coordinateObservations.Sort();
+            Coordinate = Median(_coordinateObservations);
         }
 
         private double GapTo(AxisRun run) =>

@@ -196,6 +196,7 @@ public sealed record PlanOverlayPageSnapshot(
         Add(options.IncludeWallGraphRepairs, "wallGraphRepairs");
         Add(options.IncludePlacementWallGraph, "placementWallGraphEdges");
         Add(options.IncludePlacementWallGraphNodes, "placementWallGraphNodes");
+        Add(options.IncludeCanonicalWallSolutions, "canonicalWallSolutions");
         Add(options.IncludeOmittedWallRiskHighlights, "wallOmittedRiskHighlights");
         Add(options.IncludeWalls, "walls");
         Add(options.IncludeWallNodes, "wallNodes");
@@ -247,7 +248,9 @@ public sealed record PlanOverlayPageSnapshot(
 
         var routing = result.RoutingLayer;
         var page = result.Document.Pages.FirstOrDefault(item => item.Number == pageNumber);
-        var placementExport = options.IncludePlacementWallGraph || options.IncludePlacementWallGraphNodes
+        var placementExport = options.IncludePlacementWallGraph
+            || options.IncludePlacementWallGraphNodes
+            || options.IncludeCanonicalWallSolutions
             ? PlanPlacementExport.From(result)
             : null;
 
@@ -339,6 +342,20 @@ public sealed record PlanOverlayPageSnapshot(
 
         if (placementExport is not null)
         {
+            var canonicalWallSolutions = placementExport.WallSolutions.SelectedWallRuns
+                .Where(item => item.PageNumber == pageNumber)
+                .ToArray();
+            yield return Layer(
+                "canonicalWallSolutions",
+                canonicalWallSolutions,
+                SolvedWallRunBounds,
+                item => new Confidence(item.Confidence),
+                canonicalWallSolutions
+                    .GroupBy(item => item.Reliability.RequiresReview
+                        ? "Review"
+                        : item.WallType)
+                    .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
+
             var placementGraphEdges = placementExport.WallGraph.Edges
                 .Where(item =>
                     item.PageNumber == pageNumber
@@ -544,6 +561,13 @@ public sealed record PlanOverlayPageSnapshot(
         return new PlanRect(minX, minY, width, height);
     }
 
+    private static PlanRect SolvedWallRunBounds(PlacementSolvedWallRunExport run) =>
+        new(
+            run.Bounds.X,
+            run.Bounds.Y,
+            run.Bounds.Width,
+            run.Bounds.Height);
+
     private static PlanOverlayWallPlacementOmittedWallExample[] OmittedWallRiskHighlights(
         PlanScanResult result,
         int pageNumber,
@@ -676,6 +700,16 @@ public sealed record PlanOverlayPageSnapshot(
                 pageNumber,
                 severity,
                 $"{residual.CandidateEndpointCount} placement wall graph endpoint(s) still sit on or near host wall runs after cleanup; {residual.CoincidentCandidateEndpointCount} coincident, {residual.SameAxisCandidateEndpointCount} same-axis, {residual.PerpendicularCandidateEndpointCount} perpendicular, max distance {residual.MaxDistance:0.###} drawing units.");
+        }
+
+        if (wallPlacement.CleanCoverage.UnderCoveredMajorWallCount > 0)
+        {
+            var cleanCoverage = wallPlacement.CleanCoverage;
+            yield return Issue(
+                "visual.wall_clean_coverage_low",
+                pageNumber,
+                "warning",
+                $"{cleanCoverage.UnderCoveredMajorWallCount}/{cleanCoverage.TrackedMajorWallCount} major placement-ready wall(s) are under-covered by the final clean wall graph; average coverage {cleanCoverage.AverageCoverageRatio:0.###}, minimum coverage {cleanCoverage.MinimumCoverageRatio:0.###}. Inspect placement wall graph edges before trusting downstream wall placement.");
         }
 
         var objectCount = LayerCount(layers, "objects");

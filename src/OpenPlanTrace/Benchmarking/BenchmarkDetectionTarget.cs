@@ -10,9 +10,24 @@ public sealed record BenchmarkDetectionTarget
 
     public PlanRect? Bounds { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PlanLineSegment? CenterLine { get; init; }
+
     public double? MinIntersectionOverUnion { get; init; }
 
     public double? MaxCenterDistance { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? MaxLineDistance { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? MaxEndpointDistance { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? MaxAngularDifferenceDegrees { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? MinLengthOverlapRatio { get; init; }
 
     public string? Label { get; init; }
 
@@ -33,6 +48,8 @@ public sealed record BenchmarkDetectionTarget
     public PlanAnnotationKind? AnnotationKind { get; init; }
 
     public GridAxisOrientation? GridAxisOrientation { get; init; }
+
+    public WallType? WallType { get; init; }
 
     public OpeningType? OpeningType { get; init; }
 

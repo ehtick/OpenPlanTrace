@@ -1231,6 +1231,36 @@ h1 {
   }
 }
 
+@media (max-width: 1100px) {
+  .wall-truth-toolbar,
+  .wall-truth-controls,
+  .wall-truth-summary,
+  .wall-truth-gate-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .wall-truth-workspace {
+    padding: 10px;
+  }
+
+  .wall-truth-header {
+    align-items: flex-start;
+  }
+
+  .wall-truth-toolbar,
+  .wall-truth-controls,
+  .wall-truth-summary,
+  .wall-truth-gate-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wall-truth-complete {
+    justify-self: start;
+  }
+}
+
 .benchmark-counts,
 .benchmark-target-list {
   display: grid;
@@ -1676,6 +1706,255 @@ h1 {
   padding: 16px 18px 28px;
 }
 
+.wall-truth-workspace {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 18px 28px;
+}
+
+.wall-truth-header,
+.wall-truth-toolbar,
+.wall-truth-gates,
+.wall-truth-entry-section {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.wall-truth-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+}
+
+.wall-truth-header > div {
+  min-width: 0;
+}
+
+.wall-truth-header h2,
+.wall-truth-gates h3,
+.wall-truth-entry-section h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.wall-truth-header span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.wall-truth-status {
+  flex: 0 0 auto;
+  min-width: 96px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfaf7;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.wall-truth-status.ready {
+  border-color: rgba(63, 143, 87, 0.5);
+  background: rgba(63, 143, 87, 0.09);
+  color: #236c3a;
+}
+
+.wall-truth-status.error {
+  border-color: rgba(196, 61, 61, 0.5);
+  background: rgba(196, 61, 61, 0.08);
+  color: #9c2634;
+}
+
+.wall-truth-toolbar {
+  display: grid;
+  grid-template-columns: max-content minmax(360px, 1fr);
+  gap: 10px 14px;
+  align-items: end;
+  padding: 12px;
+}
+
+.wall-truth-mode-control,
+.wall-truth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wall-truth-mode-control button,
+.wall-truth-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wall-truth-mode-control button:hover,
+.wall-truth-actions button:hover {
+  border-color: #aeb5c2;
+  background: #fbfaf7;
+}
+
+.wall-truth-mode-control button.active {
+  border-color: #a9165a;
+  background: rgba(211, 31, 107, 0.09);
+  color: #94134f;
+}
+
+.wall-truth-actions button.danger {
+  border-color: rgba(196, 61, 61, 0.45);
+  color: #9c2634;
+}
+
+.wall-truth-mode-control button:disabled,
+.wall-truth-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.wall-truth-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.wall-truth-controls label,
+.wall-truth-gate-grid label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wall-truth-controls input,
+.wall-truth-controls select,
+.wall-truth-gate-grid input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.wall-truth-actions {
+  grid-column: 1 / -1;
+}
+
+.wall-truth-complete {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wall-truth-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.wall-truth-gates,
+.wall-truth-entry-section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.wall-truth-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.wall-truth-entry-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 8px;
+}
+
+.wall-truth-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #d31f6b;
+  border-radius: 7px;
+  background: #fbfaf7;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.wall-truth-entry.not-wall {
+  border-left-color: #d24b2a;
+}
+
+.wall-truth-entry.selected {
+  border-color: #94134f;
+  background: rgba(211, 31, 107, 0.07);
+}
+
+.wall-truth-entry strong,
+.wall-truth-entry span,
+.wall-truth-entry small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.wall-truth-entry strong {
+  font-size: 12px;
+}
+
+.wall-truth-entry span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.wall-truth-entry small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-truth-empty {
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 .tab-card {
   display: grid;
   align-content: start;
@@ -2011,6 +2290,62 @@ h1 {
 
 .wall.wall-halo.wall-interior {
   stroke-width: 4.2;
+}
+
+.wall-truth {
+  fill: rgba(211, 31, 107, 0.06);
+  stroke: #d31f6b;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+
+.wall-truth-wall {
+  stroke: #d31f6b;
+}
+
+.wall-truth-not-wall {
+  fill: rgba(210, 75, 42, 0.08);
+  stroke: #d24b2a;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.wall-truth-halo {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 5.8;
+  stroke-opacity: 0.92;
+  stroke-dasharray: none;
+  pointer-events: none;
+}
+
+.wall-truth.selected {
+  stroke-width: 3.2;
+}
+
+.wall-truth-endpoint {
+  fill: #ffffff;
+  stroke: #94134f;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.wall-truth-draft {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-dasharray: 7 4;
+  opacity: 0.92;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.wall-truth-draft-region {
+  fill: rgba(210, 75, 42, 0.10);
+  stroke: #d24b2a;
 }
 
 .raw-wall-audit {

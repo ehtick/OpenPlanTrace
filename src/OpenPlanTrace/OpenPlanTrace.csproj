@@ -50,5 +50,8 @@
     <EmbeddedResource
       Include="..\..\docs\schemas\openplantrace.kvemo-crops.v2.schema.json"
       LogicalName="OpenPlanTrace.Schemas.openplantrace.kvemo-crops.v2.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\schemas\openplantrace.wall-truth.v1.schema.json"
+      LogicalName="OpenPlanTrace.Schemas.openplantrace.wall-truth.v1.schema.json" />
   </ItemGroup>
 </Project>

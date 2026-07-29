@@ -19,6 +19,11 @@ public static class PlanOverlaySvgRenderer
 
         var page = result.Document.Pages.FirstOrDefault(candidate => candidate.Number == pageNumber)
             ?? throw new ArgumentOutOfRangeException(nameof(pageNumber), $"Page {pageNumber} was not found.");
+        var placementExport = options.IncludePlacementWallGraph
+            || options.IncludePlacementWallGraphNodes
+            || options.IncludeCanonicalWallSolutions
+                ? PlanPlacementExport.From(result)
+                : null;
 
         var pageWidth = page.Size.Width;
         var pageHeight = page.Size.Height;
@@ -109,6 +114,11 @@ public static class PlanOverlaySvgRenderer
             .placement-wall-graph-node { fill: #ffffff; stroke: #111827; stroke-width: 0.78; vector-effect: non-scaling-stroke; }
             .placement-wall-graph-node-junction { fill: #eef6ff; stroke: #075ecf; stroke-width: 0.92; }
             .placement-wall-graph-node-endpoint { fill: #f7fff9; stroke: #087a45; }
+            .canonical-wall-solution-halo { stroke: rgba(255,255,255,0.92); stroke-width: 4.4; stroke-linecap: butt; fill: none; vector-effect: non-scaling-stroke; }
+            .canonical-wall-solution { stroke: #075ecf; stroke-width: 2.65; stroke-linecap: butt; fill: none; vector-effect: non-scaling-stroke; }
+            .canonical-wall-solution-interior { stroke: #087a45; stroke-width: 2.05; }
+            .canonical-wall-solution-mixed { stroke: #7357a3; stroke-width: 2.3; }
+            .canonical-wall-solution-review { stroke: #a65f00; stroke-dasharray: 4 2.5; }
             .wall-omitted-risk { fill: rgba(249, 115, 22, 0.08); stroke: #f97316; stroke-width: 1.35; stroke-dasharray: 3 2.5; vector-effect: non-scaling-stroke; }
             .wall-omitted-risk-priority { fill: rgba(217, 45, 32, 0.11); stroke: #d92d20; stroke-width: 1.75; }
             .wall-omitted-risk-line { stroke: #f97316; stroke-width: 2.05; stroke-linecap: round; fill: none; vector-effect: non-scaling-stroke; }
@@ -486,7 +496,7 @@ public static class PlanOverlaySvgRenderer
 
         if (options.IncludePlacementWallGraph)
         {
-            var placement = PlanPlacementExport.From(result);
+            var placement = placementExport!;
             var placementWallsById = placement.Walls.ToDictionary(wall => wall.Id, StringComparer.Ordinal);
             builder.AppendLine("""<g id="placement-wall-graph-edges" aria-label="Exported placement wall graph edges">""");
             foreach (var edge in placement.WallGraph.Edges.Where(edge =>
@@ -509,6 +519,36 @@ public static class PlanOverlaySvgRenderer
                 }
                 builder.AppendLine("</g>");
             }
+        }
+
+        if (options.IncludeCanonicalWallSolutions)
+        {
+            builder.AppendLine("""<g id="canonical-wall-solutions" aria-label="Canonical solved wall runs">""");
+            foreach (var run in placementExport!.WallSolutions.SelectedWallRuns.Where(run =>
+                         run.PageNumber == page.Number))
+            {
+                if (run.SolidIntervals.Count == 0)
+                {
+                    AppendCanonicalWallSolutionLine(
+                        builder,
+                        run,
+                        run.CenterLine,
+                        run.DrawingLength,
+                        "logical wall centerline");
+                    continue;
+                }
+
+                foreach (var interval in run.SolidIntervals)
+                {
+                    AppendCanonicalWallSolutionLine(
+                        builder,
+                        run,
+                        interval.CenterLine,
+                        interval.DrawingLength,
+                        $"solid interval {interval.Sequence}");
+                }
+            }
+            builder.AppendLine("</g>");
         }
 
         if (options.IncludeOmittedWallRiskHighlights)
@@ -644,10 +684,20 @@ public static class PlanOverlaySvgRenderer
         var cleanTopologyBounds = PlanRect.Union(
             WallTopologySpanVisibility.BuildVisibleTopologySpans(result, page.Number, options)
                 .Select(span => span.Bounds));
+        var canonicalWallBounds = options.IncludeCanonicalWallSolutions
+            ? PlanRect.Union(
+                PlanPlacementExport.From(result).WallSolutions.SelectedWallRuns
+                    .Where(run => run.PageNumber == page.Number)
+                    .Select(run => new PlanRect(
+                        run.Bounds.X,
+                        run.Bounds.Y,
+                        run.Bounds.Width,
+                        run.Bounds.Height)))
+            : PlanRect.Empty;
         var omittedRiskBounds = PlanRect.Union(
             OmittedWallRiskHighlights(result, page.Number, options)
                 .Select(OmittedWallRiskBounds));
-        var wallQaBounds = PlanRect.Union(new[] { cleanTopologyBounds, omittedRiskBounds }
+        var wallQaBounds = PlanRect.Union(new[] { cleanTopologyBounds, canonicalWallBounds, omittedRiskBounds }
             .Where(bounds => !bounds.IsEmpty));
         if (!wallQaBounds.IsEmpty)
         {
@@ -760,6 +810,7 @@ public static class PlanOverlaySvgRenderer
 
     private static string[] LegendRows(PlanScanResult result, PlanPage page, SvgOverlayRenderOptions options)
     {
+        var placementExport = PlanPlacementExport.From(result);
         var rows = new List<string>
         {
             $"Page {page.Number}",
@@ -798,12 +849,17 @@ public static class PlanOverlaySvgRenderer
             });
             if (options.CropToFloorplanContent)
             {
-                rows.Add("Focused wall topology crop");
+                rows.Add("Focused canonical wall crop");
+            }
+
+            if (options.IncludeCanonicalWallSolutions)
+            {
+                rows.Add("Blue/green = canonical solved wall runs");
             }
 
             if (options.IncludePlacementWallGraph)
             {
-                rows.Add("Solid blue/green = compact import wall graph");
+                rows.Add("Candidate placement graph shown for comparison");
             }
 
             if (options.IncludeReviewOnlyWallTopologySpans)
@@ -833,9 +889,10 @@ public static class PlanOverlaySvgRenderer
         var visibleTopologySpanCount = WallTopologySpanCount(result, page.Number, options);
         var hiddenTopologySpanCount = HiddenNonPlacementTopologySpanCount(result, page.Number, options);
         var wallBodyFootprintCount = WallBodyFootprintCount(result, page.Number, options);
-        var placementExport = PlanPlacementExport.From(result);
         var placementPageSummary = placementExport.Summary.PageSummaries
             .FirstOrDefault(summary => summary.PageNumber == page.Number);
+        var canonicalWallRunCount = placementExport.WallSolutions.SelectedWallRuns
+            .Count(run => run.PageNumber == page.Number);
         var placementWallGraph = options.IncludePlacementWallGraph
             ? placementExport.WallGraph
             : null;
@@ -878,6 +935,9 @@ public static class PlanOverlaySvgRenderer
             placementWallGraph is null
                 ? "exported wall graph nodes hidden"
                 : $"{placementWallGraph.Nodes.Count(node => node.PageNumber == page.Number)} exported wall graph nodes",
+            options.IncludeCanonicalWallSolutions
+                ? $"{canonicalWallRunCount} canonical solved wall runs"
+                : $"{canonicalWallRunCount} canonical solved wall runs hidden",
             $"{result.Rooms.Count(room => room.PageNumber == page.Number)} rooms",
             $"{result.RoomAdjacencyGraph.Clusters.Count(cluster => cluster.PageNumber == page.Number)} room clusters",
             $"{result.RoomAdjacencyGraph.Edges.Count(edge => edge.PageNumber == page.Number)} room links",
@@ -1203,6 +1263,42 @@ public static class PlanOverlaySvgRenderer
             : $"wall evidence {evidenceAssessment.Decision} {evidenceAssessment.Category}";
 
         return $"wall body footprint {footprint.Id}; source wall {footprint.WallId}; {footprint.SourceWall.WallType}; {componentText}; {evidenceText}; thickness {N(footprint.ThicknessDrawingUnits)} drawing units; body from {footprint.GeometrySource}";
+    }
+
+    private static void AppendCanonicalWallSolutionLine(
+        StringBuilder builder,
+        PlacementSolvedWallRunExport run,
+        LineExport centerLine,
+        double drawingLength,
+        string geometryKind)
+    {
+        var cssClass = CanonicalWallSolutionCssClass(run);
+        var title = $"canonical solved wall {run.Id}; {geometryKind}; {run.WallType}; "
+            + $"length {N(drawingLength)} drawing units; thickness {N(run.ThicknessDrawingUnits)}; "
+            + $"confidence {N(run.Confidence)}; reconciliation {run.Reconciliation.Status}; "
+            + $"source walls {string.Join(", ", run.SourceWallIds)}";
+        builder.AppendLine($"""<line class="canonical-wall-solution-halo" x1="{N(centerLine.Start.X)}" y1="{N(centerLine.Start.Y)}" x2="{N(centerLine.End.X)}" y2="{N(centerLine.End.Y)}" />""");
+        builder.AppendLine($"""<line class="{cssClass}" x1="{N(centerLine.Start.X)}" y1="{N(centerLine.Start.Y)}" x2="{N(centerLine.End.X)}" y2="{N(centerLine.End.Y)}" opacity="{N(PlacementGraphOpacity(run.Confidence))}"><title>{Esc(title)}</title></line>""");
+    }
+
+    private static string CanonicalWallSolutionCssClass(PlacementSolvedWallRunExport run)
+    {
+        var classes = new List<string> { "canonical-wall-solution" };
+        if (string.Equals(run.WallType, "Interior", StringComparison.OrdinalIgnoreCase))
+        {
+            classes.Add("canonical-wall-solution-interior");
+        }
+        else if (string.Equals(run.WallType, "Mixed", StringComparison.OrdinalIgnoreCase))
+        {
+            classes.Add("canonical-wall-solution-mixed");
+        }
+
+        if (run.Reliability.RequiresReview)
+        {
+            classes.Add("canonical-wall-solution-review");
+        }
+
+        return string.Join(" ", classes);
     }
 
     private static string WallGraphRepairCssClass(WallGraphRepairCandidate candidate)

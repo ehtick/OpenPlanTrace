@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openplantrace.org/schemas/openplantrace.wall-truth.v1.schema.json",
+  "title": "OpenPlanTrace Reviewed Wall Truth",
+  "description": "Human-reviewed wall and not-wall geometry in canonical OpenPlanTrace page coordinates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "createdAt",
+    "coordinateSpace",
+    "coordinateUnit",
+    "coordinateOrigin",
+    "coordinateYAxisDirection",
+    "completeTruthSet",
+    "pages",
+    "entries",
+    "qualityGate",
+    "properties"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "openplantrace.wall-truth.v1" },
+    "name": { "type": ["string", "null"] },
+    "version": { "type": ["string", "null"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "coordinateSpace": { "const": "OpenPlanTracePageCoordinates" },
+    "coordinateUnit": { "const": "drawing-unit" },
+    "coordinateOrigin": { "const": "TopLeft" },
+    "coordinateYAxisDirection": { "const": "Down" },
+    "documentId": { "type": ["string", "null"] },
+    "sourceName": { "type": ["string", "null"] },
+    "sourceFingerprint": { "type": ["string", "null"] },
+    "completeTruthSet": { "type": "boolean" },
+    "pages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/page" }
+    },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    },
+    "qualityGate": { "$ref": "#/$defs/qualityGate" },
+    "properties": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/point" },
+        "end": { "$ref": "#/$defs/point" }
+      }
+    },
+    "rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "minimum": 0 },
+        "height": { "type": "number", "minimum": 0 }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageNumber", "width", "height"],
+      "properties": {
+        "pageNumber": { "type": "integer", "minimum": 1 },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pageNumber",
+        "labelKind",
+        "importance",
+        "maxLineDistance",
+        "maxEndpointDistance",
+        "maxAngularDifferenceDegrees",
+        "minLengthOverlapRatio",
+        "sourceDetectionIds",
+        "evidence"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "pageNumber": { "type": "integer", "minimum": 1 },
+        "labelKind": { "enum": ["Wall", "NotWall"] },
+        "centerLine": {
+          "oneOf": [
+            { "$ref": "#/$defs/line" },
+            { "type": "null" }
+          ]
+        },
+        "bounds": {
+          "oneOf": [
+            { "$ref": "#/$defs/rect" },
+            { "type": "null" }
+          ]
+        },
+        "wallType": {
+          "type": ["string", "null"],
+          "enum": ["Unknown", "Exterior", "Interior", null]
+        },
+        "thicknessDrawingUnits": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0
+        },
+        "importance": { "enum": ["Minor", "Standard", "Major", "Critical"] },
+        "maxLineDistance": { "type": "number", "exclusiveMinimum": 0 },
+        "maxEndpointDistance": { "type": "number", "exclusiveMinimum": 0 },
+        "maxAngularDifferenceDegrees": { "type": "number", "exclusiveMinimum": 0 },
+        "minLengthOverlapRatio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "label": { "type": ["string", "null"] },
+        "reviewer": { "type": ["string", "null"] },
+        "reviewedAt": { "type": ["string", "null"], "format": "date-time" },
+        "sourceDetectionIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "labelKind": { "const": "Wall" } },
+            "required": ["labelKind"]
+          },
+          "then": { "required": ["centerLine"] }
+        },
+        {
+          "if": {
+            "properties": { "labelKind": { "const": "NotWall" } },
+            "required": ["labelKind"]
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["centerLine"] },
+              { "required": ["bounds"] }
+            ]
+          }
+        }
+      ]
+    },
+    "qualityGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minRecall",
+        "minPrecision",
+        "minLengthWeightedRecall",
+        "minMajorWallRecall",
+        "minExteriorWallRecall",
+        "minWallTypeAccuracy",
+        "maxMeanLineDistance",
+        "maxMeanEndpointDistance",
+        "maxNotWallViolationCount"
+      ],
+      "properties": {
+        "minRecall": { "$ref": "#/$defs/ratio" },
+        "minPrecision": { "$ref": "#/$defs/ratio" },
+        "minLengthWeightedRecall": { "$ref": "#/$defs/ratio" },
+        "minMajorWallRecall": { "$ref": "#/$defs/ratio" },
+        "minExteriorWallRecall": { "$ref": "#/$defs/ratio" },
+        "minWallTypeAccuracy": { "$ref": "#/$defs/ratio" },
+        "maxMeanLineDistance": { "type": "number", "minimum": 0 },
+        "maxMeanEndpointDistance": { "type": "number", "minimum": 0 },
+        "maxNotWallViolationCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ratio": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

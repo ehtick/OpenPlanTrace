@@ -89,12 +89,19 @@ public sealed record PlanPlacementExport(
     IReadOnlyList<PlacementObjectAggregateExport> ObjectAggregates,
     IReadOnlyList<PlacementWallGraphRepairCandidateExport> WallGraphRepairCandidates,
     PlacementWallGraphExport WallGraph,
+    PlacementWallSolutionSetExport WallSolutions,
     PlacementRoutingLayerExport RoutingLayer,
     IReadOnlyList<PlacementIssueExport> Issues)
 {
     public const string CurrentSchemaVersion = "openplantrace.placement.v12";
 
     public static PlanPlacementExport From(PlanScanResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return PlanPlacementExportCache.GetOrCreate(result);
+    }
+
+    internal static PlanPlacementExport CreateUncached(PlanScanResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
 
@@ -182,6 +189,13 @@ public sealed record PlanPlacementExport(
             wallComponentLookup,
             wallEvidenceAssessments,
             placementWallsById);
+        var wallSolutions = GlobalWallSolutionBuilder.From(
+            pages,
+            walls,
+            rooms,
+            openings,
+            placementWallGraph,
+            result.StructuralPlanSolution);
         var placementRoutingLayer = PlacementRoutingLayerExport.From(routingLayer, result.Calibration, sourceLookup);
         var issues = PlacementIssueExport.From(result, sourceLookup, rooms, placementWallsById).ToArray();
         var wallSets = PlacementWallSetsExport.From(walls);
@@ -216,6 +230,7 @@ public sealed record PlanPlacementExport(
             objectAggregates,
             wallGraphRepairCandidates,
             placementWallGraph,
+            wallSolutions,
             placementRoutingLayer,
             issues);
     }
@@ -1420,7 +1435,10 @@ public sealed record PlacementReliabilityExport(
     bool ReadyForMetricPlacement,
     bool RequiresReview,
     double Confidence,
-    IReadOnlyList<string> Reasons);
+    IReadOnlyList<string> Reasons)
+{
+    public bool CoordinatePlacementBlocked { get; init; }
+}
 
 public sealed record PlacementWallOmissionExport(
     string Code,
@@ -1515,7 +1533,14 @@ public sealed record PlacementWallOmissionExport(
                 .Concat(openingLinkedWallEvidence)
                 .Concat(unsafeCleanTopologyProjectionEvidence)
                 .ToArray());
-        var linkedWallIds = ExtractLinkedWallIds(wall.Id, combinedEvidence, repairCandidates);
+        var linkedWallIds = ExtractLinkedWallIds(wall.Id, combinedEvidence, repairCandidates)
+            .Concat(representedByCleanSpan is null
+                ? Array.Empty<string>()
+                : new[] { representedByCleanSpan.Span.WallId })
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
         var classification = Classify(
             evidenceAssessment,
             component,
@@ -2300,7 +2325,8 @@ public sealed record PlacementWallOmissionExport(
 
         if (value.Contains(":wall:", StringComparison.OrdinalIgnoreCase)
             || value.Contains(":wall-evidence-recovered:", StringComparison.OrdinalIgnoreCase)
-            || value.Contains(":wall-evidence-recovered-short:", StringComparison.OrdinalIgnoreCase))
+            || value.Contains(":wall-evidence-recovered-short:", StringComparison.OrdinalIgnoreCase)
+            || value.Contains(":wall-exterior-shell-", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -3658,6 +3684,11 @@ public sealed record PlacementWallGraphExport(
     private const double MaxInlinePlacementGraphSameWallGapDrawingUnits = 48.0;
     private const double MaxInlinePlacementGraphOpeningCutoutGapDrawingUnits = 96.0;
     private const double MaxInlinePlacementGraphExteriorShellMergeGapDrawingUnits = 144.0;
+    private const double MaxWideAxisExteriorShellPlacementGraphContinuationAxisDistanceDrawingUnits = 12.0;
+    private const double MaxWideAxisExteriorShellPlacementGraphContinuationGapDrawingUnits = 28.0;
+    private const double MaxWideAxisExteriorShellPlacementGraphContinuationGapToLongNeighborRatio = 0.20;
+    private const double MinWideAxisExteriorShellPlacementGraphContinuationLongNeighborLengthDrawingUnits = 96.0;
+    private const double MinWideAxisExteriorShellPlacementGraphContinuationShortNeighborLengthDrawingUnits = 36.0;
     private const double MaxInlinePlacementGraphMergeThicknessDeltaDrawingUnits = 4.0;
     private const double MaxShortEndpointGapPlacementGraphContinuationDrawingUnits = 12.0;
     private const double MaxShortEndpointGapPlacementGraphAxisDistanceDrawingUnits = 4.5;
@@ -4153,6 +4184,11 @@ public sealed record PlacementWallGraphExport(
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        var sourceWallIds = edges
+            .SelectMany(edge => edge.SourceWallIds)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var evidence = edges
             .SelectMany(edge => edge.Evidence)
             .Append($"placement wall graph edge collapsed from {edges.Count} source wall graph edge fragment(s)")
@@ -4172,6 +4208,7 @@ public sealed record PlacementWallGraphExport(
                 .Where(layer => !string.IsNullOrWhiteSpace(layer))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            SourceWallIds = sourceWallIds,
             SourceWallGraphEdgeIds = sourceEdgeIds,
             Evidence = evidence
         };
@@ -4846,6 +4883,11 @@ public sealed record PlacementWallGraphExport(
                     .Where(layer => !string.IsNullOrWhiteSpace(layer))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
+                SourceWallIds = edge.SourceWallIds
+                    .Concat(containedEdge.SourceWallIds)
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray(),
                 SourceWallGraphEdgeIds = edge.SourceWallGraphEdgeIds
                     .Concat(containedEdge.SourceWallGraphEdgeIds)
                     .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -4899,6 +4941,14 @@ public sealed record PlacementWallGraphExport(
         PlacementGraphMergeSpan span,
         IReadOnlyDictionary<string, int> nodeIncidentCounts)
     {
+        if (!IsSameSourceWallPlacementGraphRun(cluster, span)
+            && (HasPlacementGraphDetailOrSurfaceEvidence(span.Edge)
+                || cluster.Any(item =>
+                    HasPlacementGraphDetailOrSurfaceEvidence(item.Edge))))
+        {
+            return false;
+        }
+
         if (TouchesProtectedPlacementGraphJunction(cluster, span, nodeIncidentCounts)
             && !IsSameSourceWallPlacementGraphRun(cluster, span)
             && !IsTrustedExteriorShellPlacementGraphRun(cluster, span)
@@ -4911,7 +4961,8 @@ public sealed record PlacementWallGraphExport(
         var axisDistance = Math.Abs(span.Axis - axis);
         if (axisDistance > PlacementGraphMergeAxisTolerance(cluster, span)
             && !CanUseOverlappingStructuralPlacementGraphMergeAxisTolerance(cluster, span, axisDistance)
-            && !CanUseShortOverlapStructuralPlacementGraphContinuationAxisTolerance(cluster, span, axisDistance))
+            && !CanUseShortOverlapStructuralPlacementGraphContinuationAxisTolerance(cluster, span, axisDistance)
+            && !CanUseWideAxisExteriorShellPlacementGraphContinuationAxisTolerance(cluster, span, axisDistance))
         {
             return false;
         }
@@ -4930,6 +4981,50 @@ public sealed record PlacementWallGraphExport(
         var maxGap = PlacementGraphMergeGapTolerance(cluster, span);
         return span.Start <= clusterEnd + maxGap
             && span.End >= clusterStart - maxGap;
+    }
+
+    private static bool CanUseWideAxisExteriorShellPlacementGraphContinuationAxisTolerance(
+        IReadOnlyList<PlacementGraphMergeSpan> cluster,
+        PlacementGraphMergeSpan span,
+        double axisDistance)
+    {
+        if (cluster.Count == 0
+            || axisDistance > MaxWideAxisExteriorShellPlacementGraphContinuationAxisDistanceDrawingUnits
+            || !cluster.All(item => IsTrustedExteriorShellPlacementGraphMergeContinuation(item.Edge))
+            || !IsTrustedExteriorShellPlacementGraphMergeContinuation(span.Edge)
+            || HasPlacementGraphDetailOrSurfaceEvidence(span.Edge)
+            || HasHardPlacementGraphRepresentativeDetailEvidence(span.Edge)
+            || cluster.Any(item =>
+                HasPlacementGraphDetailOrSurfaceEvidence(item.Edge)
+                || HasHardPlacementGraphRepresentativeDetailEvidence(item.Edge)))
+        {
+            return false;
+        }
+
+        var clusterStart = cluster.Min(item => item.Start);
+        var clusterEnd = cluster.Max(item => item.End);
+        var clusterLength = Math.Max(0, clusterEnd - clusterStart);
+        var gap = span.Start > clusterEnd
+            ? span.Start - clusterEnd
+            : clusterStart > span.End
+                ? clusterStart - span.End
+                : 0;
+        if (gap <= 0.001
+            || gap > MaxWideAxisExteriorShellPlacementGraphContinuationGapDrawingUnits)
+        {
+            return false;
+        }
+
+        var longerLength = Math.Max(clusterLength, span.Length);
+        var shorterLength = Math.Min(clusterLength, span.Length);
+        if (longerLength < MinWideAxisExteriorShellPlacementGraphContinuationLongNeighborLengthDrawingUnits
+            || shorterLength < MinWideAxisExteriorShellPlacementGraphContinuationShortNeighborLengthDrawingUnits
+            || gap > longerLength * MaxWideAxisExteriorShellPlacementGraphContinuationGapToLongNeighborRatio)
+        {
+            return false;
+        }
+
+        return !HasExteriorInteriorPlacementGraphMismatch(cluster[0].Edge, span.Edge);
     }
 
     private static bool CanUseOverlappingStructuralPlacementGraphMergeAxisTolerance(
@@ -5221,7 +5316,7 @@ public sealed record PlacementWallGraphExport(
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var sourceWallIds = ordered
-            .Select(span => span.Edge.WallId)
+            .SelectMany(span => span.Edge.SourceWallIds)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -5233,7 +5328,7 @@ public sealed record PlacementWallGraphExport(
                 ? new[] { $"placement wall graph inline run rejoined split host pieces as {mergedId}" }
                 : Array.Empty<string>())
             .Concat(sourceWallIds.Length > 1
-                ? new[] { $"placement wall graph inline run preserves {sourceWallIds.Length} source wall id(s) through sourceWallGraphEdgeIds" }
+                ? new[] { $"placement wall graph inline run preserves {sourceWallIds.Length} source wall id(s)" }
                 : Array.Empty<string>())
             .Concat(ordered.Any(span => IsTrustedSourceBackedIsolatedPlacementContinuation(span.Edge))
                 ? new[] { "placement wall graph inline run absorbed source-backed isolated continuation into structural run" }
@@ -5275,6 +5370,7 @@ public sealed record PlacementWallGraphExport(
                 .Where(layer => !string.IsNullOrWhiteSpace(layer))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            SourceWallIds = sourceWallIds,
             SourceWallGraphEdgeIds = sourceEdgeIds,
             Evidence = evidence
         };
@@ -6382,6 +6478,11 @@ public sealed record PlacementWallGraphExport(
                 .Where(layer => !string.IsNullOrWhiteSpace(layer))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            SourceWallIds = hostEdge.SourceWallIds
+                .Concat(ordered.SelectMany(suppression => suppression.CandidateSpan.Edge.SourceWallIds))
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
             SourceWallGraphEdgeIds = hostEdge.SourceWallGraphEdgeIds
                 .Concat(ordered.SelectMany(suppression => suppression.CandidateSpan.Edge.SourceWallGraphEdgeIds))
                 .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -6576,6 +6677,11 @@ public sealed record PlacementWallGraphExport(
                 .Concat(ordered.SelectMany(suppression => suppression.BridgeEdge.SourceLayers))
                 .Where(layer => !string.IsNullOrWhiteSpace(layer))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            SourceWallIds = hostEdge.SourceWallIds
+                .Concat(ordered.SelectMany(suppression => suppression.BridgeEdge.SourceWallIds))
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal)
                 .ToArray(),
             SourceWallGraphEdgeIds = hostEdge.SourceWallGraphEdgeIds
                 .Concat(ordered.SelectMany(suppression => suppression.BridgeEdge.SourceWallGraphEdgeIds))
@@ -8650,6 +8756,7 @@ public sealed record PlacementWallGraphEdgeExport(
     double Confidence,
     IReadOnlyList<string> SourcePrimitiveIds,
     IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> SourceWallIds,
     IReadOnlyList<string> SourceWallGraphEdgeIds,
     IReadOnlyList<string> Evidence)
 {
@@ -8723,6 +8830,7 @@ public sealed record PlacementWallGraphEdgeExport(
             topologySpan is null
                 ? Array.Empty<string>()
                 : ExportSourceHelpers.SourceLayers(topologySpan.SourcePrimitiveIds, sourceLookup),
+            new[] { edge.WallId },
             topologySpan?.SourceWallGraphEdgeIds ?? new[] { edge.Id },
             EdgeEvidence(topologySpan, evidenceAssessment));
     }
@@ -8794,6 +8902,7 @@ public sealed record PlacementWallGraphEdgeExport(
             topologySpan.Confidence.Value,
             topologySpan.SourcePrimitiveIds,
             ExportSourceHelpers.SourceLayers(topologySpan.SourcePrimitiveIds, sourceLookup),
+            new[] { topologySpan.WallId },
             topologySpan.SourceWallGraphEdgeIds,
             EdgeEvidence(topologySpan, evidenceAssessment));
     }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenPlanTrace Viewer</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23191a1f'/%3E%3Ctext x='16' y='20' text-anchor='middle' font-family='Arial,sans-serif' font-size='10' font-weight='700' fill='white'%3EOPT%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=54">
+  <link rel="stylesheet" href="./styles.css?v=56">
 </head>
 <body>
   <main class="app-shell">
@@ -40,6 +40,7 @@
         <label><input type="checkbox" data-layer="wallComponents"> Wall components</label>
         <label><input type="checkbox" data-layer="rawWalls"> Raw detected walls</label>
         <label><input type="checkbox" data-layer="walls"> Placement walls</label>
+        <label><input type="checkbox" data-layer="wallTruth"> Reviewed wall truth</label>
         <label><input type="checkbox" data-layer="wallBodyFootprints" checked> Wall body footprints</label>
         <label><input type="checkbox" data-layer="wallTopologySpans" checked> Clean wall spans</label>
         <label><input type="checkbox" data-layer="wallTopologyReviewSpans"> Non-placement wall spans</label>
@@ -133,6 +134,7 @@
           <button id="downloadObjectReviewDataset" type="button" title="Download object review dataset JSON" disabled>REVIEW</button>
           <button id="downloadObjectCorrectionDataset" type="button" title="Download editable object correction dataset JSON" disabled>CORRECT</button>
           <button id="downloadBenchmark" type="button" title="Download reviewed benchmark manifest JSON" disabled>BMK</button>
+          <button id="downloadWallTruth" type="button" title="Download reviewed wall truth JSON" disabled>TRUTH</button>
           <button id="downloadSvg" type="button" title="Download current SVG overlay" disabled>SVG</button>
         </div>
         <div class="status" id="status">Ready</div>
@@ -143,6 +145,7 @@
         <button type="button" role="tab" aria-selected="false" aria-controls="tabAi" data-workspace-tab="ai">AI</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="tabGeneral" data-workspace-tab="general">General</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="tabPipeline" data-workspace-tab="pipeline">Pipeline</button>
+        <button type="button" role="tab" aria-selected="false" aria-controls="tabWallTruth" data-workspace-tab="wallTruth">Wall Truth</button>
         <button type="button" role="tab" aria-selected="false" aria-controls="tabAdvanced" data-workspace-tab="advanced">Advanced</button>
       </div>
 
@@ -172,6 +175,10 @@
 
         <div class="workspace-panel" id="tabPipeline" role="tabpanel" hidden>
           <div id="pipelineTabDetails" class="tab-dashboard"></div>
+        </div>
+
+        <div class="workspace-panel" id="tabWallTruth" role="tabpanel" hidden>
+          <div id="wallTruthTabDetails" class="wall-truth-workspace"></div>
         </div>
 
         <div class="workspace-panel" id="tabAdvanced" role="tabpanel" hidden>
@@ -208,6 +215,6 @@
     </aside>
   </main>
 
-  <script type="module" src="./app.js?v=62"></script>
+  <script type="module" src="./app.js?v=68"></script>
 </body>
 </html>

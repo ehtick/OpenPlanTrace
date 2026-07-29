@@ -6,6 +6,8 @@ internal static class RoomBoundaryReliability
 {
     private const double MinReviewSupportedTrustedWallRatio = 0.45;
     private const int MinReviewSupportedTrustedSideCount = 2;
+    private const double MinExteriorShellAreaMatchRatio = 0.3;
+    private const double MaxExteriorShellAreaMatchRatio = 3.0;
 
     public static bool HasReliableBoundaryEvidence(RoomRegion room)
     {
@@ -32,6 +34,17 @@ internal static class RoomBoundaryReliability
         return !TryParseTrustedSupport(room.Evidence, out var trustedWallRatio, out var trustedSideCount)
             || trustedWallRatio < MinReviewSupportedTrustedWallRatio
             || trustedSideCount < MinReviewSupportedTrustedSideCount;
+    }
+
+    public static bool HasReliableExteriorShellBoundaryEvidence(RoomRegion room)
+    {
+        if (!HasReliableBoundaryEvidence(room))
+        {
+            return false;
+        }
+
+        return !TryParseAreaMatchRatio(room.Evidence, out var areaMatchRatio)
+            || areaMatchRatio is >= MinExteriorShellAreaMatchRatio and <= MaxExteriorShellAreaMatchRatio;
     }
 
     private static bool TryParseTrustedSupport(
@@ -70,6 +83,42 @@ internal static class RoomBoundaryReliability
             var sideText = item[sideTextStart..sideTextEnd].Trim();
             if (double.TryParse(ratioText, NumberStyles.Float, CultureInfo.InvariantCulture, out trustedWallRatio)
                 && int.TryParse(sideText, NumberStyles.Integer, CultureInfo.InvariantCulture, out trustedSideCount))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryParseAreaMatchRatio(
+        IReadOnlyList<string> evidence,
+        out double areaMatchRatio)
+    {
+        areaMatchRatio = 0;
+        foreach (var item in evidence)
+        {
+            const string prefix = "semantic room boundary area match ratio ";
+            const string suffix = " from printed room area";
+
+            var prefixIndex = item.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+            if (prefixIndex < 0)
+            {
+                continue;
+            }
+
+            var valueStart = prefixIndex + prefix.Length;
+            var valueEnd = item.IndexOf(suffix, valueStart, StringComparison.OrdinalIgnoreCase);
+            if (valueEnd < 0)
+            {
+                valueEnd = item.Length;
+            }
+
+            if (double.TryParse(
+                    item[valueStart..valueEnd].Trim(),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out areaMatchRatio))
             {
                 return true;
             }

@@ -622,7 +622,7 @@ public sealed class WallPlacementReadinessTests
                 PositiveEvidence:
                 [
                     "strong parallel-face wall pair",
-                    "one endpoint supported by structural context"
+                    "both endpoints supported by structural context"
                 ],
                 NegativeEvidence: ["not placement-ready without review"])
         };
@@ -639,6 +639,71 @@ public sealed class WallPlacementReadinessTests
         Assert.False(readiness.CoordinatePlacementBlocked);
         Assert.DoesNotContain("wall belongs to isolated wall graph fragment", readiness.Reasons);
         Assert.DoesNotContain("wall evidence requires review", string.Join(" | ", readiness.Reasons), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluate_BlocksDimensionLikeExteriorPerimeterWithOnlyOneEndpointAnchor()
+    {
+        var wall = Wall("wall:dimension-like-one-anchor-detail", Confidence.High) with
+        {
+            CenterLine = new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(100, 151)),
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Exterior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(88, 100), new PlanPoint(88, 151)),
+                new PlanLineSegment(new PlanPoint(112, 100), new PlanPoint(112, 151)),
+                FaceSeparation: 24,
+                OverlapRatio: 1,
+                Score: 0.725,
+                FirstFaceFragmentCount: 73,
+                SecondFaceFragmentCount: 4,
+                FirstFaceSourcePrimitiveIds: ["dimension-like-detail-face-a"],
+                SecondFaceSourcePrimitiveIds: ["dimension-like-detail-face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer (unlayered) classified Dimension (0,24)",
+                "layer evidence: contains dimension-like text",
+                "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
+                "wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement"
+            ]
+        };
+        var component = Component(
+            WallGraphComponentKind.IsolatedFragment,
+            excludedFromStructuralTopology: false,
+            wall.Id);
+        var evidence = Evidence(wall, WallEvidenceCategory.MediumWallBody, placementReady: false) with
+        {
+            Evidence = wall.Evidence,
+            ScoreBreakdown = new WallEvidenceScoreBreakdown(
+                PositiveScore: 0.60,
+                NegativeScore: 0,
+                DecisionScore: 0.60,
+                PairSupportScore: 0.50,
+                LayerSupportScore: 0,
+                StructuralSupportScore: 0.10,
+                RecoverySupportScore: 0,
+                NoisePenalty: 0,
+                FragmentReviewPenalty: 0,
+                PositiveEvidence:
+                [
+                    "strong parallel-face wall pair",
+                    "one endpoint supported by structural context"
+                ],
+                NegativeEvidence: ["not placement-ready without review"])
+        };
+
+        var readiness = WallPlacementReadinessEvaluator.Evaluate(
+            wall,
+            ReliableCalibration(),
+            component,
+            evidence);
+
+        Assert.False(readiness.ReadyForCoordinatePlacement);
+        Assert.False(readiness.ReadyForMetricPlacement);
+        Assert.True(readiness.RequiresReview);
+        Assert.True(readiness.CoordinatePlacementBlocked);
+        Assert.Contains("wall belongs to isolated wall graph fragment", readiness.Reasons);
     }
 
     [Fact]

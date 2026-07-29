@@ -127,4 +127,6 @@ public sealed record ScannerOptions
     public IReadOnlyList<ObjectLabelRule> ObjectLabelRules { get; init; } = Array.Empty<ObjectLabelRule>();
 
     public GeometryTolerance GeometryTolerance { get; init; } = new();
+
+    public StructuralSolverOptions StructuralSolver { get; init; } = new();
 }

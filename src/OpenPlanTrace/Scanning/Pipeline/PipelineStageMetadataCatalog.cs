@@ -158,6 +158,26 @@ public static class PipelineStageMetadataCatalog
             Writes(PlanArtifactKind.Diagnostics),
             Capabilities("room-side-wall-classification", "shared-wall-refinement", "exterior-boundary-refinement", "exterior-shell-repair", "room-confirmed-wall-evidence", "unsupported-room-boundary-repair")),
         Create(
+            "structural-interpretation",
+            "Joint structural interpretation",
+            PipelineStageKind.Topology,
+            Reads(
+                PlanArtifactKind.WallCandidates,
+                PlanArtifactKind.Walls,
+                PlanArtifactKind.WallEvidence,
+                PlanArtifactKind.WallGraph,
+                PlanArtifactKind.Rooms,
+                PlanArtifactKind.Openings),
+            Writes(
+                PlanArtifactKind.StructuralEvidence,
+                PlanArtifactKind.StructuralSolution,
+                PlanArtifactKind.Diagnostics),
+            Capabilities(
+                "high-recall-structural-evidence",
+                "joint-wall-room-junction-solving",
+                "canonical-wall-run-compaction",
+                "unsplit-junction-topology")),
+        Create(
             "measurement-scale-provenance",
             "Measurement scale provenance",
             PipelineStageKind.Quality,
