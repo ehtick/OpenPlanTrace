@@ -253,9 +253,10 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v13";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v14";
 
     private const double EndpointSnapDistance = 2.0;
+    private const double EndpointAxisEqualityTolerance = 0.000001;
     private const double EndpointSupportDistance = 4.0;
     private const double AxisGroupingDistance = 3.0;
     private const double DuplicateAxisDistance = 1.0;
@@ -1809,8 +1810,8 @@ public static partial class GlobalWallSolutionBuilder
         {
             var run = compacted[index];
             var runId = $"wall-solution:run:{index + 1}";
-            var startCluster = FindEndpointCluster(endpointClusters, run.PageNumber, run.CenterLine.Start);
-            var endCluster = FindEndpointCluster(endpointClusters, run.PageNumber, run.CenterLine.End);
+            var startCluster = FindEndpointCluster(endpointClusters, index, isStart: true);
+            var endCluster = FindEndpointCluster(endpointClusters, index, isStart: false);
             var adjustedLine = new LineExport(
                 PointExport.From(startCluster.Position),
                 PointExport.From(endCluster.Position));
@@ -3288,21 +3289,38 @@ public static partial class GlobalWallSolutionBuilder
         IReadOnlyList<CompactedWallRun> runs)
     {
         var endpoints = runs
-            .SelectMany(run => new[]
+            .SelectMany((run, runIndex) => new[]
             {
-                (run.PageNumber, Position: ToPlanPoint(run.CenterLine.Start)),
-                (run.PageNumber, Position: ToPlanPoint(run.CenterLine.End))
+                new EndpointObservation(
+                    runIndex,
+                    IsStart: true,
+                    run.PageNumber,
+                    ToPlanPoint(run.CenterLine.Start),
+                    Orientation(run.CenterLine)),
+                new EndpointObservation(
+                    runIndex,
+                    IsStart: false,
+                    run.PageNumber,
+                    ToPlanPoint(run.CenterLine.End),
+                    Orientation(run.CenterLine))
             })
             .OrderBy(endpoint => endpoint.PageNumber)
             .ThenBy(endpoint => endpoint.Position.Y)
             .ThenBy(endpoint => endpoint.Position.X)
+            .ThenBy(endpoint => endpoint.RunIndex)
+            .ThenBy(endpoint => endpoint.IsStart ? 0 : 1)
             .ToArray();
-        var clusters = new List<List<(int PageNumber, PlanPoint Position)>>();
+        var clusters = new List<List<EndpointObservation>>();
         foreach (var endpoint in endpoints)
         {
-            var cluster = clusters.FirstOrDefault(items =>
-                items[0].PageNumber == endpoint.PageNumber
-                && items.Any(item => Distance(item.Position, endpoint.Position) <= EndpointSnapDistance));
+            var cluster = clusters
+                .Where(items => items.All(item =>
+                    EndpointObservationsCanShareNode(item, endpoint)))
+                .OrderBy(items => items.Max(item =>
+                    Distance(item.Position, endpoint.Position)))
+                .ThenBy(items => items[0].RunIndex)
+                .ThenBy(items => items[0].IsStart ? 0 : 1)
+                .FirstOrDefault();
             if (cluster is null)
             {
                 clusters.Add([endpoint]);
@@ -3317,20 +3335,95 @@ public static partial class GlobalWallSolutionBuilder
             .Select((cluster, index) => new EndpointCluster(
                 $"wall-solution:page:{cluster[0].PageNumber}:node:{index + 1}",
                 cluster[0].PageNumber,
-                new PlanPoint(
-                    cluster.Average(item => item.Position.X),
-                    cluster.Average(item => item.Position.Y))))
+                ResolveEndpointClusterPosition(cluster),
+                cluster.ToArray()))
             .ToArray();
     }
 
+    private static bool EndpointObservationsCanShareNode(
+        EndpointObservation first,
+        EndpointObservation second)
+    {
+        if (first.PageNumber != second.PageNumber
+            || Distance(first.Position, second.Position) > EndpointSnapDistance)
+        {
+            return false;
+        }
+
+        if (first.Orientation == WallOrientation.Diagonal
+            || second.Orientation == WallOrientation.Diagonal)
+        {
+            return Distance(first.Position, second.Position)
+                <= EndpointAxisEqualityTolerance;
+        }
+
+        if (first.Orientation == second.Orientation)
+        {
+            return Math.Abs(
+                EndpointAxisCoordinate(first)
+                - EndpointAxisCoordinate(second)) <= EndpointAxisEqualityTolerance;
+        }
+
+        var horizontal = first.Orientation == WallOrientation.Horizontal
+            ? first
+            : second;
+        var vertical = first.Orientation == WallOrientation.Vertical
+            ? first
+            : second;
+        var intersection = new PlanPoint(
+            vertical.Position.X,
+            horizontal.Position.Y);
+        return Distance(horizontal.Position, intersection) <= EndpointSnapDistance
+            && Distance(vertical.Position, intersection) <= EndpointSnapDistance;
+    }
+
+    private static PlanPoint ResolveEndpointClusterPosition(
+        IReadOnlyList<EndpointObservation> cluster)
+    {
+        var horizontal = cluster
+            .Where(item => item.Orientation == WallOrientation.Horizontal)
+            .ToArray();
+        var vertical = cluster
+            .Where(item => item.Orientation == WallOrientation.Vertical)
+            .ToArray();
+        if (horizontal.Length > 0 && vertical.Length > 0)
+        {
+            return new PlanPoint(
+                vertical.Average(item => item.Position.X),
+                horizontal.Average(item => item.Position.Y));
+        }
+
+        if (horizontal.Length > 0)
+        {
+            return new PlanPoint(
+                horizontal.Average(item => item.Position.X),
+                horizontal[0].Position.Y);
+        }
+
+        if (vertical.Length > 0)
+        {
+            return new PlanPoint(
+                vertical[0].Position.X,
+                vertical.Average(item => item.Position.Y));
+        }
+
+        return new PlanPoint(
+            cluster.Average(item => item.Position.X),
+            cluster.Average(item => item.Position.Y));
+    }
+
+    private static double EndpointAxisCoordinate(EndpointObservation endpoint) =>
+        endpoint.Orientation == WallOrientation.Horizontal
+            ? endpoint.Position.Y
+            : endpoint.Position.X;
+
     private static EndpointCluster FindEndpointCluster(
         IReadOnlyList<EndpointCluster> clusters,
-        int pageNumber,
-        PointExport point) =>
-        clusters
-            .Where(cluster => cluster.PageNumber == pageNumber)
-            .OrderBy(cluster => Distance(cluster.Position, ToPlanPoint(point)))
-            .First();
+        int runIndex,
+        bool isStart) =>
+        clusters.Single(cluster => cluster.Endpoints.Any(endpoint =>
+            endpoint.RunIndex == runIndex
+            && endpoint.IsStart == isStart));
 
     private static double WeightedCoverage(
         IReadOnlyList<GlobalWallCandidate> truthCandidates,
@@ -4264,7 +4357,18 @@ public static partial class GlobalWallSolutionBuilder
         double EndParameter,
         IReadOnlyList<string> OpeningIds);
 
-    private sealed record EndpointCluster(string Id, int PageNumber, PlanPoint Position);
+    private sealed record EndpointObservation(
+        int RunIndex,
+        bool IsStart,
+        int PageNumber,
+        PlanPoint Position,
+        WallOrientation Orientation);
+
+    private sealed record EndpointCluster(
+        string Id,
+        int PageNumber,
+        PlanPoint Position,
+        IReadOnlyList<EndpointObservation> Endpoints);
 
     private sealed record GlobalWallMetrics(
         double ObjectiveScore,

@@ -1587,6 +1587,101 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task EndpointNodeSolver_PreservesOrthogonalityAtOffsetCorner()
+    {
+        var placement = PlanPlacementExport.From(await CreateScanResultAsync());
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var horizontal = HostWallFragment(
+            template,
+            "offset-corner-horizontal",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(200, 100)));
+        var vertical = HostWallFragment(
+            template,
+            "offset-corner-vertical",
+            new LineExport(
+                new PointExport(201, 99),
+                new PointExport(201, 220)));
+        var graph = EmptyGraph(placement.WallGraph);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [horizontal, vertical],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            graph);
+
+        var horizontalRun = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(horizontal.Id, StringComparer.Ordinal)));
+        var verticalRun = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(vertical.Id, StringComparer.Ordinal)));
+        Assert.Equal(horizontalRun.CenterLine.Start.Y, horizontalRun.CenterLine.End.Y, 9);
+        Assert.Equal(verticalRun.CenterLine.Start.X, verticalRun.CenterLine.End.X, 9);
+        Assert.Equal(horizontalRun.ToNodeId, verticalRun.FromNodeId);
+        Assert.Equal(horizontalRun.CenterLine.End.X, verticalRun.CenterLine.Start.X, 9);
+        Assert.Equal(horizontalRun.CenterLine.End.Y, verticalRun.CenterLine.Start.Y, 9);
+        Assert.Equal(201, horizontalRun.CenterLine.End.X, 9);
+        Assert.Equal(100, horizontalRun.CenterLine.End.Y, 9);
+
+        var structure = PlanStructureExport.From(placement with
+        {
+            Walls = [horizontal, vertical],
+            Rooms = Array.Empty<PlacementRoomExport>(),
+            Openings = Array.Empty<PlacementOpeningExport>(),
+            WallGraph = graph,
+            WallSolutions = solutions
+        });
+        Assert.DoesNotContain(
+            PlanStructureValidator.Validate(structure),
+            message => string.Equals(message.Severity, "Error", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EndpointNodeSolver_DoesNotMergeOffsetParallelEndpoints()
+    {
+        var placement = PlanPlacementExport.From(await CreateScanResultAsync());
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var first = HostWallFragment(
+            template,
+            "parallel-endpoint-first",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(200, 100))) with
+        {
+            WallType = "Exterior"
+        };
+        var second = HostWallFragment(
+            template,
+            "parallel-endpoint-second",
+            new LineExport(
+                new PointExport(200.5, 101),
+                new PointExport(300, 101))) with
+        {
+            WallType = "Interior"
+        };
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [first, second],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph));
+
+        var firstRun = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(first.Id, StringComparer.Ordinal)));
+        var secondRun = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(second.Id, StringComparer.Ordinal)));
+        Assert.NotEqual(firstRun.ToNodeId, secondRun.FromNodeId);
+        Assert.Equal(100, firstRun.CenterLine.Start.Y, 9);
+        Assert.Equal(100, firstRun.CenterLine.End.Y, 9);
+        Assert.Equal(101, secondRun.CenterLine.Start.Y, 9);
+        Assert.Equal(101, secondRun.CenterLine.End.Y, 9);
+    }
+
+    [Fact]
     public async Task Solver_ReconstructsOneLogicalHostWallAndPreservesOpeningGap()
     {
         var placement = PlanPlacementExport.From(await CreateScanResultAsync());

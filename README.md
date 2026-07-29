@@ -6,7 +6,7 @@ The project intentionally does not contain downstream application UI code. It ex
 
 **Project links:** [Architecture](docs/ARCHITECTURE.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
 
-Current alpha version: `0.11.010`.
+Current alpha version: `0.11.011`.
 
 ## Versioning and Changelog
 
@@ -54,7 +54,7 @@ The first engine version works from normalized floorplan drawing primitives:
 - schema-versioned JSON export with a portable page coordinate-system contract, source document provenance, title-block, dimension, annotation item references, surface patterns, grid-axis, grid-bay spacing, deterministic room-use, room-adjacency, typed room-cluster semantic evidence, routing-layer barriers/passages/obstacles/room-use hints/suppressed objects/ignored objects, graph-junction-aware routing barriers with minor junction compression, suppression of unused isolated wall fragments and dense secondary detail patterns from trusted routing barriers, source primitive IDs, and source layers
 - schema-versioned canonical structure export with globally solved wall runs, canonical nodes, rooms, openings, exact page and millimeter coordinates, wall type/thickness, source wall/graph/primitive provenance, reliability, integrity metrics, and actionable structural issues
 - deterministic global wall hypotheses that compare the joint structural core with conservative, balanced, and recall-first solutions using guarded major-wall recall, unanimous source-backed gap recovery, long-wall coverage, endpoint connectivity, room closure, exterior continuity, duplicate length, review length, and noise length
-- robust canonical wall topology optimization using iteratively reweighted least squares with Huber loss, exact inline T-junction/crossing references, residual diagnostics, and long unsplit wall identities
+- robust canonical wall topology optimization using iteratively reweighted least squares with Huber loss, orientation-preserving endpoint node resolution, exact inline T-junction/crossing references, residual diagnostics, and long unsplit wall identities
 - schema-versioned wall truth datasets and evaluation output for exact centerline/type regression gates, with a wall-only viewer editor for maintaining local correctness references
 - page-coordinate GeoJSON-style feature export for downstream QA/mapping tools, including pages, regions, surface patterns, walls, wall nodes, rooms, room adjacencies, room clusters, openings, grid axes, grid bay spacings, dimensions, annotations, annotation references, objects, object groups, object aggregates, and routing-layer features
 - measured wall lengths, room areas, grid bay spacings, and opening widths when calibration is reliable, including the scale group used for each measurement when it can be assigned deterministically

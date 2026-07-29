@@ -105,9 +105,12 @@ is bounded, and the candidate contributes meaningful uncovered wall length.
 The topology builder turns selected candidates into stable structural geometry.
 It robustly fits wall axes, compacts collinear observations into long wall
 runs, resolves source-linked exterior body leaves into one physical wall
-assembly, preserves contributing source IDs, and records T-junctions or
-crossings as inline references. A branch does not force a long host wall into
-many serialized fragments.
+assembly, and resolves endpoint nodes with orientation-aware complete-link
+clustering. Orthogonal corners use the vertical wall axis and horizontal wall
+axis instead of averaging both coordinates, while nearby offset parallel
+endpoints remain distinct. The builder preserves contributing source IDs and
+records T-junctions or crossings as inline references. A branch does not force
+a long host wall into many serialized fragments.
 
 ### Trust And Placement
 
