@@ -2,7 +2,7 @@ namespace OpenPlanTrace.Export;
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v5";
+    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v6";
 
     private const double MinimumReconciliationMovement = 0.05;
     private const double MaximumReconciliationAxisShift = 8.0;
@@ -119,6 +119,11 @@ public static partial class GlobalWallSolutionBuilder
             consensus.Evidence,
             extent.Evidence
         };
+        if (IsResolvedPhysicalWallAssembly(run))
+        {
+            evidence.Add(
+                "resolved physical wall assembly axis retained while source-linked face evidence remained available for extent reconciliation");
+        }
         var confidence = Math.Clamp(
             run.Confidence * 0.35
             + consensus.Confidence * 0.45
@@ -161,6 +166,8 @@ public static partial class GlobalWallSolutionBuilder
         var contributorIds = run.Contributors
             .Select(candidate => candidate.Id)
             .ToHashSet(StringComparer.Ordinal);
+        var resolvedPhysicalAssembly = IsResolvedPhysicalWallAssembly(run);
+        var resolvedAssemblyAxis = AxisCoordinate(run.CenterLine);
 
         foreach (var contributor in run.Contributors)
         {
@@ -211,7 +218,12 @@ public static partial class GlobalWallSolutionBuilder
                 * (OriginPriority(candidate.PrimaryOrigin) >= 2 ? 1.35 : 0.85)
                 * Math.Max(0.35, overlapRatio);
             votes.Add(new WallReconciliationVote(
-                candidate.CenterLine,
+                NormalizeSourceLinkedAssemblyVote(
+                    candidate.CenterLine,
+                    orientation,
+                    sourceLinked,
+                    resolvedPhysicalAssembly,
+                    resolvedAssemblyAxis),
                 weight,
                 ReconciliationVoteKind.Candidate,
                 independentlyStructural,
@@ -245,7 +257,12 @@ public static partial class GlobalWallSolutionBuilder
                 }
 
                 votes.Add(new WallReconciliationVote(
-                    boundary,
+                    NormalizeSourceLinkedAssemblyVote(
+                        boundary,
+                        orientation,
+                        sourceLinked,
+                        resolvedPhysicalAssembly,
+                        resolvedAssemblyAxis),
                     (sourceLinked ? 3.25 : 1.60)
                         * Math.Max(0.40, room.Confidence)
                         * Math.Max(0.30, overlapRatio),
@@ -287,7 +304,12 @@ public static partial class GlobalWallSolutionBuilder
             }
 
             votes.Add(new WallReconciliationVote(
-                opening.Placement.ReferenceLine,
+                NormalizeSourceLinkedAssemblyVote(
+                    opening.Placement.ReferenceLine,
+                    orientation,
+                    sourceLinked,
+                    resolvedPhysicalAssembly,
+                    resolvedAssemblyAxis),
                 (sourceLinked ? 2.75 : 1.25) * Math.Max(0.45, opening.Confidence),
                 ReconciliationVoteKind.Opening,
                 opening.Confidence >= 0.65,
@@ -330,7 +352,12 @@ public static partial class GlobalWallSolutionBuilder
             }
 
             votes.Add(new WallReconciliationVote(
-                neighbor.CenterLine,
+                NormalizeSourceLinkedAssemblyVote(
+                    neighbor.CenterLine,
+                    orientation,
+                    sourceLinked,
+                    resolvedPhysicalAssembly,
+                    resolvedAssemblyAxis),
                 (sourceLinked ? 2.50 : 1.40) * Math.Max(0.40, neighbor.Confidence),
                 ReconciliationVoteKind.Neighbor,
                 structurallyReady,
@@ -340,6 +367,27 @@ public static partial class GlobalWallSolutionBuilder
 
         return votes;
     }
+
+    private static LineExport NormalizeSourceLinkedAssemblyVote(
+        LineExport line,
+        WallOrientation orientation,
+        bool sourceLinked,
+        bool resolvedPhysicalAssembly,
+        double resolvedAssemblyAxis) =>
+        sourceLinked && resolvedPhysicalAssembly
+            ? WithAxis(line, orientation, resolvedAssemblyAxis)
+            : line;
+
+    private static bool IsResolvedPhysicalWallAssembly(
+        CompactedWallRun run) =>
+        run.Contributors.Any(candidate =>
+            candidate.Evidence.Any(item =>
+                item.Contains(
+                    "resolved exterior wall assembly",
+                    StringComparison.OrdinalIgnoreCase)
+                || item.Contains(
+                    "resolved shared-source physical wall assembly",
+                    StringComparison.OrdinalIgnoreCase)));
 
     private static AxisConsensus BuildAxisConsensus(
         IReadOnlyList<WallReconciliationVote> votes,

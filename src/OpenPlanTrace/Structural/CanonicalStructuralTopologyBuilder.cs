@@ -53,7 +53,7 @@ internal static class CanonicalStructuralTopologyBuilder
             .ThenBy(run => run.Bounds.X)
             .ThenBy(run => run.Id, StringComparer.Ordinal)
             .ToArray();
-        var runs = ResolveExteriorWallAssemblies(leafRuns, options);
+        var runs = ResolvePhysicalWallAssemblies(leafRuns, options);
         var junctions = BuildJunctions(graph, runs, options);
         return new CanonicalStructuralTopology(runs, junctions);
     }
@@ -144,7 +144,7 @@ internal static class CanonicalStructuralTopologyBuilder
         };
     }
 
-    private static IReadOnlyList<StructuralWallRun> ResolveExteriorWallAssemblies(
+    private static IReadOnlyList<StructuralWallRun> ResolvePhysicalWallAssemblies(
         IReadOnlyList<StructuralWallRun> leafRuns,
         StructuralSolverOptions options)
     {
@@ -153,12 +153,12 @@ internal static class CanonicalStructuralTopologyBuilder
             return leafRuns;
         }
 
-        var pairs = new List<ExteriorAssemblyPair>();
+        var pairs = new List<PhysicalWallAssemblyPair>();
         for (var firstIndex = 0; firstIndex < leafRuns.Count; firstIndex++)
         {
             for (var secondIndex = firstIndex + 1; secondIndex < leafRuns.Count; secondIndex++)
             {
-                var pair = EvaluateExteriorAssemblyPair(
+                var pair = EvaluatePhysicalWallAssemblyPair(
                     leafRuns[firstIndex],
                     leafRuns[secondIndex],
                     options);
@@ -189,7 +189,7 @@ internal static class CanonicalStructuralTopologyBuilder
                 continue;
             }
 
-            assemblies.Add(MergeExteriorAssembly(pair));
+            assemblies.Add(MergePhysicalWallAssembly(pair));
             consumedRunIds.Add(pair.First.Id);
             consumedRunIds.Add(pair.Second.Id);
         }
@@ -202,7 +202,7 @@ internal static class CanonicalStructuralTopologyBuilder
             var match = assemblies
                 .Select((assembly, index) => (
                     Index: index,
-                    Pair: EvaluateExteriorAssemblyPair(
+                    Pair: EvaluatePhysicalWallAssemblyPair(
                         assembly,
                         leaf,
                         options,
@@ -218,7 +218,7 @@ internal static class CanonicalStructuralTopologyBuilder
                 continue;
             }
 
-            assemblies[match.Index] = MergeExteriorAssembly(match.Pair);
+            assemblies[match.Index] = MergePhysicalWallAssembly(match.Pair);
             consumedRunIds.Add(leaf.Id);
         }
 
@@ -232,12 +232,19 @@ internal static class CanonicalStructuralTopologyBuilder
             .ToArray();
     }
 
-    private static ExteriorAssemblyPair? EvaluateExteriorAssemblyPair(
+    private static PhysicalWallAssemblyPair? EvaluatePhysicalWallAssemblyPair(
         StructuralWallRun first,
         StructuralWallRun second,
         StructuralSolverOptions options,
         bool allowContainedAssemblyLeaf = false)
     {
+        var hasExteriorAssemblySemantics =
+            HasExteriorSemantics(first)
+            && HasExteriorSemantics(second)
+            && (first.WallType == WallType.Exterior
+                || second.WallType == WallType.Exterior);
+        var hasSharedPhysicalSourceSupport =
+            SharesPhysicalSourcePrimitives(first, second);
         if (first.PageNumber != second.PageNumber
             || !first.Reliability.ReadyForCoordinatePlacement
             || !second.Reliability.ReadyForCoordinatePlacement
@@ -245,10 +252,8 @@ internal static class CanonicalStructuralTopologyBuilder
             || second.Reliability.RequiresReview
             || !HasPhysicalWallBodyEvidence(first)
             || !HasPhysicalWallBodyEvidence(second)
-            || !HasExteriorSemantics(first)
-            || !HasExteriorSemantics(second)
-            || (first.WallType != WallType.Exterior
-                && second.WallType != WallType.Exterior)
+            || (!hasExteriorAssemblySemantics
+                && !hasSharedPhysicalSourceSupport)
             || !SharesWallGraphComponent(first, second)
             || !IsAxisAligned(first.CenterLine, options.AngleToleranceDegrees)
             || !IsAxisAligned(second.CenterLine, options.AngleToleranceDegrees))
@@ -299,7 +304,10 @@ internal static class CanonicalStructuralTopologyBuilder
         var envelopeDepth =
             Math.Max(firstMaximum, secondMaximum)
             - Math.Min(firstMinimum, secondMinimum);
-        if (bodyGap > Math.Max(1, options.AxisTolerance * 2.0)
+        var maximumBodyGap = hasSharedPhysicalSourceSupport
+            ? Math.Max(1, options.AxisTolerance * 2.5)
+            : Math.Max(1, options.AxisTolerance * 2.0);
+        if (bodyGap > maximumBodyGap
             || envelopeDepth > Math.Max(8, options.AxisTolerance * 6.0))
         {
             return null;
@@ -320,18 +328,20 @@ internal static class CanonicalStructuralTopologyBuilder
             }
         }
 
-        return new ExteriorAssemblyPair(
+        return new PhysicalWallAssemblyPair(
             first,
             second,
             direction,
             normal,
             overlapRatio,
             bodyGap,
-            envelopeDepth);
+            envelopeDepth,
+            hasExteriorAssemblySemantics,
+            hasSharedPhysicalSourceSupport);
     }
 
-    private static StructuralWallRun MergeExteriorAssembly(
-        ExteriorAssemblyPair pair)
+    private static StructuralWallRun MergePhysicalWallAssembly(
+        PhysicalWallAssemblyPair pair)
     {
         var leaves = new[] { pair.First, pair.Second };
         var axes = leaves
@@ -379,19 +389,29 @@ internal static class CanonicalStructuralTopologyBuilder
             .SelectMany(run => run.Evidence)
             .Distinct(StringComparer.Ordinal)
             .Append(
-                $"resolved exterior wall assembly from {leaves.Sum(run => run.AssemblyLeafCount)} structural leaves")
+                pair.HasExteriorSemantics
+                    ? $"resolved exterior wall assembly from {leaves.Sum(run => run.AssemblyLeafCount)} structural leaves"
+                    : $"resolved shared-source physical wall assembly from {leaves.Sum(run => run.AssemblyLeafCount)} structural leaves")
             .Append($"assembly overlap ratio {pair.OverlapRatio:0.###}")
             .Append($"assembly physical body gap {pair.BodyGap:0.###} drawing units")
             .Append($"assembly envelope thickness {pair.EnvelopeDepth:0.###} drawing units")
+            .Concat(pair.HasSharedPhysicalSourceSupport
+                ? new[] { "assembly leaves share source primitives from the same physical wall body" }
+                : Array.Empty<string>())
             .Order(StringComparer.Ordinal)
             .ToArray();
+        var wallType = pair.HasExteriorSemantics
+            ? WallType.Exterior
+            : pair.First.WallType == pair.Second.WallType
+                ? pair.First.WallType
+                : WallType.Unknown;
 
         return new StructuralWallRun(
             $"structural-run:{StableId(candidateIds)}",
             pair.First.PageNumber,
             centerLine,
             pair.EnvelopeDepth,
-            WallType.Exterior,
+            wallType,
             confidence,
             candidateIds,
             Union(leaves.SelectMany(run => run.SourceWallIds)),
@@ -415,7 +435,9 @@ internal static class CanonicalStructuralTopologyBuilder
                     leaves
                         .SelectMany(run => run.Reliability.Reasons)
                         .Append(
-                            "source-backed exterior leaves resolved as one physical wall assembly")))
+                            pair.HasExteriorSemantics
+                                ? "source-backed exterior leaves resolved as one physical wall assembly"
+                                : "shared-source wall-body leaves resolved as one physical wall assembly")))
         };
     }
 
@@ -454,6 +476,20 @@ internal static class CanonicalStructuralTopologyBuilder
         && first.SourceWallComponentIds.Intersect(
             second.SourceWallComponentIds,
             StringComparer.Ordinal).Any();
+
+    private static bool SharesPhysicalSourcePrimitives(
+        StructuralWallRun first,
+        StructuralWallRun second)
+    {
+        if (first.SourcePrimitiveIds.Count < 2
+            || second.SourcePrimitiveIds.Count < 2)
+        {
+            return false;
+        }
+
+        var firstIds = first.SourcePrimitiveIds.ToHashSet(StringComparer.Ordinal);
+        return second.SourcePrimitiveIds.Count(firstIds.Contains) >= 2;
+    }
 
     private static bool IsAxisAligned(
         PlanLineSegment line,
@@ -740,14 +776,16 @@ internal static class CanonicalStructuralTopologyBuilder
         return Convert.ToHexString(hash)[..16].ToLowerInvariant();
     }
 
-    private sealed record ExteriorAssemblyPair(
+    private sealed record PhysicalWallAssemblyPair(
         StructuralWallRun First,
         StructuralWallRun Second,
         PlanVector Direction,
         PlanVector Normal,
         double OverlapRatio,
         double BodyGap,
-        double EnvelopeDepth);
+        double EnvelopeDepth,
+        bool HasExteriorSemantics,
+        bool HasSharedPhysicalSourceSupport);
 
     private sealed record JunctionDraft(
         int PageNumber,

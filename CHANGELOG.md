@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.019] - 2026-07-30
+
+- Improved physical wall centerlines from shared PDF wall geometry.
+- Improved resolved-wall stability against off-center source faces.
+- Improved regression coverage for interior assemblies and source voting.
+
 ## [0.11.018] - 2026-07-30
 
 - Improved recovery of room partitions shadowed by opposite walls.

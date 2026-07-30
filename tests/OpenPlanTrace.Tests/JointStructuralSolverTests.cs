@@ -1850,6 +1850,53 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void CanonicalTopology_ResolvesSharedSourceInteriorBodyLeavesAsAssembly()
+    {
+        var sharedPrimitiveIds = new[]
+        {
+            "primitive:shared-body:1",
+            "primitive:shared-body:2"
+        };
+        var first = ExteriorAssemblyLeaf(
+            "interior-shared-body-first",
+            y: 100,
+            wallType: WallType.Interior,
+            exteriorSemantics: false) with
+        {
+            SourcePrimitiveIds = sharedPrimitiveIds
+                .Append("primitive:first")
+                .ToArray()
+        };
+        var second = ExteriorAssemblyLeaf(
+            "interior-shared-body-second",
+            y: 110.1,
+            wallType: WallType.Interior,
+            exteriorSemantics: false) with
+        {
+            SourcePrimitiveIds = sharedPrimitiveIds
+                .Append("primitive:second")
+                .ToArray()
+        };
+        var graph = Graph(
+            new[] { first, second },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        var run = Assert.Single(solution.WallRuns);
+        Assert.Equal(WallType.Interior, run.WallType);
+        Assert.Equal(2, run.AssemblyLeafCount);
+        Assert.Equal(105.05, run.CenterLine.Start.Y, precision: 6);
+        Assert.Equal(14.1, run.Thickness, precision: 6);
+        Assert.Contains(
+            run.Evidence,
+            item => item.Contains(
+                "resolved shared-source physical wall assembly",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void CanonicalTopology_DoesNotResolveSeparatedExteriorWallsAsAssembly()
     {
         var first = ExteriorAssemblyLeaf(

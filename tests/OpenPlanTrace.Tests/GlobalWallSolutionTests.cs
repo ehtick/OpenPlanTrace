@@ -866,6 +866,85 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task StructuralCore_PreservesResolvedPhysicalAssemblyAxisAgainstSourceFaceVotes()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var firstFace = HostWallFragment(
+            template,
+            "assembly-face-first",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(400, 100)));
+        var secondFace = HostWallFragment(
+            template,
+            "assembly-face-second",
+            new LineExport(
+                new PointExport(100, 110),
+                new PointExport(400, 110)));
+        var structuralSolution = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [firstFace]);
+        var runTemplate = structuralSolution.WallRuns[0];
+        var assembly = runTemplate with
+        {
+            Id = "test-structural-physical-assembly",
+            CenterLine = new PlanLineSegment(
+                new PlanPoint(100, 105),
+                new PlanPoint(400, 105)),
+            Thickness = 14,
+            CandidateIds =
+            [
+                "test-structural-assembly-candidate-first",
+                "test-structural-assembly-candidate-second"
+            ],
+            SourceWallIds = [firstFace.Id, secondFace.Id],
+            Evidence =
+            [
+                "resolved shared-source physical wall assembly from 2 structural leaves",
+                "assembly leaves share source primitives from the same physical wall body"
+            ],
+            AssemblyLeafCount = 2
+        };
+        structuralSolution = structuralSolution with
+        {
+            WallRuns = [assembly],
+            Metrics = structuralSolution.Metrics with
+            {
+                SelectedCandidateCount = 2,
+                CanonicalWallRunCount = 1
+            }
+        };
+        var opening = ShiftOpeningToAxis(
+            AnchoredOpening(
+                "assembly-face-opening",
+                secondFace.Id,
+                secondFace.Id),
+            axis: 110);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [firstFace, secondFace],
+            Array.Empty<PlacementRoomExport>(),
+            [opening],
+            EmptyGraph(placement.WallGraph),
+            structuralSolution);
+
+        var run = Assert.Single(solutions.SelectedWallRuns);
+        Assert.Equal(105, run.CenterLine.Start.Y, 6);
+        Assert.Equal(105, run.CenterLine.End.Y, 6);
+        Assert.Equal(0, run.Reconciliation.AxisShiftDrawingUnits, 6);
+        Assert.DoesNotContain("AxisAligned", run.Reconciliation.Actions);
+        Assert.Contains(
+            run.Reconciliation.Evidence,
+            item => item.Contains(
+                "resolved physical wall assembly axis retained",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task StructuralCore_RecoversUnanimousIndoorBoundaryWallAndPrefersSourceGeometry()
     {
         var result = await CreateScanResultAsync();
