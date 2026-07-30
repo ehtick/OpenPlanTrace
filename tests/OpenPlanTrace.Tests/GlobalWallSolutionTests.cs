@@ -2735,6 +2735,61 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task Reconciler_ExtendsStructuralCoreBranchWithoutSemanticFallback()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var host = HostWallFragment(
+            templateWall,
+            "structural-junction-host",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(400, 100)));
+        var branch = HostWallFragment(
+            templateWall,
+            "structural-junction-branch",
+            new LineExport(
+                new PointExport(250, 105),
+                new PointExport(250, 300)));
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [host, branch]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [host, branch],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var reconciledBranch = Assert.Single(
+            solutions.SelectedWallRuns.Where(run =>
+                IsVertical(run.CenterLine)));
+        Assert.Equal(
+            100,
+            Math.Min(
+                reconciledBranch.CenterLine.Start.Y,
+                reconciledBranch.CenterLine.End.Y),
+            6);
+        Assert.Contains(
+            "ExtendedStart",
+            reconciledBranch.Reconciliation.Actions);
+        Assert.Contains(
+            "JunctionSnapped",
+            reconciledBranch.Reconciliation.Actions);
+        Assert.Equal(
+            1,
+            reconciledBranch.Reconciliation.JunctionSnapCount);
+        Assert.Contains(
+            "StructuralCore",
+            reconciledBranch.CandidateOrigins);
+        Assert.Equal(1, solutions.Topology.TJunctionNodeCount);
+    }
+
+    [Fact]
     public async Task Reconciler_TrimsShortExteriorOverrunToSupportedCorner()
     {
         var placement = PlanPlacementExport.From(await CreateScanResultAsync());

@@ -2919,7 +2919,8 @@ public static partial class GlobalWallSolutionBuilder
     private static bool RunSupportsJunctionCompletion(CompactedWallRun run) =>
         !run.Contributors.All(candidate => candidate.StrongNegativeEvidence)
         && run.Contributors.Any(candidate =>
-            (OriginPriority(candidate.PrimaryOrigin) == 3
+            (OriginPriority(candidate.PrimaryOrigin)
+                    >= OriginPriority("CleanGraph")
                 && candidate.ReadyForCoordinatePlacement)
             || candidate.RoomBoundarySupportCount > 0
             || candidate.OpeningSupportCount > 0);
