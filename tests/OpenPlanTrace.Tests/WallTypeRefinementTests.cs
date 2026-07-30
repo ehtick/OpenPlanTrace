@@ -1268,7 +1268,6 @@ public sealed class WallTypeRefinementTests
             requiresReview: false,
             rejectedAsNoise: false,
             wall.Evidence);
-
         await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
 
         var updatedWall = Assert.Single(context.Walls);
@@ -3227,6 +3226,134 @@ public sealed class WallTypeRefinementTests
             context.Diagnostics.Build().Messages,
             diagnostic => diagnostic.Code == "walls.architectural_type_refined"
                 && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "0");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsFragmentedDenseMainWallWithAnchoredFixedOpeningAndReliableLinkedRoomProof()
+    {
+        var wall = DenseAnchoredOpeningHostWall("wall-anchored-fixed-opening-host");
+        var room = ReliableOpeningHostRoom(wall, "room-opening-host-supported");
+        var context = CreateContext("anchored-fixed-opening-dense-wall-protection");
+        var neighbors = AxisDenseDetailNeighborWalls().ToArray();
+        context.Walls.Add(wall);
+        context.Walls.AddRange(neighbors);
+        context.Rooms.Add(room);
+        context.Openings.Add(AnchoredFixedWindowFor(wall, room.Id));
+        context.WallGraph = FiveSupportedNodeGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+        var roomBoundaryReferences = RoomBoundaryWallReferenceBuilder.Build(
+            context.Rooms,
+            context.Walls,
+            wallSnapTolerance: 3);
+        Assert.DoesNotContain(
+            wall.Id,
+            roomBoundaryReferences.GeometricRoomBoundaryWallIds);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(retained.PlacementReady);
+        Assert.False(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, retained.Decision);
+        Assert.Contains(
+            retained.Evidence,
+            item => item.Contains(
+                "anchored fixed opening",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains(
+                "dense local detail/stair-like linework",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["anchoredOpeningHostDenseWallRetainedCount"] == "1"
+                && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "0");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DemotesAnchoredFixedOpeningHostWithoutReliableLinkedRoomProof()
+    {
+        var wall = DenseAnchoredOpeningHostWall("wall-unproven-fixed-opening-host");
+        var context = CreateContext("unproven-fixed-opening-dense-wall-demotion");
+        var neighbors = AxisDenseDetailNeighborWalls().ToArray();
+        context.Walls.Add(wall);
+        context.Walls.AddRange(neighbors);
+        context.Openings.Add(AnchoredFixedWindowFor(wall, "room-not-present"));
+        context.WallGraph = FiveSupportedNodeGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var demoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(demoted.PlacementReady);
+        Assert.True(demoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, demoted.Decision);
+        Assert.Contains(
+            demoted.Evidence,
+            item => item.Contains(
+                "dense local detail/stair-like linework",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["anchoredOpeningHostDenseWallRetainedCount"] == "0"
+                && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DemotesAnchoredFixedOpeningRoomWallWithFixtureDetailEvidence()
+    {
+        var wall = DenseAnchoredOpeningHostWall(
+            "wall-fixture-like-fixed-opening-host",
+            includeFixtureBlocker: true);
+        var room = ReliableOpeningHostRoom(
+            wall,
+            "room-fixture-like-opening-host",
+            RoomUseKind.Kitchen);
+        var context = CreateContext("fixture-like-anchored-opening-dense-wall-demotion");
+        context.Walls.Add(wall);
+        context.Walls.AddRange(AxisDenseDetailNeighborWalls());
+        context.Rooms.Add(room);
+        context.Openings.Add(AnchoredFixedWindowFor(wall, room.Id));
+        context.WallGraph = FiveSupportedNodeGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var demoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(demoted.PlacementReady);
+        Assert.True(demoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, demoted.Decision);
+        Assert.Contains(
+            demoted.Evidence,
+            item => item.Contains(
+                "dense local detail/stair-like linework",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["anchoredOpeningHostDenseWallRetainedCount"] == "0"
+                && diagnostic.Properties["denseLocalDetailPlacementDemotedWallCount"] == "1");
     }
 
     [Fact]
@@ -6387,6 +6514,190 @@ public sealed class WallTypeRefinementTests
                     Confidence.High,
                     Array.Empty<string>())
             });
+    }
+
+    private static WallSegment DenseAnchoredOpeningHostWall(
+        string id,
+        bool includeFixtureBlocker = false)
+    {
+        var evidence = new List<string>
+        {
+            "parallel wall-face pair",
+            "face separation 8,609 drawing units",
+            "pair score 0,941",
+            "overlap ratio 1",
+            "first face merged 27 fragments",
+            "second face merged 28 fragments",
+            "first face collapsed 4 duplicate or near-duplicate wall line primitive(s)",
+            "second face collapsed 23 duplicate or near-duplicate wall line primitive(s)",
+            "layer (unlayered) classified Dimension (0,24)",
+            "layer evidence: contains dimension-like text",
+            "wall type interior: supported wall evidence inside exterior envelope"
+        };
+        if (includeFixtureBlocker)
+        {
+            evidence.Add("object/fixture detail evidence overlaps the paired candidate");
+        }
+
+        return ShortUnlayeredInteriorWall(id, 100, 100, 143.4, 100) with
+        {
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(100, 95.6955), new PlanPoint(143.4, 95.6955)),
+                new PlanLineSegment(new PlanPoint(100, 104.3045), new PlanPoint(143.4, 104.3045)),
+                FaceSeparation: 8.609,
+                OverlapRatio: 1,
+                Score: 0.941,
+                FirstFaceFragmentCount: 27,
+                SecondFaceFragmentCount: 28,
+                FirstFaceSourcePrimitiveIds: ["dense-opening-host-face-a"],
+                SecondFaceSourcePrimitiveIds: ["dense-opening-host-face-b"]),
+            Evidence = evidence
+        };
+    }
+
+    private static RoomRegion ReliableOpeningHostRoom(
+        WallSegment wall,
+        string roomId,
+        RoomUseKind useKind = RoomUseKind.Office) =>
+        Room(
+            roomId,
+            useKind,
+            new PlanRect(90, 100, 70, 42),
+            [
+                new PlanPoint(90, 100),
+                new PlanPoint(118, 100),
+                new PlanPoint(118, 118),
+                new PlanPoint(160, 118),
+                new PlanPoint(160, 142),
+                new PlanPoint(90, 142)
+            ],
+            [wall.Id, "synthetic-room-edge"]);
+
+    private static WallGraph FiveSupportedNodeGraphFor(WallSegment wall)
+    {
+        var nodes = Enumerable.Range(0, 5)
+            .Select(index => new WallNode(
+                $"node-{index}",
+                wall.PageNumber,
+                wall.CenterLine.PointAt(index / 4.0),
+                index is 0 or 4
+                    ? WallNodeKind.Corner
+                    : WallNodeKind.TJunction,
+                index is 0 or 4 ? 2 : 3,
+                Array.Empty<string>(),
+                Confidence.High,
+                Array.Empty<string>()))
+            .ToArray();
+        var edges = Enumerable.Range(0, 4)
+            .Select(index => new WallEdge(
+                $"edge-{index}",
+                wall.PageNumber,
+                nodes[index].Id,
+                nodes[index + 1].Id,
+                wall.Id,
+                Confidence.High))
+            .ToArray();
+        return new WallGraph(
+            nodes,
+            edges,
+            [
+                new WallGraphComponent(
+                    "component-main",
+                    wall.PageNumber,
+                    WallGraphComponentKind.MainStructural,
+                    wall.Bounds,
+                    [wall.Id],
+                    nodes.Select(node => node.Id).ToArray(),
+                    edges.Select(edge => edge.Id).ToArray(),
+                    wall.SourcePrimitiveIds,
+                    wall.DrawingLength,
+                    Confidence.High,
+                    Array.Empty<string>())
+            ]);
+    }
+
+    private static OpeningCandidate AnchoredFixedWindowFor(
+        WallSegment wall,
+        string roomId)
+    {
+        var startPoint = wall.CenterLine.PointAt(0.20);
+        var endPoint = wall.CenterLine.PointAt(0.40);
+        var centerLine = new PlanLineSegment(startPoint, endPoint);
+        var halfDepth = wall.Thickness / 2.0;
+        var footprint = new PlanRect(
+            startPoint.X,
+            startPoint.Y - halfDepth,
+            endPoint.X - startPoint.X,
+            wall.Thickness);
+        var startJamb = new PlanLineSegment(
+            new PlanPoint(startPoint.X, startPoint.Y - halfDepth),
+            new PlanPoint(startPoint.X, startPoint.Y + halfDepth));
+        var endJamb = new PlanLineSegment(
+            new PlanPoint(endPoint.X, endPoint.Y - halfDepth),
+            new PlanPoint(endPoint.X, endPoint.Y + halfDepth));
+        return new OpeningCandidate(
+            "opening-fixed-window",
+            wall.PageNumber,
+            OpeningType.Window,
+            footprint,
+            new Confidence(0.58))
+        {
+            WallId = wall.Id,
+            HostWallIds = [wall.Id],
+            ConnectedRoomIds = [roomId],
+            ConnectedRoomLinks =
+            [
+                new OpeningRoomConnection(
+                    roomId,
+                    null,
+                    RoomUseKind.Office,
+                    Array.Empty<string>(),
+                    OpeningRoomSide.PositiveNormalSide,
+                    new PlanPoint(centerLine.Midpoint.X, centerLine.Midpoint.Y + wall.Thickness),
+                    centerLine.Midpoint,
+                    wall.Thickness,
+                    0,
+                    SharesHostWall: true,
+                    new Confidence(0.76),
+                    ["room shares opening host wall"])
+            ],
+            CenterLine = centerLine,
+            Orientation = OpeningOrientation.Horizontal,
+            Operation = OpeningOperation.Fixed,
+            Placement = new OpeningPlacement(
+                wall.Id,
+                [wall.Id],
+                wall.CenterLine,
+                startPoint,
+                endPoint,
+                wall.DrawingLength * 0.20,
+                wall.DrawingLength * 0.40,
+                wall.DrawingLength * 0.30,
+                centerLine.Length,
+                footprint,
+                [
+                    startJamb.Start,
+                    endJamb.Start,
+                    endJamb.End,
+                    startJamb.End
+                ],
+                startJamb,
+                endJamb,
+                wall.Thickness,
+                null,
+                null,
+                null,
+                null,
+                null,
+                0.20,
+                0.40,
+                0.30,
+                new PlanVector(1, 0),
+                new PlanVector(0, 1),
+                0,
+                new Confidence(0.69),
+                ["opening placement is anchored to the wall"])
+        };
     }
 
     private static WallGraph OneSupportedEndpointGraphFor(

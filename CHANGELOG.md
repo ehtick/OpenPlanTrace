@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.023] - 2026-07-30
+
+- Improved recovery of fixed-opening room-forming wall bodies.
+- Improved dense-detail arbitration with linked-room evidence.
+- Preserved canonical opening gaps and cross-plan wall geometry.
+
 ## [0.11.022] - 2026-07-30
 
 - Improved source-backed recovery of missing major wall continuations.
