@@ -188,7 +188,8 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                 .ToArray();
             if (trustedRoomIds.Length < 2
                 && allRoomIds.Length >= 2
-                && candidate.HasAcceptedPlacementReadyWallBodyEvidence
+                && (candidate.HasAcceptedPlacementReadyWallBodyEvidence
+                    || candidate.HasCorroboratableFragmentAxisEvidence)
                 && TryFindOppositeRoomPair(
                     candidate,
                     allRoomIds,
@@ -204,7 +205,9 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                         StructuralEvidenceSignalKind.OppositeRoomBoundary,
                         0.10,
                         $"{provisionalFirstRoomId},{provisionalSecondRoomId}",
-                        "accepted wall body lies between geometrically opposite provisional room interiors",
+                        candidate.HasAcceptedPlacementReadyWallBodyEvidence
+                            ? "accepted wall body lies between geometrically opposite provisional room interiors"
+                            : "continuous fragmented wall axis lies between geometrically opposite provisional room interiors",
                         candidate.SourcePrimitiveIds.Order(StringComparer.Ordinal).ToArray()));
             }
 

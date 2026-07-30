@@ -223,6 +223,8 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
         WallEvidenceWallAssessment? assessment,
         StructuralSolverOptions options)
     {
+        AddFragmentAxisContinuitySignal(candidate, wall, assessment, options);
+
         var explicitFilledWallBody = wall.Evidence
             .Concat(assessment?.Evidence ?? Array.Empty<string>())
             .Any(item =>
@@ -262,6 +264,56 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
             -1.25,
             wall.Id,
             "unsupported oblique single-line geometry is retained for review, not structural wall placement",
+            wall.SourcePrimitiveIds));
+    }
+
+    private static void AddFragmentAxisContinuitySignal(
+        StructuralCandidateRegistry.CandidateDraft candidate,
+        WallSegment wall,
+        WallEvidenceWallAssessment? assessment,
+        StructuralSolverOptions options)
+    {
+        if (wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.FragmentEvidence is not
+            {
+                RequiresGeometryReview: true,
+                FragmentCount: >= 40
+            } fragmentEvidence
+            || assessment is not
+            {
+                Category: WallEvidenceCategory.MediumWallBody,
+                Decision: WallEvidenceDecision.Review,
+                RequiresReview: true,
+                RejectedAsNoise: false
+            }
+            || !IsAxisAligned(wall.CenterLine, options.AngleToleranceDegrees)
+            || wall.CenterLine.Length
+                < Math.Max(60, options.MaximumContinuationGap * 5.0)
+            || fragmentEvidence.GapRatio > 0.06
+            || fragmentEvidence.TotalHealedGap
+                > Math.Max(12, wall.CenterLine.Length * 0.06)
+            || fragmentEvidence.MaxHealedGap
+                > Math.Max(
+                    options.AxisTolerance * 1.5,
+                    Math.Max(wall.Thickness, 0.5) * 1.5)
+            || fragmentEvidence.DuplicatePrimitiveCount
+                > Math.Max(4, fragmentEvidence.FragmentCount * 0.04)
+            || !wall.Evidence
+                .Concat(assessment.Evidence)
+                .Any(item =>
+                    item.Contains(
+                        "geometric room boundary support from reliable room-boundary alignment",
+                        StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        candidate.AddSignal(Signal(
+            candidate,
+            StructuralEvidenceSignalKind.FragmentAxisContinuity,
+            0.20,
+            $"{wall.Id}:fragment-axis-continuity",
+            $"continuous axis assembled from {fragmentEvidence.FragmentCount} fragments with {fragmentEvidence.GapRatio:P1} healed-gap ratio and reliable room-boundary alignment",
             wall.SourcePrimitiveIds));
     }
 

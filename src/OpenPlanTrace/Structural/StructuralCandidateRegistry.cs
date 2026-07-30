@@ -183,6 +183,37 @@ internal sealed class StructuralCandidateRegistry
                 signal.Kind == StructuralEvidenceSignalKind.WallBody
                 && signal.Weight >= 0.16);
 
+        public bool HasCorroboratableFragmentAxisEvidence =>
+            _signals.Values.Any(signal =>
+                signal.Kind == StructuralEvidenceSignalKind.FragmentAxisContinuity
+                && signal.Weight >= 0.16);
+
+        public bool HasCorroboratedFragmentAxisEvidence =>
+            HasCorroboratableFragmentAxisEvidence
+            && Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
+            && Origins.HasFlag(StructuralCandidateOrigin.RoomBoundary)
+            && _signals.Values.Any(signal =>
+                signal.Kind == StructuralEvidenceSignalKind.ExistingGraph
+                && signal.Weight > 0)
+            && _signals.Values.Any(signal =>
+                signal.Kind == StructuralEvidenceSignalKind.StructuralTerritory
+                && signal.Weight > 0)
+            && _signals.Values.Any(signal =>
+                signal.Kind == StructuralEvidenceSignalKind.OppositeRoomBoundary
+                && signal.Weight >= 0.08)
+            && !_signals.Values.Any(signal =>
+                signal.Weight <= -0.45
+                && signal.Kind is
+                    StructuralEvidenceSignalKind.DoorOrOpeningSymbol
+                        or StructuralEvidenceSignalKind.SurfacePattern
+                        or StructuralEvidenceSignalKind.RepeatedDetailPattern
+                        or StructuralEvidenceSignalKind.DimensionOrAnnotation
+                        or StructuralEvidenceSignalKind.ObjectOrFixture
+                        or StructuralEvidenceSignalKind.UnsupportedOblique
+                        or StructuralEvidenceSignalKind.IsolatedStructuralIsland
+                        or StructuralEvidenceSignalKind.UnoccupiedShellExtension
+                        or StructuralEvidenceSignalKind.WallBodyThicknessOutlier);
+
         public bool HasRejectedWallEvidence =>
             _signals.Values.Any(signal =>
                 signal.Kind == StructuralEvidenceSignalKind.RejectedWall
@@ -278,6 +309,31 @@ internal sealed class StructuralCandidateRegistry
             _signals[signal.Id] = signal;
             Evidence.Add(signal.Description);
             SourcePrimitiveIds.UnionWith(signal.SourcePrimitiveIds);
+        }
+
+        public void ReduceContextOnlyPenalty(
+            double weight,
+            string description)
+        {
+            var signalIds = _signals.Values
+                .Where(signal =>
+                    signal.Kind == StructuralEvidenceSignalKind.ContextOnlyBoundary
+                    && signal.Weight < weight)
+                .Select(signal => signal.Id)
+                .ToArray();
+            foreach (var signalId in signalIds)
+            {
+                _signals[signalId] = _signals[signalId] with
+                {
+                    Weight = weight,
+                    Description = description
+                };
+            }
+
+            if (signalIds.Length > 0)
+            {
+                Evidence.Add(description);
+            }
         }
 
         public void AddOrigin(StructuralCandidateOrigin origin) =>

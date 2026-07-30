@@ -40,7 +40,8 @@ public enum StructuralEvidenceSignalKind
     StructuralTerritory,
     IsolatedStructuralIsland,
     UnoccupiedShellExtension,
-    WallBodyThicknessOutlier
+    WallBodyThicknessOutlier,
+    FragmentAxisContinuity
 }
 
 public enum StructuralEvidenceRelationKind
@@ -144,9 +145,21 @@ public sealed record StructuralWallCandidate(
             signal.Kind == StructuralEvidenceSignalKind.WallBody
             && signal.Weight >= 0.16);
 
+    public bool HasCorroboratedFragmentAxisEvidence =>
+        Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.FragmentAxisContinuity
+            && signal.Weight >= 0.16)
+        && HasSharedCrossDomainSupport
+        && !HasStrongCrossDomainBlocker;
+
     public bool HasCrossDomainWallBodyEvidence =>
-        HasAcceptedPlacementReadyWallBodyEvidence
-        && Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
+        (HasAcceptedPlacementReadyWallBodyEvidence
+            || HasCorroboratedFragmentAxisEvidence)
+        && HasSharedCrossDomainSupport
+        && !HasStrongCrossDomainBlocker;
+
+    private bool HasSharedCrossDomainSupport =>
+        Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
         && Origins.HasFlag(StructuralCandidateOrigin.RoomBoundary)
         && Signals.Any(signal =>
             signal.Kind == StructuralEvidenceSignalKind.ExistingGraph
@@ -156,8 +169,10 @@ public sealed record StructuralWallCandidate(
             && signal.Weight > 0)
         && Signals.Any(signal =>
             signal.Kind == StructuralEvidenceSignalKind.OppositeRoomBoundary
-            && signal.Weight >= 0.08)
-        && !Signals.Any(signal =>
+            && signal.Weight >= 0.08);
+
+    private bool HasStrongCrossDomainBlocker =>
+        Signals.Any(signal =>
             signal.Weight <= -0.45
             && signal.Kind is
                 StructuralEvidenceSignalKind.DoorOrOpeningSymbol
@@ -165,7 +180,10 @@ public sealed record StructuralWallCandidate(
                     or StructuralEvidenceSignalKind.RepeatedDetailPattern
                     or StructuralEvidenceSignalKind.DimensionOrAnnotation
                     or StructuralEvidenceSignalKind.ObjectOrFixture
-                    or StructuralEvidenceSignalKind.UnsupportedOblique);
+                    or StructuralEvidenceSignalKind.UnsupportedOblique
+                    or StructuralEvidenceSignalKind.IsolatedStructuralIsland
+                    or StructuralEvidenceSignalKind.UnoccupiedShellExtension
+                    or StructuralEvidenceSignalKind.WallBodyThicknessOutlier);
 
     public bool HasStrongRepeatedDetailEvidence =>
         Signals.Any(signal =>

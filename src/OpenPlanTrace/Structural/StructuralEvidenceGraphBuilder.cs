@@ -12,7 +12,8 @@ public static class StructuralEvidenceGraphBuilder
             new OccupiedTerritoryStructuralEvidenceProducer(),
             new RepeatedPatternStructuralEvidenceProducer(),
             new TopologyStructuralEvidenceProducer(),
-            new OpeningStructuralEvidenceProducer()
+            new OpeningStructuralEvidenceProducer(),
+            new CrossDomainStructuralEvidenceProducer()
         };
 
     public static StructuralEvidenceGraph Build(
