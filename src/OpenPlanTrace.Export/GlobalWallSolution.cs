@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v17";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v18";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -264,6 +264,8 @@ public static partial class GlobalWallSolutionBuilder
     private const double IntervalMergeGap = 3.0;
     private const double JunctionCompletionDistance = 5.0;
     private const double JunctionProjectionTolerance = 2.0;
+    private const double MaximumBodyContactJunctionDistance = 12.0;
+    private const double OpeningJambJunctionTolerance = 2.5;
     private const double MajorWallLength = 80.0;
     private const double LongWallLength = 150.0;
     private const double MinimumCoherentBoundaryScore = 0.50;
@@ -738,6 +740,7 @@ public static partial class GlobalWallSolutionBuilder
                     run.SourceWallGraphEdgeIds,
                     run.SourcePrimitiveIds,
                     sourceLayers,
+                    BuildSourceWallComponentReferences(sourceWalls),
                     strongNegativeEvidenceVotes: structuralNegative
                         ? Math.Max(1, run.CandidateIds.Count)
                         : 0,
@@ -1222,6 +1225,7 @@ public static partial class GlobalWallSolutionBuilder
                 edge.SourceWallGraphEdgeIds,
                 edge.SourcePrimitiveIds,
                 edge.SourceLayers,
+                BuildSourceWallComponentReferences(sourceWalls),
                 strongNegativeVotes,
                 sourceWalls.Length + 1,
                 edgeEvidence));
@@ -1254,6 +1258,7 @@ public static partial class GlobalWallSolutionBuilder
                     span.SourceWallGraphEdgeIds,
                     span.SourcePrimitiveIds,
                     span.SourceLayers,
+                    BuildSourceWallComponentReferences([wall]),
                     (HasStrongNegativeEvidence(span.Evidence) ? 1 : 0)
                         + (HasStrongNegativeEvidence(wall.Evidence) ? 1 : 0),
                     2,
@@ -1291,6 +1296,7 @@ public static partial class GlobalWallSolutionBuilder
                 wall.TopologySpans.SelectMany(span => span.SourceWallGraphEdgeIds).Distinct(StringComparer.Ordinal).ToArray(),
                 wall.SourcePrimitiveIds,
                 wall.SourceLayers,
+                BuildSourceWallComponentReferences([wall]),
                 HasStrongNegativeEvidence(wallEvidence) ? 1 : 0,
                 1,
                 wallEvidence));
@@ -2027,6 +2033,9 @@ public static partial class GlobalWallSolutionBuilder
                     run.CompletedJunctionCount > 0
                         ? $"global wall solver completed {run.CompletedJunctionCount} source-backed junction(s)"
                         : "global wall solver retained source wall endpoints",
+                    run.BodyContactJunctionCount > 0
+                        ? $"global wall solver normalized {run.BodyContactJunctionCount} wall-body contact endpoint(s) to shared main-structural centerline junctions"
+                        : "global wall solver required no extended wall-body contact normalization",
                     openingIntervals.Count > 0
                         ? $"canonical host wall carries {openingIntervals.Count} anchored opening interval(s)"
                         : "canonical wall has no anchored opening intervals",
@@ -2260,6 +2269,9 @@ public static partial class GlobalWallSolutionBuilder
             CompletedJunctionCount = Math.Max(
                 preferred.CompletedJunctionCount,
                 duplicate.CompletedJunctionCount),
+            BodyContactJunctionCount = Math.Max(
+                preferred.BodyContactJunctionCount,
+                duplicate.BodyContactJunctionCount),
             BridgedOpeningIds = preferred.BridgedOpeningIds
                 .Concat(duplicate.BridgedOpeningIds)
                 .Distinct(StringComparer.Ordinal)
@@ -2812,7 +2824,8 @@ public static partial class GlobalWallSolutionBuilder
     }
 
     private static IReadOnlyList<CompactedWallRun> CompleteSupportedJunctions(
-        IReadOnlyList<CompactedWallRun> runs)
+        IReadOnlyList<CompactedWallRun> runs,
+        IReadOnlyList<PlacementOpeningExport> openings)
     {
         var current = runs.ToArray();
         for (var pass = 0; pass < 2; pass++)
@@ -2828,20 +2841,30 @@ public static partial class GlobalWallSolutionBuilder
                     continue;
                 }
 
-                var start = CompleteJunctionEndpoint(run, run.CenterLine.Start, current, index);
-                var end = CompleteJunctionEndpoint(run, run.CenterLine.End, current, index);
+                var start = CompleteJunctionEndpoint(
+                    run,
+                    run.CenterLine.Start,
+                    current,
+                    index,
+                    openings);
+                var end = CompleteJunctionEndpoint(
+                    run,
+                    run.CenterLine.End,
+                    current,
+                    index,
+                    openings);
                 var completed = 0;
-                if (Distance(ToPlanPoint(start), ToPlanPoint(run.CenterLine.Start)) > 0.01)
+                if (Distance(ToPlanPoint(start.Position), ToPlanPoint(run.CenterLine.Start)) > 0.01)
                 {
                     completed++;
                 }
 
-                if (Distance(ToPlanPoint(end), ToPlanPoint(run.CenterLine.End)) > 0.01)
+                if (Distance(ToPlanPoint(end.Position), ToPlanPoint(run.CenterLine.End)) > 0.01)
                 {
                     completed++;
                 }
 
-                var adjusted = new LineExport(start, end);
+                var adjusted = new LineExport(start.Position, end.Position);
                 if (completed == 0 || LineLength(adjusted) <= 0.5)
                 {
                     continue;
@@ -2850,7 +2873,10 @@ public static partial class GlobalWallSolutionBuilder
                 next[index] = run with
                 {
                     CenterLine = adjusted,
-                    CompletedJunctionCount = run.CompletedJunctionCount + completed
+                    CompletedJunctionCount = run.CompletedJunctionCount + completed,
+                    BodyContactJunctionCount = run.BodyContactJunctionCount
+                        + (start.SourceBackedBodyContact ? 1 : 0)
+                        + (end.SourceBackedBodyContact ? 1 : 0)
                 };
                 changed = true;
             }
@@ -3057,14 +3083,17 @@ public static partial class GlobalWallSolutionBuilder
             && candidate.LocalScore >= 0.75
             && candidate.StructuralEvidenceCount > 0);
 
-    private static PointExport CompleteJunctionEndpoint(
+    private static JunctionEndpointCompletion CompleteJunctionEndpoint(
         CompactedWallRun source,
         PointExport endpoint,
         IReadOnlyList<CompactedWallRun> runs,
-        int sourceIndex)
+        int sourceIndex,
+        IReadOnlyList<PlacementOpeningExport> openings)
     {
         var sourceOrientation = Orientation(source.CenterLine);
-        var best = endpoint;
+        var best = new JunctionEndpointCompletion(
+            endpoint,
+            SourceBackedBodyContact: false);
         var bestDistance = double.PositiveInfinity;
         for (var index = 0; index < runs.Count; index++)
         {
@@ -3096,12 +3125,30 @@ public static partial class GlobalWallSolutionBuilder
             }
 
             var distance = Distance(ToPlanPoint(endpoint), ToPlanPoint(intersection));
-            var allowedDistance = Math.Max(
+            var ordinaryAllowedDistance = Math.Max(
                 JunctionCompletionDistance,
                 Math.Min(
                     8.0,
                     (source.ThicknessDrawingUnits + target.ThicknessDrawingUnits) * 0.5));
-            if (distance > allowedDistance
+            var sourceBackedBodyContact =
+                distance > ordinaryAllowedDistance + MinimumReconciliationMovement;
+            var maximumDistance = sourceBackedBodyContact
+                ? Math.Max(
+                    ordinaryAllowedDistance,
+                    Math.Min(
+                        MaximumBodyContactJunctionDistance,
+                        source.ThicknessDrawingUnits
+                            + target.ThicknessDrawingUnits))
+                : ordinaryAllowedDistance;
+            if (distance > maximumDistance
+                || (sourceBackedBodyContact
+                    && !CanCompleteSourceBackedBodyContactJunction(
+                        source,
+                        endpoint,
+                        target,
+                        intersection,
+                        runs,
+                        openings))
                 || distance >= bestDistance
                 || Distance(ToPlanPoint(intersection), ToPlanPoint(OppositeEndpoint(source.CenterLine, endpoint)))
                     <= 0.5)
@@ -3109,11 +3156,135 @@ public static partial class GlobalWallSolutionBuilder
                 continue;
             }
 
-            best = intersection;
+            best = new JunctionEndpointCompletion(
+                intersection,
+                sourceBackedBodyContact);
             bestDistance = distance;
         }
 
         return best;
+    }
+
+    private static bool CanCompleteSourceBackedBodyContactJunction(
+        CompactedWallRun source,
+        PointExport endpoint,
+        CompactedWallRun target,
+        PointExport intersection,
+        IReadOnlyList<CompactedWallRun> runs,
+        IReadOnlyList<PlacementOpeningExport> openings)
+    {
+        if (!EndpointExtensionIsOutward(
+                source.CenterLine,
+                endpoint,
+                intersection)
+            || !CompatibleWallTypes(source.WallType, target.WallType)
+            || !RunSupportsSourceBackedBodyContact(source)
+            || !RunSupportsSourceBackedBodyContact(target)
+            || source.Contributors.Any(candidate =>
+                candidate.OpeningSupportCount > 0)
+            || !SharesMainStructuralComponent(source, target)
+            || EndpointSupported(source, endpoint, runs))
+        {
+            return false;
+        }
+
+        var targetOpenings = BuildOpeningIntervals(
+            "wall-solution:body-contact-probe",
+            target,
+            target.CenterLine,
+            target.MillimetersPerDrawingUnit,
+            openings);
+        if (targetOpenings.Count == 0)
+        {
+            return true;
+        }
+
+        var targetLength = Math.Max(0.001, RunLength(target));
+        var intersectionOffset =
+            Math.Clamp(ProjectParameter(target.CenterLine, intersection), 0, 1)
+            * targetLength;
+        foreach (var opening in targetOpenings)
+        {
+            if (intersectionOffset < opening.StartOffsetDrawingUnits
+                    - MinimumReconciliationMovement
+                || intersectionOffset > opening.EndOffsetDrawingUnits
+                    + MinimumReconciliationMovement)
+            {
+                continue;
+            }
+
+            var jambDistance = Math.Min(
+                Math.Abs(
+                    intersectionOffset
+                    - opening.StartOffsetDrawingUnits),
+                Math.Abs(
+                    intersectionOffset
+                    - opening.EndOffsetDrawingUnits));
+            if (jambDistance > OpeningJambJunctionTolerance)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool EndpointExtensionIsOutward(
+        LineExport line,
+        PointExport endpoint,
+        PointExport intersection)
+    {
+        var orientation = Orientation(line);
+        var opposite = OppositeEndpoint(line, endpoint);
+        var endpointCoordinate = orientation == WallOrientation.Horizontal
+            ? endpoint.X
+            : endpoint.Y;
+        var oppositeCoordinate = orientation == WallOrientation.Horizontal
+            ? opposite.X
+            : opposite.Y;
+        var intersectionCoordinate = orientation == WallOrientation.Horizontal
+            ? intersection.X
+            : intersection.Y;
+        return endpointCoordinate < oppositeCoordinate
+            ? intersectionCoordinate
+                < endpointCoordinate - MinimumReconciliationMovement
+            : intersectionCoordinate
+                > endpointCoordinate + MinimumReconciliationMovement;
+    }
+
+    private static bool RunSupportsSourceBackedBodyContact(
+        CompactedWallRun run) =>
+        !run.Contributors.All(candidate => candidate.StrongNegativeEvidence)
+        && run.Contributors.Any(candidate =>
+            candidate.ReadyForCoordinatePlacement
+            && !candidate.RequiresReview
+            && candidate.LocalScore >= 0.75
+            && candidate.StructuralEvidenceCount > 0
+            && candidate.SourceWallComponents.Any(component =>
+                string.Equals(
+                    component.Kind,
+                    "MainStructural",
+                    StringComparison.OrdinalIgnoreCase)));
+
+    private static bool SharesMainStructuralComponent(
+        CompactedWallRun source,
+        CompactedWallRun target)
+    {
+        var sourceComponentIds = source.Contributors
+            .SelectMany(candidate => candidate.SourceWallComponents)
+            .Where(component => string.Equals(
+                component.Kind,
+                "MainStructural",
+                StringComparison.OrdinalIgnoreCase))
+            .Select(component => component.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        return target.Contributors
+            .SelectMany(candidate => candidate.SourceWallComponents)
+            .Where(component => string.Equals(
+                component.Kind,
+                "MainStructural",
+                StringComparison.OrdinalIgnoreCase))
+            .Any(component => sourceComponentIds.Contains(component.Id));
     }
 
     private static PointExport OppositeEndpoint(LineExport line, PointExport endpoint) =>
@@ -4031,6 +4202,21 @@ public static partial class GlobalWallSolutionBuilder
         return false;
     }
 
+    private static IReadOnlyList<SourceWallComponentReference> BuildSourceWallComponentReferences(
+        IEnumerable<PlacementWallExport> walls) =>
+        walls
+            .Where(wall => !string.IsNullOrWhiteSpace(wall.WallComponentId))
+            .GroupBy(wall => wall.WallComponentId!, StringComparer.Ordinal)
+            .Select(group => new SourceWallComponentReference(
+                group.Key,
+                group
+                    .Select(wall => wall.WallComponentKind)
+                    .FirstOrDefault(kind => !string.IsNullOrWhiteSpace(kind))
+                    ?? "Unknown"))
+            .OrderBy(component => component.Id, StringComparer.Ordinal)
+            .ThenBy(component => component.Kind, StringComparer.Ordinal)
+            .ToArray();
+
     private static GlobalWallCandidate CreateCandidate(
         string id,
         string origin,
@@ -4053,6 +4239,7 @@ public static partial class GlobalWallSolutionBuilder
         IReadOnlyList<string> sourceWallGraphEdgeIds,
         IReadOnlyList<string> sourcePrimitiveIds,
         IReadOnlyList<string> sourceLayers,
+        IReadOnlyList<SourceWallComponentReference> sourceWallComponents,
         int strongNegativeEvidenceVotes,
         int evidenceContributorCount,
         IReadOnlyList<string> evidence) =>
@@ -4090,6 +4277,11 @@ public static partial class GlobalWallSolutionBuilder
             false,
             0,
             false,
+            sourceWallComponents
+                .Distinct()
+                .OrderBy(component => component.Id, StringComparer.Ordinal)
+                .ThenBy(component => component.Kind, StringComparer.Ordinal)
+                .ToArray(),
             sourceWallIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             sourceWallGraphEdgeIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             sourcePrimitiveIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
@@ -4151,6 +4343,12 @@ public static partial class GlobalWallSolutionBuilder
         return preferred with
         {
             Origins = preferred.Origins.Concat(duplicate.Origins).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            SourceWallComponents = preferred.SourceWallComponents
+                .Concat(duplicate.SourceWallComponents)
+                .Distinct()
+                .OrderBy(component => component.Id, StringComparer.Ordinal)
+                .ThenBy(component => component.Kind, StringComparer.Ordinal)
+                .ToArray(),
             SourceWallIds = preferred.SourceWallIds.Concat(duplicate.SourceWallIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             SourceWallGraphEdgeIds = preferred.SourceWallGraphEdgeIds.Concat(duplicate.SourceWallGraphEdgeIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             SourcePrimitiveIds = preferred.SourcePrimitiveIds.Concat(duplicate.SourcePrimitiveIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
@@ -4529,11 +4727,16 @@ public static partial class GlobalWallSolutionBuilder
         bool TwoSidedSourceLinkedRoomBoundarySupport,
         int OpeningSupportCount,
         bool CoherentRoomBoundaryCandidate,
+        IReadOnlyList<SourceWallComponentReference> SourceWallComponents,
         IReadOnlyList<string> SourceWallIds,
         IReadOnlyList<string> SourceWallGraphEdgeIds,
         IReadOnlyList<string> SourcePrimitiveIds,
         IReadOnlyList<string> SourceLayers,
         IReadOnlyList<string> Evidence);
+
+    private sealed record SourceWallComponentReference(
+        string Id,
+        string Kind);
 
     private sealed record CleanTopologyRepresentation(
         PlacementWallExport RepresentedWall,
@@ -4549,6 +4752,7 @@ public static partial class GlobalWallSolutionBuilder
         IReadOnlyList<GlobalWallCandidate> Contributors,
         int CompletedJunctionCount,
         IReadOnlyList<string> BridgedOpeningIds,
+        int BodyContactJunctionCount = 0,
         WallReconciliationState? Reconciliation = null);
 
     private sealed record SolvedRunsBuildResult(
@@ -4574,6 +4778,10 @@ public static partial class GlobalWallSolutionBuilder
         int PageNumber,
         PlanPoint Position,
         WallOrientation Orientation);
+
+    private sealed record JunctionEndpointCompletion(
+        PointExport Position,
+        bool SourceBackedBodyContact);
 
     private sealed record EndpointCluster(
         string Id,

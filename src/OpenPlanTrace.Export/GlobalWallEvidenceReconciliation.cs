@@ -2,7 +2,7 @@ namespace OpenPlanTrace.Export;
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v8";
+    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v9";
 
     private const double MinimumReconciliationMovement = 0.05;
     private const double MaximumReconciliationAxisShift = 8.0;
@@ -27,7 +27,9 @@ public static partial class GlobalWallSolutionBuilder
                 rooms,
                 openings))
             .ToArray();
-        var junctionCompleted = CompleteSupportedJunctions(axisAligned);
+        var junctionCompleted = CompleteSupportedJunctions(
+            axisAligned,
+            openings);
         var cornerNormalized = TrimSupportedExteriorCornerOverruns(junctionCompleted);
 
         return cornerNormalized
@@ -39,6 +41,10 @@ public static partial class GlobalWallSolutionBuilder
                 var junctionSnapCount = Math.Max(
                     0,
                     run.CompletedJunctionCount - beforeJunction.CompletedJunctionCount);
+                var bodyContactJunctionCount = Math.Max(
+                    0,
+                    run.BodyContactJunctionCount
+                        - beforeJunction.BodyContactJunctionCount);
                 if (junctionSnapCount == 0)
                 {
                     return run;
@@ -51,6 +57,12 @@ public static partial class GlobalWallSolutionBuilder
                         JunctionSnapCount = state.JunctionSnapCount + junctionSnapCount,
                         Evidence = state.Evidence
                             .Append($"reconciler snapped {junctionSnapCount} endpoint(s) to supported perpendicular junctions")
+                            .Concat(bodyContactJunctionCount > 0
+                                ? new[]
+                                {
+                                    $"reconciler normalized {bodyContactJunctionCount} source-backed wall-body contact endpoint(s) within a shared main-structural component"
+                                }
+                                : Array.Empty<string>())
                             .Distinct(StringComparer.Ordinal)
                             .ToArray()
                     }
