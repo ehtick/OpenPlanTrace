@@ -8,6 +8,15 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.021] - 2026-07-30
+
+- Improved nested appliance and fixture-loop rejection.
+- Improved duplicate wall-face consolidation.
+- Improved exterior shell and wall-body reconciliation.
+- Improved shared-source wall deduplication.
+- Improved exterior and interior wall transitions.
+- Updated wall solver contract versions.
+
 ## [0.11.020] - 2026-07-30
 
 - Improved StructuralCore endpoint snapping at supported wall junctions.

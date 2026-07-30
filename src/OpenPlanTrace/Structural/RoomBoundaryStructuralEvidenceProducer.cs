@@ -27,6 +27,12 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                 continue;
             }
 
+            if (roomContext == StructuralRoomLoopContext.FixtureLike)
+            {
+                AddFixtureLikeBoundarySignals(context, room, boundary);
+                continue;
+            }
+
             var boundaryEdges = new List<StructuralRoomBoundaryEdge>();
             for (var index = 0; index < boundary.Count; index++)
             {
@@ -219,7 +225,8 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                         roomId,
                         StructuralRoomLoopContext.Unknown)
                     is StructuralRoomLoopContext.Outdoor
-                        or StructuralRoomLoopContext.Conflicted);
+                        or StructuralRoomLoopContext.Conflicted
+                        or StructuralRoomLoopContext.FixtureLike);
                 var weight = trustedRoomIds.Length == 0
                     ? hasOutdoorOrConflictedContext
                         ? -1.25
@@ -363,6 +370,7 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
             StructuralRoomLoopContext.Outdoor => 0.15,
             StructuralRoomLoopContext.Conflicted => 0.20,
             StructuralRoomLoopContext.Unknown => 0.20,
+            StructuralRoomLoopContext.FixtureLike => 0,
             _ => 1.0
         };
         candidate.AddSignal(
@@ -385,6 +393,7 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
             StructuralRoomLoopContext.Outdoor => baseWeight * 0.15,
             StructuralRoomLoopContext.Conflicted => baseWeight * 0.20,
             StructuralRoomLoopContext.Unknown => baseWeight * 0.12,
+            StructuralRoomLoopContext.FixtureLike => 0,
             _ => baseWeight
         };
     }
@@ -392,6 +401,8 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
     internal static IReadOnlyDictionary<string, StructuralRoomLoopContext> ClassifyRoomContexts(
         IReadOnlyList<RoomRegion> rooms)
     {
+        var fixtureLikeRoomIds =
+            RoomStructuralCredibility.FindNestedFixtureLikeRoomIds(rooms);
         var outdoorRooms = rooms
             .Where(room => room.UseKind == RoomUseKind.Outdoor)
             .ToArray();
@@ -399,6 +410,11 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
             room => room.Id,
             room =>
             {
+                if (fixtureLikeRoomIds.Contains(room.Id))
+                {
+                    return StructuralRoomLoopContext.FixtureLike;
+                }
+
                 if (room.UseKind == RoomUseKind.Outdoor)
                 {
                     return StructuralRoomLoopContext.Outdoor;
@@ -426,6 +442,84 @@ internal sealed class RoomBoundaryStructuralEvidenceProducer : IStructuralEviden
                 return StructuralRoomLoopContext.Unknown;
             },
             StringComparer.Ordinal);
+    }
+
+    private static void AddFixtureLikeBoundarySignals(
+        StructuralEvidenceBuildContext context,
+        RoomRegion room,
+        IReadOnlyList<PlanPoint> boundary)
+    {
+        for (var index = 0; index < boundary.Count; index++)
+        {
+            var edge = StructuralGeometry.Canonicalize(
+                new PlanLineSegment(
+                    boundary[index],
+                    boundary[(index + 1) % boundary.Count]));
+            if (edge.Length < context.Options.MinimumCandidateLength)
+            {
+                continue;
+            }
+
+            foreach (var candidate in context.Candidates.FindCompatible(
+                         room.PageNumber,
+                         edge,
+                         context.Options,
+                         minimumOverlapRatio: 0.55))
+            {
+                if (!IsFixtureBoundaryCandidate(
+                        candidate,
+                        room,
+                        edge,
+                        context.Options))
+                {
+                    continue;
+                }
+
+                candidate.SourceRoomIds.Add(room.Id);
+                candidate.AddSignal(
+                    new StructuralEvidenceSignal(
+                        $"signal:{candidate.Id}:nested-fixture-boundary:{room.Id}:{index}",
+                        StructuralEvidenceSignalKind.ObjectOrFixture,
+                        -1.35,
+                        room.Id,
+                        $"unlabeled {room.AreaSquareMeters:0.###} m2 loop is nested inside a larger room; boundary edge {index} is fixture or appliance geometry rather than an independent wall",
+                        candidate.SourcePrimitiveIds
+                            .Concat(room.LabelSourcePrimitiveIds)
+                            .Distinct(StringComparer.Ordinal)
+                            .Order(StringComparer.Ordinal)
+                            .ToArray()));
+            }
+        }
+    }
+
+    private static bool IsFixtureBoundaryCandidate(
+        StructuralCandidateRegistry.CandidateDraft candidate,
+        RoomRegion room,
+        PlanLineSegment edge,
+        StructuralSolverOptions options)
+    {
+        if (candidate.WallType == WallType.Exterior
+            || candidate.Origins.HasFlag(StructuralCandidateOrigin.ExteriorShell)
+            || candidate.Origins.HasFlag(StructuralCandidateOrigin.OpeningHost)
+            || candidate.SourceOpeningIds.Count > 0)
+        {
+            return false;
+        }
+
+        var maximumFixtureSpan = Math.Max(
+            96.0,
+            Math.Max(room.Bounds.Width, room.Bounds.Height) * 1.75);
+        var overlap = StructuralGeometry.OverlapLength(
+            candidate.CenterLine,
+            edge);
+        var containmentTolerance = Math.Max(
+            options.AxisTolerance * 2.0,
+            candidate.Thickness * 1.5);
+        return candidate.DrawingLength <= maximumFixtureSpan
+            && overlap / Math.Max(candidate.DrawingLength, 0.001) >= 0.60
+            && room.Bounds
+                .Inflate(containmentTolerance)
+                .Contains(candidate.CenterLine.Midpoint);
     }
 
     private static bool HasCredibleUnknownRoomIdentity(RoomRegion room)

@@ -230,11 +230,14 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
             .Any(item =>
                 item.Contains("filled closed vector wall body", StringComparison.OrdinalIgnoreCase)
                 || item.Contains("filled wall-solid primitive", StringComparison.OrdinalIgnoreCase));
+        var reviewGatedVeryShortPair =
+            IsReviewGatedVeryShortParallelPair(wall, assessment, options);
         var strongParallelWallBody = wall.PairEvidence is
         {
             Score: >= 0.60,
             OverlapRatio: >= 0.60
-        };
+        }
+            && !reviewGatedVeryShortPair;
         if ((explicitFilledWallBody || strongParallelWallBody)
             && !candidate.HasIndependentWallBodyEvidence)
         {
@@ -246,6 +249,16 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
                 explicitFilledWallBody
                     ? "explicit filled wall-body geometry independently supports structural placement"
                     : "strong parallel-face geometry independently supports structural placement",
+                wall.SourcePrimitiveIds));
+        }
+        else if (reviewGatedVeryShortPair)
+        {
+            candidate.AddSignal(Signal(
+                candidate,
+                StructuralEvidenceSignalKind.ReviewWall,
+                -0.30,
+                $"{wall.Id}:very-short-pair-review-gate",
+                "very short low-score parallel-face pair remains review-only without independent room, opening, or filled wall-body evidence",
                 wall.SourcePrimitiveIds));
         }
 
@@ -265,6 +278,34 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
             wall.Id,
             "unsupported oblique single-line geometry is retained for review, not structural wall placement",
             wall.SourcePrimitiveIds));
+    }
+
+    private static bool IsReviewGatedVeryShortParallelPair(
+        WallSegment wall,
+        WallEvidenceWallAssessment? assessment,
+        StructuralSolverOptions options)
+    {
+        if (wall.DetectionKind != WallDetectionKind.ParallelLinePair
+            || wall.PairEvidence is null
+            || assessment is not
+            {
+                Decision: WallEvidenceDecision.Review,
+                PlacementReady: false,
+                RequiresReview: true,
+                RejectedAsNoise: false
+            }
+            || wall.DrawingLength
+                > Math.Max(48.0, options.MinimumCandidateLength * 2.0))
+        {
+            return false;
+        }
+
+        return wall.Evidence
+            .Concat(assessment.Evidence)
+            .Any(item =>
+                item.Contains(
+                    "very short unlayered parallel-face candidate has low pair score",
+                    StringComparison.OrdinalIgnoreCase));
     }
 
     private static void AddFragmentAxisContinuitySignal(

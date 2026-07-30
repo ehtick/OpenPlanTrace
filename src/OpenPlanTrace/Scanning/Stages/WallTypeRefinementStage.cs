@@ -58,7 +58,23 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             return ValueTask.CompletedTask;
         }
 
-        var sharedWallIds = BuildSharedWallIds(context.RoomAdjacencyGraph);
+        var fixtureLikeRoomIds =
+            RoomStructuralCredibility.FindNestedFixtureLikeRoomIds(context.Rooms);
+        var fixtureLikeRooms = context.Rooms
+            .Where(room => fixtureLikeRoomIds.Contains(room.Id))
+            .ToArray();
+        var structuralRooms = context.Rooms
+            .Where(room => !fixtureLikeRoomIds.Contains(room.Id))
+            .ToArray();
+        var openingHostWallIds = context.Openings
+            .SelectMany(opening => opening.HostWallIds
+                .Concat(opening.AdjacentWallIds)
+                .Append(opening.WallId ?? string.Empty))
+            .Where(wallId => !string.IsNullOrWhiteSpace(wallId))
+            .ToHashSet(StringComparer.Ordinal);
+        var sharedWallIds = BuildSharedWallIds(
+            context.RoomAdjacencyGraph,
+            fixtureLikeRoomIds);
         var componentsByWallId = BuildComponentsByWallId(context.WallGraph);
         var supportedTopologyEndpointCountsByWallId = BuildSupportedTopologyEndpointCounts(context.WallGraph);
         var evidenceByWallId = BuildEvidenceByWallId(context.WallEvidenceMap);
@@ -70,11 +86,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .Select(group => group.First())
             .ToArray();
         var roomWallReferences = RoomBoundaryWallReferenceBuilder.Build(
-            context.Rooms,
+            structuralRooms,
             context.Walls,
             context.Options.WallSnapTolerance);
         var roomBoundaryRepairSupport = RoomBoundaryRepairSupportBuilder.Build(
-            context.Rooms,
+            structuralRooms,
             context.Walls,
             roomBoundaryRepairCandidateWalls,
             evidenceByWallId,
@@ -82,7 +98,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var exteriorShellRepairSupport = ExteriorShellRepairSupportBuilder.Build(
             context.Walls,
             roomBoundaryRepairCandidateWalls,
-            context.Rooms,
+            structuralRooms,
             context.SheetRegions,
             evidenceByWallId,
             context.Options);
@@ -91,11 +107,11 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             context.Walls,
             evidenceByWallId,
             context.Options);
-        var roomsById = context.Rooms
+        var roomsById = structuralRooms
             .Where(room => !string.IsNullOrWhiteSpace(room.Id))
             .GroupBy(room => room.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        var roomsByPage = context.Rooms
+        var roomsByPage = structuralRooms
             .GroupBy(room => room.PageNumber)
             .ToDictionary(group => group.Key, group => group.ToArray());
         var mainFloorplanBoundsByPage = context.SheetRegions
@@ -115,6 +131,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var topologySupportedFragmentedPairPromoted = 0;
         var protectedObjectLikeLongFragmentPromoted = 0;
         var fragmentedPairPlacementDemoted = 0;
+        var nestedFixtureBoundaryPlacementDemoted = 0;
         var denseLocalDetailPlacementDemoted = 0;
         var nonOrthogonalDimensionLikePlacementDemoted = 0;
         var shortDimensionLikePlacementDemoted = 0;
@@ -223,6 +240,25 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 wall.Id,
                 out var shellRepairSupport);
             if (assessment is not null
+                && TryDemoteNestedFixtureBoundaryWallEvidence(
+                    updatedWall,
+                    assessment,
+                    fixtureLikeRooms,
+                    openingHostWallIds,
+                    context.Options,
+                    out var fixtureDemotedAssessment,
+                    out var fixtureDemotionEvidence))
+            {
+                updatedAssessmentsByWallId[wall.Id] = fixtureDemotedAssessment;
+                updatedWall = updatedWall with
+                {
+                    Evidence = AppendEvidence(updatedWall.Evidence, fixtureDemotionEvidence)
+                };
+                nestedFixtureBoundaryPlacementDemoted++;
+                evidenceUpdated++;
+                assessment = fixtureDemotedAssessment;
+            }
+            else if (assessment is not null
                 && TryDemoteFragmentedPlacementReadyWallEvidence(
                     updatedWall,
                     assessment,
@@ -689,6 +725,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             topologySupportedFragmentedPairPromoted,
             protectedObjectLikeLongFragmentPromoted,
             fragmentedPairPlacementDemoted,
+            nestedFixtureBoundaryPlacementDemoted,
             denseLocalDetailPlacementDemoted,
             nonOrthogonalDimensionLikePlacementDemoted,
             shortDimensionLikePlacementDemoted,
@@ -708,12 +745,18 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             sourceBackedExteriorShellClosureInferred,
             exteriorShellGapInferred,
             roomWallReferences.GeometricRoomBoundaryReferencedWallCount,
-            roomWallReferences.GeometricRoomBoundaryReferenceCount);
+            roomWallReferences.GeometricRoomBoundaryReferenceCount,
+            fixtureLikeRoomIds.Count);
         return ValueTask.CompletedTask;
     }
 
-    private static HashSet<string> BuildSharedWallIds(RoomAdjacencyGraph graph) =>
+    private static HashSet<string> BuildSharedWallIds(
+        RoomAdjacencyGraph graph,
+        IReadOnlySet<string> excludedRoomIds) =>
         graph.Edges
+            .Where(edge =>
+                !excludedRoomIds.Contains(edge.FirstRoomId)
+                && !excludedRoomIds.Contains(edge.SecondRoomId))
             .SelectMany(edge => edge.SharedWallIds)
             .ToHashSet(StringComparer.Ordinal);
 
@@ -2478,6 +2521,106 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         return true;
     }
 
+    private static bool TryDemoteNestedFixtureBoundaryWallEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        IReadOnlyList<RoomRegion> fixtureLikeRooms,
+        IReadOnlySet<string> openingHostWallIds,
+        ScannerOptions options,
+        out WallEvidenceWallAssessment demotedAssessment,
+        out IReadOnlyList<string> demotionEvidence)
+    {
+        demotedAssessment = assessment;
+        demotionEvidence = Array.Empty<string>();
+
+        if (assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || wall.WallType == WallType.Exterior
+            || openingHostWallIds.Contains(wall.Id))
+        {
+            return false;
+        }
+
+        var fixtureRoom = fixtureLikeRooms.FirstOrDefault(room =>
+            room.PageNumber == wall.PageNumber
+            && room.WallIds.Contains(wall.Id, StringComparer.Ordinal)
+            && IsNestedFixtureBoundaryMatch(wall, room, options));
+        if (fixtureRoom is null)
+        {
+            return false;
+        }
+
+        demotionEvidence =
+        [
+            $"wall evidence: rejected from placement because source edge belongs to nested unlabeled micro-loop {fixtureRoom.Id}",
+            "wall evidence: nested micro-loop is fixture or appliance geometry rather than an independent structural wall"
+        ];
+        demotedAssessment = assessment with
+        {
+            Category = WallEvidenceCategory.ObjectOrFixtureDetail,
+            PlacementReady = false,
+            RequiresReview = true,
+            RejectedAsNoise = true,
+            Decision = WallEvidenceDecision.Reject,
+            Evidence = AppendEvidence(assessment.Evidence, demotionEvidence)
+        };
+        return true;
+    }
+
+    private static bool IsNestedFixtureBoundaryMatch(
+        WallSegment wall,
+        RoomRegion fixtureRoom,
+        ScannerOptions options)
+    {
+        var maximumFixtureSpan = Math.Max(
+            96.0,
+            Math.Max(fixtureRoom.Bounds.Width, fixtureRoom.Bounds.Height) * 1.75);
+        if (wall.DrawingLength > maximumFixtureSpan)
+        {
+            return false;
+        }
+
+        var containmentTolerance = Math.Max(
+            options.WallSnapTolerance * 2.0,
+            wall.Thickness * 1.5);
+        if (!fixtureRoom.Bounds
+                .Inflate(containmentTolerance)
+                .Contains(wall.CenterLine.Midpoint))
+        {
+            return false;
+        }
+
+        var angleTolerance = Math.Max(
+            3.0,
+            Math.Atan2(containmentTolerance, Math.Max(wall.DrawingLength, 1.0))
+                * 180.0
+                / Math.PI);
+        for (var index = 0; index < fixtureRoom.Boundary.Count; index++)
+        {
+            var edge = new PlanLineSegment(
+                fixtureRoom.Boundary[index],
+                fixtureRoom.Boundary[(index + 1) % fixtureRoom.Boundary.Count]);
+            if (edge.Length <= 0
+                || !StructuralGeometry.AreParallel(
+                    wall.CenterLine,
+                    edge,
+                    angleTolerance * Math.PI / 180.0)
+                || StructuralGeometry.PerpendicularDistance(wall.CenterLine, edge)
+                    > containmentTolerance)
+            {
+                continue;
+            }
+
+            var overlap = StructuralGeometry.OverlapLength(wall.CenterLine, edge);
+            if (overlap / Math.Max(wall.DrawingLength, 0.001) >= 0.58)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool TryDemoteDenseLocalDetailPlacementReadyWallEvidence(
         WallSegment wall,
         WallEvidenceWallAssessment assessment,
@@ -3774,7 +3917,10 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .Where(wall => !string.IsNullOrWhiteSpace(wall.Id))
             .GroupBy(wall => wall.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var fixtureLikeRoomIds =
+            RoomStructuralCredibility.FindNestedFixtureLikeRoomIds(context.Rooms);
         var roomsByPage = context.Rooms
+            .Where(room => !fixtureLikeRoomIds.Contains(room.Id))
             .GroupBy(room => room.PageNumber)
             .ToDictionary(group => group.Key, group => group.ToArray());
 
@@ -4305,12 +4451,14 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     continue;
                 }
 
-                foreach (var clippedCandidate in SplitSourceBackedExteriorShellClosureAroundOutdoorRooms(
-                             candidate,
-                             page.Number,
-                             context.Rooms,
-                             context.Options,
-                             minLength))
+                var retainedCandidates =
+                    SplitSourceBackedExteriorShellClosureAroundOutdoorRooms(
+                        candidate,
+                        page.Number,
+                        context.Rooms,
+                        context.Options,
+                        minLength);
+                foreach (var clippedCandidate in retainedCandidates)
                 {
                     if (pageCount >= maxPerPage)
                     {
@@ -5448,9 +5596,12 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private static IEnumerable<RoomBoundaryInferenceEdge> ReliableIndoorRoomBoundaryEdgesForInference(
         IReadOnlyList<RoomRegion> rooms)
     {
+        var fixtureLikeRoomIds =
+            RoomStructuralCredibility.FindNestedFixtureLikeRoomIds(rooms);
         foreach (var room in rooms)
         {
-            if (room.UseKind == RoomUseKind.Outdoor
+            if (fixtureLikeRoomIds.Contains(room.Id)
+                || room.UseKind == RoomUseKind.Outdoor
                 || room.Boundary.Count < 4
                 || room.Confidence.Value < 0.58
                 || !HasReliableRoomBoundaryEvidence(room))
@@ -5482,14 +5633,19 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         RoomBoundaryReliability.HasReliableBoundaryEvidence(room);
 
     private static IEnumerable<RoomRegion> ReliableIndoorRoomsForExteriorShellInference(
-        IReadOnlyList<RoomRegion> rooms) =>
-        rooms.Where(room =>
-            room.UseKind != RoomUseKind.Outdoor
+        IReadOnlyList<RoomRegion> rooms)
+    {
+        var fixtureLikeRoomIds =
+            RoomStructuralCredibility.FindNestedFixtureLikeRoomIds(rooms);
+        return rooms.Where(room =>
+            !fixtureLikeRoomIds.Contains(room.Id)
+            && room.UseKind != RoomUseKind.Outdoor
             && room.Boundary.Count >= 4
             && room.Confidence.Value >= 0.58
             && !room.Bounds.IsEmpty
             && room.Bounds.Area >= 64.0
             && RoomBoundaryReliability.HasReliableExteriorShellBoundaryEvidence(room));
+    }
 
     private static IEnumerable<ExteriorShellInferenceEdge> ReliableIndoorExteriorBoundaryEdgesForInference(
         IReadOnlyList<RoomRegion> rooms,
@@ -6356,6 +6512,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int topologySupportedFragmentedPairPromoted,
         int protectedObjectLikeLongFragmentPromoted,
         int fragmentedPairPlacementDemoted,
+        int nestedFixtureBoundaryPlacementDemoted,
         int denseLocalDetailPlacementDemoted,
         int nonOrthogonalDimensionLikePlacementDemoted,
         int shortDimensionLikePlacementDemoted,
@@ -6375,7 +6532,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int sourceBackedExteriorShellClosureInferred,
         int exteriorShellGapInferred,
         int geometricRoomBoundaryReferencedWallCount,
-        int geometricRoomBoundaryReferenceCount)
+        int geometricRoomBoundaryReferenceCount,
+        int fixtureLikeNestedRoomCount)
     {
         var exterior = context.Walls.Count(wall => wall.WallType == WallType.Exterior);
         var interior = context.Walls.Count(wall => wall.WallType == WallType.Interior);
@@ -6395,6 +6553,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["roomReferencedWallCount"] = roomReferenced.ToString(),
                 ["geometricRoomBoundaryReferencedWallCount"] = geometricRoomBoundaryReferencedWallCount.ToString(),
                 ["geometricRoomBoundaryReferenceCount"] = geometricRoomBoundaryReferenceCount.ToString(),
+                ["fixtureLikeNestedRoomCount"] = fixtureLikeNestedRoomCount.ToString(),
                 ["geometricRoomBoundaryEvidenceAddedWallCount"] = geometricRoomBoundaryEvidenceAdded.ToString(),
                 ["twoSidedRoomEvidenceWallCount"] = twoSidedRoomEvidence.ToString(),
                 ["sameRoomOnBothSidesEvidenceWallCount"] = sameRoomOnBothSidesEvidence.ToString(),
@@ -6404,6 +6563,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["topologySupportedFragmentedPairPromotedWallCount"] = topologySupportedFragmentedPairPromoted.ToString(),
                 ["protectedObjectLikeLongFragmentPromotedWallCount"] = protectedObjectLikeLongFragmentPromoted.ToString(),
                 ["fragmentedPairPlacementDemotedWallCount"] = fragmentedPairPlacementDemoted.ToString(),
+                ["nestedFixtureBoundaryPlacementDemotedWallCount"] = nestedFixtureBoundaryPlacementDemoted.ToString(),
                 ["denseLocalDetailPlacementDemotedWallCount"] = denseLocalDetailPlacementDemoted.ToString(),
                 ["nonOrthogonalDimensionLikePlacementDemotedWallCount"] = nonOrthogonalDimensionLikePlacementDemoted.ToString(),
                 ["shortDimensionLikePlacementDemotedWallCount"] = shortDimensionLikePlacementDemoted.ToString(),

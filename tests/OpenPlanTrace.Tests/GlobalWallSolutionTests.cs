@@ -2270,6 +2270,33 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public void Reconciler_ExpandsAxisToleranceOnlyForSharedGraphStructuralRepresentations()
+    {
+        var sharedCrossRepresentationTolerance =
+            GlobalWallSolutionBuilder.ReconciledDuplicateAxisTolerance(
+                firstThickness: 6.64,
+                secondThickness: 3.81,
+                sharesSourceWall: true,
+                firstHasStructuralCore: true,
+                secondHasStructuralCore: true,
+                firstHasCleanGraph: false,
+                secondHasCleanGraph: true);
+        var unrelatedStructuralTolerance =
+            GlobalWallSolutionBuilder.ReconciledDuplicateAxisTolerance(
+                firstThickness: 6.64,
+                secondThickness: 3.81,
+                sharesSourceWall: true,
+                firstHasStructuralCore: true,
+                secondHasStructuralCore: true,
+                firstHasCleanGraph: false,
+                secondHasCleanGraph: false);
+
+        Assert.True(sharedCrossRepresentationTolerance >= 3.35);
+        Assert.True(unrelatedStructuralTolerance < 3.35);
+        Assert.InRange(sharedCrossRepresentationTolerance, 0.75, 8.0);
+    }
+
+    [Fact]
     public async Task CandidatePool_ConsolidatesExplicitCleanTopologyRepresentation()
     {
         var placement = PlanPlacementExport.From(await CreateScanResultAsync());

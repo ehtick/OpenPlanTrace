@@ -53,7 +53,16 @@ internal static class CanonicalStructuralTopologyBuilder
             .ThenBy(run => run.Bounds.X)
             .ThenBy(run => run.Id, StringComparer.Ordinal)
             .ToArray();
-        var runs = ResolvePhysicalWallAssemblies(leafRuns, options);
+        var physicalRuns = ResolvePhysicalWallAssemblies(leafRuns, options);
+        var shellResolvedRuns =
+            ResolveSourceBackedExteriorShellBodyDuplicates(
+                physicalRuns,
+                options);
+        var transitionedRuns =
+            ResolveSourceBackedShellInteriorTransitions(
+                shellResolvedRuns,
+                options);
+        var runs = AbsorbContainedParallelShadows(transitionedRuns, options);
         var junctions = BuildJunctions(graph, runs, options);
         return new CanonicalStructuralTopology(runs, junctions);
     }
@@ -245,6 +254,8 @@ internal static class CanonicalStructuralTopologyBuilder
                 || second.WallType == WallType.Exterior);
         var hasSharedPhysicalSourceSupport =
             SharesPhysicalSourcePrimitives(first, second);
+        var sharesWallGraphComponent =
+            SharesWallGraphComponent(first, second);
         if (first.PageNumber != second.PageNumber
             || !first.Reliability.ReadyForCoordinatePlacement
             || !second.Reliability.ReadyForCoordinatePlacement
@@ -252,9 +263,7 @@ internal static class CanonicalStructuralTopologyBuilder
             || second.Reliability.RequiresReview
             || !HasPhysicalWallBodyEvidence(first)
             || !HasPhysicalWallBodyEvidence(second)
-            || (!hasExteriorAssemblySemantics
-                && !hasSharedPhysicalSourceSupport)
-            || !SharesWallGraphComponent(first, second)
+            || !sharesWallGraphComponent
             || !IsAxisAligned(first.CenterLine, options.AngleToleranceDegrees)
             || !IsAxisAligned(second.CenterLine, options.AngleToleranceDegrees))
         {
@@ -274,11 +283,6 @@ internal static class CanonicalStructuralTopologyBuilder
         var overlapRatio = StructuralGeometry.OverlapRatio(
             first.CenterLine,
             second.CenterLine);
-        if (overlapRatio < Math.Max(0.80, options.DuplicateOverlapRatio))
-        {
-            return null;
-        }
-
         var direction = StructuralGeometry.UnitDirection(
             first.DrawingLength >= second.DrawingLength
                 ? first.CenterLine
@@ -287,8 +291,35 @@ internal static class CanonicalStructuralTopologyBuilder
         var firstAxis = StructuralGeometry.Dot(first.CenterLine.Midpoint, normal);
         var secondAxis = StructuralGeometry.Dot(second.CenterLine.Midpoint, normal);
         var axisDistance = Math.Abs(firstAxis - secondAxis);
+        var hasComponentBackedStaggeredContinuation =
+            IsComponentBackedStaggeredContinuation(
+                first,
+                second,
+                overlapRatio,
+                axisDistance,
+                options);
+        if (!hasExteriorAssemblySemantics
+            && !hasSharedPhysicalSourceSupport
+            && !hasComponentBackedStaggeredContinuation)
+        {
+            return null;
+        }
+
+        var minimumOverlapRatio = hasComponentBackedStaggeredContinuation
+            ? axisDistance <= options.AxisTolerance
+                ? 0.10
+                : Math.Min(0.55, options.DuplicateOverlapRatio)
+            : hasSharedPhysicalSourceSupport
+                ? Math.Min(0.55, options.DuplicateOverlapRatio)
+                : Math.Max(0.80, options.DuplicateOverlapRatio);
+        if (overlapRatio < minimumOverlapRatio)
+        {
+            return null;
+        }
+
         if (axisDistance <= options.AxisTolerance
-            && !allowContainedAssemblyLeaf)
+            && !allowContainedAssemblyLeaf
+            && !hasComponentBackedStaggeredContinuation)
         {
             return null;
         }
@@ -337,7 +368,8 @@ internal static class CanonicalStructuralTopologyBuilder
             bodyGap,
             envelopeDepth,
             hasExteriorAssemblySemantics,
-            hasSharedPhysicalSourceSupport);
+            hasSharedPhysicalSourceSupport,
+            hasComponentBackedStaggeredContinuation);
     }
 
     private static StructuralWallRun MergePhysicalWallAssembly(
@@ -391,6 +423,8 @@ internal static class CanonicalStructuralTopologyBuilder
             .Append(
                 pair.HasExteriorSemantics
                     ? $"resolved exterior wall assembly from {leaves.Sum(run => run.AssemblyLeafCount)} structural leaves"
+                    : pair.HasComponentBackedStaggeredContinuation
+                        ? $"resolved staggered physical wall continuation from {leaves.Sum(run => run.AssemblyLeafCount)} structural leaves"
                     : $"resolved shared-source physical wall assembly from {leaves.Sum(run => run.AssemblyLeafCount)} structural leaves")
             .Append($"assembly overlap ratio {pair.OverlapRatio:0.###}")
             .Append($"assembly physical body gap {pair.BodyGap:0.###} drawing units")
@@ -437,8 +471,45 @@ internal static class CanonicalStructuralTopologyBuilder
                         .Append(
                             pair.HasExteriorSemantics
                                 ? "source-backed exterior leaves resolved as one physical wall assembly"
+                                : pair.HasComponentBackedStaggeredContinuation
+                                    ? "component-backed staggered wall leaves resolved as one physical wall continuation"
                                 : "shared-source wall-body leaves resolved as one physical wall assembly")))
         };
+    }
+
+    private static bool IsComponentBackedStaggeredContinuation(
+        StructuralWallRun first,
+        StructuralWallRun second,
+        double overlapRatio,
+        double axisDistance,
+        StructuralSolverOptions options)
+    {
+        var minimumOverlapRatio = axisDistance <= options.AxisTolerance
+            ? 0.10
+            : Math.Min(0.55, options.DuplicateOverlapRatio);
+        if (overlapRatio < minimumOverlapRatio
+            || overlapRatio >= 0.85)
+        {
+            return false;
+        }
+
+        var reference = first.DrawingLength >= second.DrawingLength
+            ? first.CenterLine
+            : second.CenterLine;
+        var direction = StructuralGeometry.UnitDirection(reference);
+        var firstRange = StructuralGeometry.ProjectionRange(
+            first.CenterLine,
+            direction);
+        var secondRange = StructuralGeometry.ProjectionRange(
+            second.CenterLine,
+            direction);
+        var minimumExtension = Math.Max(
+            options.EndpointTolerance,
+            options.AxisTolerance);
+        return (firstRange.Start < secondRange.Start - minimumExtension
+                && secondRange.End > firstRange.End + minimumExtension)
+            || (secondRange.Start < firstRange.Start - minimumExtension
+                && firstRange.End > secondRange.End + minimumExtension);
     }
 
     private static bool HasPhysicalWallBodyEvidence(
@@ -481,6 +552,13 @@ internal static class CanonicalStructuralTopologyBuilder
         StructuralWallRun first,
         StructuralWallRun second)
     {
+        if (first.SourceWallIds
+            .Intersect(second.SourceWallIds, StringComparer.Ordinal)
+            .Any())
+        {
+            return true;
+        }
+
         if (first.SourcePrimitiveIds.Count < 2
             || second.SourcePrimitiveIds.Count < 2)
         {
@@ -490,6 +568,662 @@ internal static class CanonicalStructuralTopologyBuilder
         var firstIds = first.SourcePrimitiveIds.ToHashSet(StringComparer.Ordinal);
         return second.SourcePrimitiveIds.Count(firstIds.Contains) >= 2;
     }
+
+    private static IReadOnlyList<StructuralWallRun>
+        ResolveSourceBackedExteriorShellBodyDuplicates(
+            IReadOnlyList<StructuralWallRun> runs,
+            StructuralSolverOptions options)
+    {
+        if (runs.Count < 2)
+        {
+            return runs;
+        }
+
+        var resolved = runs.ToList();
+        for (var iteration = 0; iteration < runs.Count; iteration++)
+        {
+            var matches = new List<SourceBackedExteriorShellBodyDuplicate>();
+            for (var firstIndex = 0; firstIndex < resolved.Count; firstIndex++)
+            {
+                for (var secondIndex = firstIndex + 1;
+                     secondIndex < resolved.Count;
+                     secondIndex++)
+                {
+                    var match = TryCreateSourceBackedExteriorShellBodyDuplicate(
+                        resolved[firstIndex],
+                        resolved[secondIndex],
+                        options);
+                    if (match is not null)
+                    {
+                        matches.Add(match);
+                    }
+                }
+            }
+
+            var selected = matches
+                .OrderByDescending(match => match.OverlapRatio)
+                .ThenBy(match => match.BodyGap)
+                .ThenBy(match => match.AxisDistance)
+                .ThenBy(match => match.Shell.Id, StringComparer.Ordinal)
+                .ThenBy(match => match.Body.Id, StringComparer.Ordinal)
+                .FirstOrDefault();
+            if (selected is null)
+            {
+                break;
+            }
+
+            resolved.RemoveAll(run =>
+                run.Id == selected.Shell.Id
+                || run.Id == selected.Body.Id);
+            resolved.Add(MergeSourceBackedExteriorShellWithBody(selected));
+        }
+
+        return resolved
+            .OrderBy(run => run.PageNumber)
+            .ThenBy(run => run.Bounds.Y)
+            .ThenBy(run => run.Bounds.X)
+            .ThenBy(run => run.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static SourceBackedExteriorShellBodyDuplicate?
+        TryCreateSourceBackedExteriorShellBodyDuplicate(
+            StructuralWallRun first,
+            StructuralWallRun second,
+            StructuralSolverOptions options)
+    {
+        var firstIsShell = IsSourceBackedExteriorShellRun(first);
+        var secondIsShell = IsSourceBackedExteriorShellRun(second);
+        if (firstIsShell == secondIsShell)
+        {
+            return null;
+        }
+
+        var shell = firstIsShell ? first : second;
+        var body = firstIsShell ? second : first;
+        if (shell.PageNumber != body.PageNumber
+            || body.WallType != WallType.Exterior
+            || !shell.Reliability.ReadyForCoordinatePlacement
+            || shell.Reliability.RequiresReview
+            || !body.Reliability.ReadyForCoordinatePlacement
+            || body.Reliability.RequiresReview
+            || !HasPhysicalWallBodyEvidence(body)
+            || !IsAxisAligned(
+                shell.CenterLine,
+                options.AngleToleranceDegrees)
+            || !IsAxisAligned(
+                body.CenterLine,
+                options.AngleToleranceDegrees))
+        {
+            return null;
+        }
+
+        var angleTolerance =
+            options.AngleToleranceDegrees * Math.PI / 180.0;
+        if (!StructuralGeometry.AreParallel(
+                shell.CenterLine,
+                body.CenterLine,
+                angleTolerance))
+        {
+            return null;
+        }
+
+        var overlapLength = StructuralGeometry.OverlapLength(
+            shell.CenterLine,
+            body.CenterLine);
+        var overlapRatio = overlapLength / Math.Max(
+            1e-9,
+            Math.Min(shell.DrawingLength, body.DrawingLength));
+        if (overlapRatio < 0.80)
+        {
+            return null;
+        }
+
+        var axisDistance = StructuralGeometry.PerpendicularDistance(
+            shell.CenterLine,
+            body.CenterLine);
+        var bodyGap = Math.Max(
+            0,
+            axisDistance - ((shell.Thickness + body.Thickness) / 2.0));
+        var maximumAxisDistance = Math.Min(
+            12.0,
+            Math.Max(
+                options.AxisTolerance * 4.0,
+                (shell.Thickness + body.Thickness) * 1.25));
+        var maximumBodyGap = Math.Max(
+            1.5,
+            options.AxisTolerance * 1.5);
+        if (axisDistance > maximumAxisDistance
+            || bodyGap > maximumBodyGap)
+        {
+            return null;
+        }
+
+        return new SourceBackedExteriorShellBodyDuplicate(
+            shell,
+            body,
+            overlapRatio,
+            axisDistance,
+            bodyGap);
+    }
+
+    private static StructuralWallRun MergeSourceBackedExteriorShellWithBody(
+        SourceBackedExteriorShellBodyDuplicate duplicate)
+    {
+        var shell = duplicate.Shell;
+        var body = duplicate.Body;
+        var direction = StructuralGeometry.UnitDirection(body.CenterLine);
+        var normal = new PlanVector(-direction.Y, direction.X);
+        var bodyAxis = StructuralGeometry.Dot(
+            body.CenterLine.Midpoint,
+            normal);
+        var shellRange = StructuralGeometry.ProjectionRange(
+            shell.CenterLine,
+            direction);
+        var bodyRange = StructuralGeometry.ProjectionRange(
+            body.CenterLine,
+            direction);
+        var centerLine = StructuralGeometry.Canonicalize(
+            new PlanLineSegment(
+                FromBasis(
+                    Math.Min(shellRange.Start, bodyRange.Start),
+                    bodyAxis,
+                    direction,
+                    normal),
+                FromBasis(
+                    Math.Max(shellRange.End, bodyRange.End),
+                    bodyAxis,
+                    direction,
+                    normal)));
+        var candidates = Union(
+            shell.CandidateIds.Concat(body.CandidateIds));
+        var evidence = Union(
+            shell.Evidence
+                .Concat(body.Evidence)
+                .Append(
+                    "reconciled source-backed exterior shell with overlapping physical wall body on the body-supported axis")
+                .Append(
+                    $"exterior shell/body overlap ratio {duplicate.OverlapRatio:0.###}")
+                .Append(
+                    $"exterior shell/body axis distance {duplicate.AxisDistance:0.###} drawing units")
+                .Append(
+                    $"exterior shell/body physical gap {duplicate.BodyGap:0.###} drawing units"));
+
+        return body with
+        {
+            Id = $"structural-run:{StableId(candidates)}",
+            CenterLine = centerLine,
+            WallType = WallType.Exterior,
+            Confidence = new Confidence(Math.Max(
+                shell.Confidence.Value,
+                body.Confidence.Value)),
+            CandidateIds = candidates,
+            SourceWallIds = Union(
+                shell.SourceWallIds.Concat(body.SourceWallIds)),
+            SourceWallGraphEdgeIds = Union(
+                shell.SourceWallGraphEdgeIds.Concat(
+                    body.SourceWallGraphEdgeIds)),
+            SourcePrimitiveIds = Union(
+                shell.SourcePrimitiveIds.Concat(body.SourcePrimitiveIds)),
+            SourceRoomIds = Union(
+                shell.SourceRoomIds.Concat(body.SourceRoomIds)),
+            SourceOpeningIds = Union(
+                shell.SourceOpeningIds.Concat(body.SourceOpeningIds)),
+            Evidence = evidence,
+            AssemblyLeafCount =
+                shell.AssemblyLeafCount + body.AssemblyLeafCount,
+            SourceWallComponentIds = Union(
+                shell.SourceWallComponentIds.Concat(
+                    body.SourceWallComponentIds)),
+            Reliability = new StructuralWallRunReliability(
+                ReadyForCoordinatePlacement:
+                    shell.Reliability.ReadyForCoordinatePlacement
+                    && body.Reliability.ReadyForCoordinatePlacement,
+                RequiresReview:
+                    shell.Reliability.RequiresReview
+                    || body.Reliability.RequiresReview,
+                Confidence: Math.Max(
+                    shell.Reliability.Confidence,
+                    body.Reliability.Confidence),
+                Reasons: Union(
+                    shell.Reliability.Reasons
+                        .Concat(body.Reliability.Reasons)
+                        .Append(
+                            "source-backed exterior shell duplicate was reconciled to the physical wall-body axis")))
+        };
+    }
+
+    private static IReadOnlyList<StructuralWallRun>
+        ResolveSourceBackedShellInteriorTransitions(
+            IReadOnlyList<StructuralWallRun> runs,
+            StructuralSolverOptions options)
+    {
+        if (runs.Count < 2)
+        {
+            return runs;
+        }
+
+        var resolved = runs.ToArray();
+        for (var shellIndex = 0; shellIndex < resolved.Length; shellIndex++)
+        {
+            var shell = resolved[shellIndex];
+            if (!IsSourceBackedExteriorShellRun(shell))
+            {
+                continue;
+            }
+
+            var transitions = resolved
+                .Where(run => run.Id != shell.Id)
+                .Select(run => TryCreateShellInteriorTransition(
+                    shell,
+                    run,
+                    options))
+                .OfType<SourceBackedShellInteriorTransition>()
+                .OrderByDescending(transition => transition.OverlapLength)
+                .ThenBy(transition => transition.InteriorRun.Id, StringComparer.Ordinal)
+                .ToArray();
+            if (transitions.Length == 0)
+            {
+                continue;
+            }
+
+            var selected = transitions[0];
+            var hasCompetingTransition = transitions
+                .Skip(1)
+                .Any(transition =>
+                    transition.OverlapLength
+                        >= selected.OverlapLength * 0.8
+                    && Math.Abs(
+                        transition.TransitionProjection
+                        - selected.TransitionProjection)
+                        > options.EndpointTolerance);
+            if (hasCompetingTransition)
+            {
+                continue;
+            }
+
+            resolved[shellIndex] =
+                TrimSourceBackedShellAtInteriorTransition(
+                    shell,
+                    selected);
+        }
+
+        return resolved;
+    }
+
+    private static SourceBackedShellInteriorTransition?
+        TryCreateShellInteriorTransition(
+            StructuralWallRun shell,
+            StructuralWallRun interior,
+            StructuralSolverOptions options)
+    {
+        if (shell.PageNumber != interior.PageNumber
+            || interior.WallType != WallType.Interior
+            || !interior.Reliability.ReadyForCoordinatePlacement
+            || interior.Reliability.RequiresReview
+            || !HasPhysicalWallBodyEvidence(interior)
+            || !HasTrustedInteriorRoomBoundaryEvidence(interior)
+            || !IsAxisAligned(shell.CenterLine, options.AngleToleranceDegrees)
+            || !IsAxisAligned(interior.CenterLine, options.AngleToleranceDegrees))
+        {
+            return null;
+        }
+
+        var angleTolerance =
+            options.AngleToleranceDegrees * Math.PI / 180.0;
+        if (!StructuralGeometry.AreParallel(
+                shell.CenterLine,
+                interior.CenterLine,
+                angleTolerance))
+        {
+            return null;
+        }
+
+        var maximumAxisDistance = Math.Max(
+            options.AxisTolerance * 2.0,
+            (shell.Thickness + interior.Thickness) / 2.0);
+        var axisDistance = StructuralGeometry.PerpendicularDistance(
+            shell.CenterLine,
+            interior.CenterLine);
+        if (axisDistance > maximumAxisDistance)
+        {
+            return null;
+        }
+
+        var direction = StructuralGeometry.UnitDirection(shell.CenterLine);
+        var shellRange = StructuralGeometry.ProjectionRange(
+            shell.CenterLine,
+            direction);
+        var interiorRange = StructuralGeometry.ProjectionRange(
+            interior.CenterLine,
+            direction);
+        var overlapLength = Math.Max(
+            0,
+            Math.Min(shellRange.End, interiorRange.End)
+            - Math.Max(shellRange.Start, interiorRange.Start));
+        var overlapRatio = overlapLength / Math.Max(
+            1e-9,
+            Math.Min(shell.DrawingLength, interior.DrawingLength));
+        if (overlapRatio < 0.35 || overlapRatio >= 0.90)
+        {
+            return null;
+        }
+
+        var minimumExtension = Math.Max(
+            options.EndpointTolerance,
+            options.AxisTolerance);
+        if (shellRange.Start
+                < interiorRange.Start - minimumExtension
+            && interiorRange.End
+                > shellRange.End + minimumExtension)
+        {
+            if (interiorRange.Start - shellRange.Start
+                < Math.Max(
+                    options.MinimumCandidateLength,
+                    options.EndpointTolerance * 2.0))
+            {
+                return null;
+            }
+
+            return new SourceBackedShellInteriorTransition(
+                interior,
+                interiorRange.Start,
+                overlapLength,
+                TrimStart: false,
+                axisDistance);
+        }
+
+        if (interiorRange.Start
+                < shellRange.Start - minimumExtension
+            && shellRange.End
+                > interiorRange.End + minimumExtension)
+        {
+            if (shellRange.End - interiorRange.End
+                < Math.Max(
+                    options.MinimumCandidateLength,
+                    options.EndpointTolerance * 2.0))
+            {
+                return null;
+            }
+
+            return new SourceBackedShellInteriorTransition(
+                interior,
+                interiorRange.End,
+                overlapLength,
+                TrimStart: true,
+                axisDistance);
+        }
+
+        return null;
+    }
+
+    private static StructuralWallRun
+        TrimSourceBackedShellAtInteriorTransition(
+            StructuralWallRun shell,
+            SourceBackedShellInteriorTransition transition)
+    {
+        var direction = StructuralGeometry.UnitDirection(shell.CenterLine);
+        var normal = new PlanVector(-direction.Y, direction.X);
+        var axis = StructuralGeometry.Dot(
+            shell.CenterLine.Midpoint,
+            normal);
+        var shellRange = StructuralGeometry.ProjectionRange(
+            shell.CenterLine,
+            direction);
+        var startProjection = transition.TrimStart
+            ? transition.TransitionProjection
+            : shellRange.Start;
+        var endProjection = transition.TrimStart
+            ? shellRange.End
+            : transition.TransitionProjection;
+        var centerLine = StructuralGeometry.Canonicalize(
+            new PlanLineSegment(
+                FromBasis(startProjection, axis, direction, normal),
+                FromBasis(endProjection, axis, direction, normal)));
+        return shell with
+        {
+            CenterLine = centerLine,
+            Evidence = Union(
+                shell.Evidence
+                    .Append(
+                        "trimmed source-backed exterior shell overlap at trusted interior wall transition")
+                    .Append(
+                        $"interior transition wall {transition.InteriorRun.Id}")
+                    .Append(
+                        $"interior transition overlap {transition.OverlapLength:0.###} drawing units")
+                    .Append(
+                        $"interior transition axis distance {transition.AxisDistance:0.###} drawing units")),
+            Reliability = shell.Reliability with
+            {
+                Reasons = Union(
+                    shell.Reliability.Reasons.Append(
+                        "source-backed shell endpoint was trimmed to a room-confirmed interior wall transition"))
+            }
+        };
+    }
+
+    private static bool IsSourceBackedExteriorShellRun(
+        StructuralWallRun run) =>
+        run.WallType == WallType.Exterior
+        && run.Evidence.Any(item =>
+            item.Contains(
+                "source-backed exterior shell closure",
+                StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasTrustedInteriorRoomBoundaryEvidence(
+        StructuralWallRun run) =>
+        run.Evidence.Any(item =>
+            item.Contains(
+                "shared by room adjacency",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "detected room evidence on both sides",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "explicit room boundary support",
+                StringComparison.OrdinalIgnoreCase));
+
+    private static IReadOnlyList<StructuralWallRun> AbsorbContainedParallelShadows(
+        IReadOnlyList<StructuralWallRun> runs,
+        StructuralSolverOptions options)
+    {
+        if (runs.Count < 2)
+        {
+            return runs;
+        }
+
+        var retained = runs
+            .OrderByDescending(ParallelShadowDominance)
+            .ThenByDescending(run => run.DrawingLength)
+            .ThenBy(run => run.Id, StringComparer.Ordinal)
+            .ToList();
+        var removedIds = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var dominantIndex = 0; dominantIndex < retained.Count; dominantIndex++)
+        {
+            var dominant = retained[dominantIndex];
+            if (removedIds.Contains(dominant.Id))
+            {
+                continue;
+            }
+
+            for (var shadowIndex = dominantIndex + 1; shadowIndex < retained.Count; shadowIndex++)
+            {
+                var shadow = retained[shadowIndex];
+                if (removedIds.Contains(shadow.Id)
+                    || !IsContainedParallelShadow(dominant, shadow, options))
+                {
+                    continue;
+                }
+
+                dominant = AbsorbContainedParallelShadow(dominant, shadow);
+                retained[dominantIndex] = dominant;
+                removedIds.Add(shadow.Id);
+            }
+        }
+
+        return retained
+            .Where(run => !removedIds.Contains(run.Id))
+            .OrderBy(run => run.PageNumber)
+            .ThenBy(run => run.Bounds.Y)
+            .ThenBy(run => run.Bounds.X)
+            .ThenBy(run => run.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool IsContainedParallelShadow(
+        StructuralWallRun dominant,
+        StructuralWallRun shadow,
+        StructuralSolverOptions options)
+    {
+        if (dominant.PageNumber != shadow.PageNumber
+            || dominant.DrawingLength
+                < shadow.DrawingLength * options.MinimumDominantWallLengthRatio
+            || !dominant.Reliability.ReadyForCoordinatePlacement
+            || dominant.Reliability.RequiresReview
+            || !shadow.Reliability.ReadyForCoordinatePlacement
+            || shadow.Reliability.RequiresReview
+            || !HasPhysicalWallBodyEvidence(dominant)
+            || !HasPhysicalWallBodyEvidence(shadow)
+            || !IsAxisAligned(dominant.CenterLine, options.AngleToleranceDegrees)
+            || !IsAxisAligned(shadow.CenterLine, options.AngleToleranceDegrees))
+        {
+            return false;
+        }
+
+        var angleTolerance =
+            options.AngleToleranceDegrees * Math.PI / 180.0;
+        if (!StructuralGeometry.AreParallel(
+                dominant.CenterLine,
+                shadow.CenterLine,
+                angleTolerance))
+        {
+            return false;
+        }
+
+        var direction = StructuralGeometry.UnitDirection(dominant.CenterLine);
+        var dominantRange = StructuralGeometry.ProjectionRange(
+            dominant.CenterLine,
+            direction);
+        var shadowRange = StructuralGeometry.ProjectionRange(
+            shadow.CenterLine,
+            direction);
+        var endpointTolerance = Math.Max(
+            options.EndpointTolerance,
+            options.MaximumContinuationGap);
+        var contained =
+            shadowRange.Start >= dominantRange.Start - endpointTolerance
+            && shadowRange.End <= dominantRange.End + endpointTolerance;
+        var overlapRatio = StructuralGeometry.OverlapLength(
+            dominant.CenterLine,
+            shadow.CenterLine) / Math.Max(1e-9, shadow.DrawingLength);
+        if (!contained || overlapRatio < 0.90)
+        {
+            return false;
+        }
+
+        var axisDistance = StructuralGeometry.PerpendicularDistance(
+            dominant.CenterLine,
+            shadow.CenterLine);
+        var maximumAxisDistance = Math.Min(
+            18.0,
+            Math.Max(
+                options.AxisTolerance * 4.0,
+                (dominant.Thickness + shadow.Thickness) * 1.25));
+        if (axisDistance <= options.AxisTolerance
+            || axisDistance > maximumAxisDistance)
+        {
+            return false;
+        }
+
+        var shadowHasIndependentRooms = shadow.SourceRoomIds
+            .Except(dominant.SourceRoomIds, StringComparer.Ordinal)
+            .Take(2)
+            .Count() >= 2;
+        if (shadowHasIndependentRooms)
+        {
+            return false;
+        }
+
+        var dominantHasFilledBody = HasFilledPhysicalWallBodyEvidence(dominant);
+        var shadowHasFilledBody = HasFilledPhysicalWallBodyEvidence(shadow);
+        if (dominantHasFilledBody && !shadowHasFilledBody)
+        {
+            return true;
+        }
+
+        return HasExteriorSemantics(dominant)
+            && dominant.WallType == WallType.Exterior
+            && shadow.WallType != WallType.Exterior
+            && dominant.DrawingLength >= shadow.DrawingLength * 2.0;
+    }
+
+    private static StructuralWallRun AbsorbContainedParallelShadow(
+        StructuralWallRun dominant,
+        StructuralWallRun shadow)
+    {
+        var leaves = new[] { dominant, shadow };
+        var candidateIds = Union(leaves.SelectMany(run => run.CandidateIds));
+        var axisDistance = StructuralGeometry.PerpendicularDistance(
+            dominant.CenterLine,
+            shadow.CenterLine);
+        var overlapRatio = StructuralGeometry.OverlapLength(
+            dominant.CenterLine,
+            shadow.CenterLine) / Math.Max(1e-9, shadow.DrawingLength);
+        var evidence = Union(
+            leaves
+                .SelectMany(run => run.Evidence)
+                .Append(
+                    "absorbed contained parallel detail shadow into dominant physical wall without moving the canonical axis")
+                .Append($"parallel shadow overlap ratio {overlapRatio:0.###}")
+                .Append($"parallel shadow axis distance {axisDistance:0.###} drawing units"));
+
+        return dominant with
+        {
+            Id = $"structural-run:{StableId(candidateIds)}",
+            Confidence = new Confidence(Math.Max(
+                dominant.Confidence.Value,
+                shadow.Confidence.Value)),
+            CandidateIds = candidateIds,
+            SourceWallIds = Union(leaves.SelectMany(run => run.SourceWallIds)),
+            SourceWallGraphEdgeIds = Union(
+                leaves.SelectMany(run => run.SourceWallGraphEdgeIds)),
+            SourcePrimitiveIds = Union(
+                leaves.SelectMany(run => run.SourcePrimitiveIds)),
+            SourceRoomIds = Union(leaves.SelectMany(run => run.SourceRoomIds)),
+            SourceOpeningIds = Union(
+                leaves.SelectMany(run => run.SourceOpeningIds)),
+            Evidence = evidence,
+            AssemblyLeafCount = leaves.Sum(run => run.AssemblyLeafCount),
+            SourceWallComponentIds = Union(
+                leaves.SelectMany(run => run.SourceWallComponentIds)),
+            Reliability = dominant.Reliability with
+            {
+                Confidence = Math.Max(
+                    dominant.Reliability.Confidence,
+                    shadow.Reliability.Confidence),
+                Reasons = Union(
+                    dominant.Reliability.Reasons.Append(
+                        "contained parallel shadow was absorbed without changing placement geometry"))
+            }
+        };
+    }
+
+    private static double ParallelShadowDominance(StructuralWallRun run) =>
+        (HasFilledPhysicalWallBodyEvidence(run) ? 4.0 : 0)
+        + (run.WallType == WallType.Exterior ? 2.0 : 0)
+        + Math.Min(2.0, run.AssemblyLeafCount * 0.5)
+        + run.Confidence.Value;
+
+    private static bool HasFilledPhysicalWallBodyEvidence(
+        StructuralWallRun run) =>
+        run.Evidence.Any(item =>
+            item.Contains(
+                "filled wall-solid primitive",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "filled closed vector wall body",
+                StringComparison.OrdinalIgnoreCase));
 
     private static bool IsAxisAligned(
         PlanLineSegment line,
@@ -785,7 +1519,22 @@ internal static class CanonicalStructuralTopologyBuilder
         double BodyGap,
         double EnvelopeDepth,
         bool HasExteriorSemantics,
-        bool HasSharedPhysicalSourceSupport);
+        bool HasSharedPhysicalSourceSupport,
+        bool HasComponentBackedStaggeredContinuation);
+
+    private sealed record SourceBackedExteriorShellBodyDuplicate(
+        StructuralWallRun Shell,
+        StructuralWallRun Body,
+        double OverlapRatio,
+        double AxisDistance,
+        double BodyGap);
+
+    private sealed record SourceBackedShellInteriorTransition(
+        StructuralWallRun InteriorRun,
+        double TransitionProjection,
+        double OverlapLength,
+        bool TrimStart,
+        double AxisDistance);
 
     private sealed record JunctionDraft(
         int PageNumber,

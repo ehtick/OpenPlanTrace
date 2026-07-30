@@ -210,7 +210,8 @@ public enum StructuralRoomLoopContext
     Unknown = 0,
     Indoor,
     Outdoor,
-    Conflicted
+    Conflicted,
+    FixtureLike
 }
 
 public sealed record StructuralRoomBoundaryEdge(
@@ -267,7 +268,7 @@ public sealed record StructuralEvidenceGraph(
     IReadOnlyList<string> Producers,
     IReadOnlyList<string> Evidence)
 {
-    public const string CurrentContractVersion = "openplantrace.structural-evidence.v8";
+    public const string CurrentContractVersion = "openplantrace.structural-evidence.v9";
 
     public static StructuralEvidenceGraph Empty { get; } =
         new(

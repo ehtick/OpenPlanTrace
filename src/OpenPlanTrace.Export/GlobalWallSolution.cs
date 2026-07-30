@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v15";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v16";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -1989,10 +1989,14 @@ public static partial class GlobalWallSolutionBuilder
             return false;
         }
 
-        var axisTolerance = Math.Clamp(
-            Math.Min(first.ThicknessDrawingUnits, second.ThicknessDrawingUnits) * 0.25,
-            0.75,
-            1.5);
+        var axisTolerance = ReconciledDuplicateAxisTolerance(
+            first.ThicknessDrawingUnits,
+            second.ThicknessDrawingUnits,
+            SharesSourceWall(first, second),
+            HasStructuralCoreContributor(first),
+            HasStructuralCoreContributor(second),
+            HasCleanGraphContributor(first),
+            HasCleanGraphContributor(second));
         if (Math.Abs(AxisCoordinate(first.CenterLine) - AxisCoordinate(second.CenterLine))
             > axisTolerance)
         {
@@ -2022,6 +2026,51 @@ public static partial class GlobalWallSolutionBuilder
         return overlapRatio >= 0.95
             && maximumLength >= minimumLength * 1.5;
     }
+
+    internal static double ReconciledDuplicateAxisTolerance(
+        double firstThickness,
+        double secondThickness,
+        bool sharesSourceWall,
+        bool firstHasStructuralCore,
+        bool secondHasStructuralCore,
+        bool firstHasCleanGraph,
+        bool secondHasCleanGraph)
+    {
+        var baseTolerance = Math.Clamp(
+            Math.Min(firstThickness, secondThickness) * 0.25,
+            0.75,
+            1.5);
+        var sharedSourceAcrossGraphAndStructure =
+            sharesSourceWall
+            && (firstHasStructuralCore || secondHasStructuralCore)
+            && firstHasCleanGraph != secondHasCleanGraph;
+        return sharedSourceAcrossGraphAndStructure
+            ? Math.Min(
+                8.0,
+                Math.Max(
+                    baseTolerance,
+                    ((firstThickness + secondThickness) / 2.0) + 0.75))
+            : baseTolerance;
+    }
+
+    private static bool SharesSourceWall(
+        CompactedWallRun first,
+        CompactedWallRun second)
+    {
+        var firstSourceWallIds = first.Contributors
+            .SelectMany(candidate => candidate.SourceWallIds)
+            .ToHashSet(StringComparer.Ordinal);
+        return second.Contributors
+            .SelectMany(candidate => candidate.SourceWallIds)
+            .Any(firstSourceWallIds.Contains);
+    }
+
+    private static bool HasCleanGraphContributor(CompactedWallRun run) =>
+        run.Contributors.Any(candidate =>
+            string.Equals(
+                candidate.PrimaryOrigin,
+                "CleanGraph",
+                StringComparison.Ordinal));
 
     private static CompactedWallRun MergeReconciledDuplicateRuns(
         CompactedWallRun preferred,

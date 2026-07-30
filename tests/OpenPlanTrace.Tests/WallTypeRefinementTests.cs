@@ -970,6 +970,113 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DoesNotPromoteNestedApplianceLoopBoundary()
+    {
+        var wall = new WallSegment(
+            "wall-nested-appliance-loop",
+            1,
+            new PlanLineSegment(
+                new PlanPoint(80, 70),
+                new PlanPoint(80, 110)),
+            5,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "pair score 0.9",
+                "wall type interior: supported wall evidence inside exterior envelope"
+            ]
+        };
+        var parent = Room(
+            "room-parent-kitchen",
+            RoomUseKind.Kitchen,
+            new PlanRect(0, 0, 200, 160),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(200, 0),
+                new PlanPoint(200, 160),
+                new PlanPoint(0, 160)
+            ]);
+        var fixture = new RoomRegion(
+            "room-nested-appliance-loop",
+            1,
+            new PlanRect(80, 70, 40, 40),
+            [
+                new PlanPoint(80, 70),
+                new PlanPoint(120, 70),
+                new PlanPoint(120, 110),
+                new PlanPoint(80, 110)
+            ],
+            [wall.Id],
+            Confidence.High)
+        {
+            AreaSquareMeters = 0.3
+        };
+        var context = CreateContext(
+            "nested-appliance-loop-does-not-promote-wall");
+        context.Walls.Add(wall);
+        context.Rooms.Add(parent);
+        context.Rooms.Add(fixture);
+        context.WallGraph = SupportedEndpointGraphFor(wall);
+        context.RoomAdjacencyGraph = new RoomAdjacencyGraph(
+            [
+                new RoomAdjacencyEdge(
+                    "adjacency:parent:fixture",
+                    1,
+                    parent.Id,
+                    parent.Label,
+                    fixture.Id,
+                    fixture.Label,
+                    RoomAdjacencyKind.BoundaryAdjacent,
+                    RoomAdjacencyDirection.East,
+                    RoomAdjacencyDirection.West,
+                    wall.DrawingLength,
+                    wall.CenterLine,
+                    Confidence.High,
+                    [wall.Id],
+                    Array.Empty<string>(),
+                    ["synthetic nested fixture adjacency"])
+            ],
+            Array.Empty<RoomCluster>());
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(
+            context,
+            CancellationToken.None);
+
+        var retained = Assert.Single(
+            context.WallEvidenceMap.WallAssessments);
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, retained.Category);
+        Assert.False(retained.PlacementReady);
+        Assert.True(retained.RequiresReview);
+        Assert.True(retained.RejectedAsNoise);
+        Assert.Equal(WallEvidenceDecision.Reject, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains(
+                "room-confirmed wall body promoted",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic =>
+                diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["fixtureLikeNestedRoomCount"] == "1"
+                && diagnostic.Properties[
+                    "nestedFixtureBoundaryPlacementDemotedWallCount"] == "1"
+                && diagnostic.Properties[
+                    "roomConfirmedPlacementPromotedWallCount"] == "0");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_PromotesRoomBoundaryAlignedMediumWallWithoutExplicitRoomWallIds()
     {
         var wall = new WallSegment(
@@ -5462,6 +5569,166 @@ public sealed class WallTypeRefinementTests
         Assert.Contains(
             assessment.Evidence,
             item => item.Contains("clipped around outdoor rooms room-covered-entry", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_PreservesSourceBackedShellUntilCanonicalArbitration()
+    {
+        var leftShell = ExteriorShellWall(
+            "wall-shell-left",
+            100,
+            100,
+            100,
+            180);
+        var rightShell = ExteriorShellWall(
+            "wall-shell-right",
+            420,
+            100,
+            420,
+            180);
+        var bottomShell = ExteriorShellWall(
+            "wall-shell-bottom",
+            100,
+            180,
+            420,
+            180);
+        var physicalCenterLine = new PlanLineSegment(
+            new PlanPoint(240, 104),
+            new PlanPoint(320, 104));
+        var physicalWall = new WallSegment(
+            "wall-trusted-interior-body",
+            1,
+            physicalCenterLine,
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds =
+            [
+                "wall-trusted-interior-body:face-a",
+                "wall-trusted-interior-body:face-b"
+            ],
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(
+                    new PlanPoint(240, 101),
+                    new PlanPoint(320, 101)),
+                new PlanLineSegment(
+                    new PlanPoint(240, 107),
+                    new PlanPoint(320, 107)),
+                FaceSeparation: 6,
+                OverlapRatio: 0.98,
+                Score: 0.86,
+                FirstFaceFragmentCount: 1,
+                SecondFaceFragmentCount: 1,
+                FirstFaceSourcePrimitiveIds:
+                [
+                    "wall-trusted-interior-body:face-a"
+                ],
+                SecondFaceSourcePrimitiveIds:
+                [
+                    "wall-trusted-interior-body:face-b"
+                ]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "pair score 0.86",
+                "overlap ratio 0.98",
+                "wall type refined interior: shared by room adjacency boundary"
+            ]
+        };
+        var context = CreateContext(
+            "source-backed-shell-interior-wall-clip",
+            [
+                new LinePrimitive(
+                    new PlanLineSegment(
+                        new PlanPoint(100, 100),
+                        new PlanPoint(420, 100)))
+                {
+                    SourceId = "source-shell-crossing-interior-wall",
+                    StrokeWidth = 0.05
+                }
+            ]);
+        var walls = new[]
+        {
+            leftShell,
+            rightShell,
+            bottomShell,
+            physicalWall
+        };
+        context.Walls.AddRange(walls);
+        context.Rooms.Add(Room(
+            "room-above-interior-body",
+            RoomUseKind.Office,
+            new PlanRect(220, 40, 120, 64),
+            [
+                new PlanPoint(220, 40),
+                new PlanPoint(340, 40),
+                new PlanPoint(340, 104),
+                new PlanPoint(220, 104)
+            ],
+            [physicalWall.Id]));
+        context.Rooms.Add(Room(
+            "room-below-interior-body",
+            RoomUseKind.Office,
+            new PlanRect(220, 104, 120, 80),
+            [
+                new PlanPoint(220, 104),
+                new PlanPoint(340, 104),
+                new PlanPoint(340, 184),
+                new PlanPoint(220, 184)
+            ],
+            [physicalWall.Id]));
+        context.WallGraph = GraphFor(walls);
+        context.RoomAdjacencyGraph = new RoomAdjacencyGraph(
+            [
+                new RoomAdjacencyEdge(
+                    "adjacency:room-a:room-b",
+                    1,
+                    "room-a",
+                    "Room A",
+                    "room-b",
+                    "Room B",
+                    RoomAdjacencyKind.BoundaryAdjacent,
+                    RoomAdjacencyDirection.North,
+                    RoomAdjacencyDirection.South,
+                    physicalWall.DrawingLength,
+                    physicalWall.CenterLine,
+                    Confidence.High,
+                    [physicalWall.Id],
+                    Array.Empty<string>(),
+                    ["test adjacency confirms an interior wall body"])
+            ],
+            Array.Empty<RoomCluster>());
+        context.WallEvidenceMap = EvidenceMapFor(
+            walls,
+            WallEvidenceCategory.StrongWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall => wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(
+            context,
+            CancellationToken.None);
+
+        Assert.Equal(
+            WallType.Interior,
+            Assert.Single(
+                context.Walls,
+                wall => wall.Id == physicalWall.Id).WallType);
+        var inferred = Assert.Single(
+            context.Walls,
+            wall => wall.Id.Contains(
+                "wall-exterior-shell-source-backed",
+                StringComparison.Ordinal));
+        Assert.Equal(100, inferred.CenterLine.Start.X, precision: 3);
+        Assert.Equal(420, inferred.CenterLine.End.X, precision: 3);
+        Assert.DoesNotContain(
+            inferred.Evidence,
+            item => item.Contains(
+                "clipped around trusted interior wall bodies",
+                StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

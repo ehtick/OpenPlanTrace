@@ -2,7 +2,7 @@ namespace OpenPlanTrace.Export;
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v7";
+    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v8";
 
     private const double MinimumReconciliationMovement = 0.05;
     private const double MaximumReconciliationAxisShift = 8.0;

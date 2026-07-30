@@ -127,6 +127,72 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void EvidenceGraph_KeepsVeryShortLowScorePairReviewOnly()
+    {
+        var wall = Wall(
+            "review-only-appliance-return",
+            new PlanLineSegment(new PlanPoint(80, 40), new PlanPoint(80, 68)),
+            Confidence.High) with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            PairEvidence = new WallPairEvidence(
+                new PlanLineSegment(new PlanPoint(77, 40), new PlanPoint(77, 68)),
+                new PlanLineSegment(new PlanPoint(83, 40), new PlanPoint(83, 68)),
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.775,
+                FirstFaceFragmentCount: 4,
+                SecondFaceFragmentCount: 4,
+                FirstFaceSourcePrimitiveIds: ["fixture-face-a"],
+                SecondFaceSourcePrimitiveIds: ["fixture-face-b"]),
+            SourcePrimitiveIds = ["fixture-face-a", "fixture-face-b"],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "wall evidence: very short unlayered parallel-face candidate has low pair score 0.775; keep for topology but block exact placement until reviewed"
+            ]
+        };
+        var assessment = new WallEvidenceWallAssessment(
+            wall.Id,
+            wall.PageNumber,
+            wall.Bounds,
+            WallEvidenceCategory.MediumWallBody,
+            wall.Confidence,
+            PlacementReady: false,
+            RequiresReview: true,
+            RejectedAsNoise: false,
+            wall.SourcePrimitiveIds,
+            wall.Evidence)
+        {
+            Decision = WallEvidenceDecision.Review
+        };
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                acceptedWalls: [wall],
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [assessment],
+                    SourceCandidateWallCount: 1)));
+        var solution = JointStructuralSolver.Solve(graph);
+
+        var candidate = Assert.Single(
+            graph.WallCandidates,
+            item => item.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.False(candidate.HasIndependentWallBodyEvidence);
+        Assert.Contains(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.ReviewWall
+                && signal.Weight <= -0.30);
+        Assert.DoesNotContain(
+            solution.WallRuns,
+            run => run.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal)
+                && run.Reliability.ReadyForCoordinatePlacement);
+    }
+
+    [Fact]
     public void EvidenceGraph_RejectsWallSharingDetectedDimensionPrimitiveFamily()
     {
         var wall = Wall(
@@ -1433,6 +1499,157 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void EvidenceGraph_RejectsNestedUnlabeledApplianceLoopWalls()
+    {
+        var fixtureWalls = new[]
+        {
+            Wall(
+                "fixture-top",
+                new PlanLineSegment(
+                    new PlanPoint(60, 50),
+                    new PlanPoint(100, 50)),
+                Confidence.High),
+            Wall(
+                "fixture-right",
+                new PlanLineSegment(
+                    new PlanPoint(100, 50),
+                    new PlanPoint(100, 80)),
+                Confidence.High),
+            Wall(
+                "fixture-bottom",
+                new PlanLineSegment(
+                    new PlanPoint(60, 80),
+                    new PlanPoint(100, 80)),
+                Confidence.High),
+            Wall(
+                "fixture-left",
+                new PlanLineSegment(
+                    new PlanPoint(60, 50),
+                    new PlanPoint(60, 80)),
+                Confidence.High)
+        }
+        .Select(wall => wall with
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            Evidence = ["parallel wall-face pair", "pair score 0.9"]
+        })
+        .ToArray();
+        var parent = Room(
+            "parent-kitchen",
+            new PlanRect(0, 0, 200, 160),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(200, 0),
+                new PlanPoint(200, 160),
+                new PlanPoint(0, 160)
+            ]);
+        var fixture = new RoomRegion(
+            "nested-unlabeled-fixture-loop",
+            1,
+            new PlanRect(60, 50, 40, 30),
+            [
+                new PlanPoint(60, 50),
+                new PlanPoint(100, 50),
+                new PlanPoint(100, 80),
+                new PlanPoint(60, 80)
+            ],
+            fixtureWalls.Select(wall => wall.Id).ToArray(),
+            Confidence.High)
+        {
+            AreaSquareMeters = 0.24
+        };
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: fixtureWalls,
+                acceptedWalls: fixtureWalls,
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    fixtureWalls
+                        .Select(wall => AcceptedAssessment(
+                            wall,
+                            WallEvidenceCategory.StrongWallBody))
+                        .ToArray(),
+                    SourceCandidateWallCount: fixtureWalls.Length),
+                rooms: [parent, fixture]));
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.DoesNotContain(
+            graph.RoomLoops,
+            loop => loop.SourceRoomId == fixture.Id);
+        var fixtureCandidates = graph.WallCandidates
+            .Where(candidate => candidate.SourceWallIds.Any(id =>
+                fixtureWalls.Any(wall => string.Equals(
+                    wall.Id,
+                    id,
+                    StringComparison.Ordinal))))
+            .ToArray();
+        Assert.Equal(4, fixtureCandidates.Length);
+        Assert.All(
+            fixtureCandidates,
+            candidate => Assert.Contains(
+                candidate.Signals,
+                signal =>
+                    signal.Kind == StructuralEvidenceSignalKind.ObjectOrFixture
+                    && signal.Weight <= -1));
+        Assert.DoesNotContain(
+            solution.WallRuns,
+            run => run.SourceWallIds.Any(id =>
+                fixtureWalls.Any(wall => string.Equals(
+                    wall.Id,
+                    id,
+                    StringComparison.Ordinal))));
+    }
+
+    [Fact]
+    public void EvidenceGraph_PreservesNestedSmallRoomWithSemanticIdentity()
+    {
+        var parent = Room(
+            "parent-office",
+            new PlanRect(0, 0, 200, 160),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(200, 0),
+                new PlanPoint(200, 160),
+                new PlanPoint(0, 160)
+            ]);
+        var restroom = new RoomRegion(
+            "small-restroom",
+            1,
+            new PlanRect(60, 50, 40, 30),
+            [
+                new PlanPoint(60, 50),
+                new PlanPoint(100, 50),
+                new PlanPoint(100, 80),
+                new PlanPoint(60, 80)
+            ],
+            Array.Empty<string>(),
+            Confidence.High)
+        {
+            Label = "WC",
+            UseKind = RoomUseKind.Restroom,
+            AreaSquareMeters = 0.9
+        };
+
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(rooms: [parent, restroom]));
+
+        Assert.Equal(
+            StructuralRoomLoopContext.Indoor,
+            Assert.Single(
+                graph.RoomLoops,
+                loop => loop.SourceRoomId == restroom.Id).Context);
+        Assert.DoesNotContain(
+            graph.WallCandidates.SelectMany(candidate => candidate.Signals),
+            signal => signal.Kind == StructuralEvidenceSignalKind.ObjectOrFixture
+                && string.Equals(
+                    signal.SourceId,
+                    restroom.Id,
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void JointSolver_MarksStrongWallBodyReadyDespiteLegacyRepresentationBookkeeping()
     {
         var wall = Wall(
@@ -1894,6 +2111,445 @@ public sealed class JointStructuralSolverTests
             item => item.Contains(
                 "resolved shared-source physical wall assembly",
                 StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_ResolvesPartiallyOverlappingSharedWallLeavesAsAssembly()
+    {
+        var first = Candidate(
+            "shared-wall-first",
+            new PlanLineSegment(
+                new PlanPoint(0, 100),
+                new PlanPoint(130, 100)),
+            unaryScore: 0.90) with
+        {
+            SourceWallIds = ["wall:shared-physical-body"],
+            SourceWallComponentIds = ["component:shared-physical-body"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var second = Candidate(
+            "shared-wall-second",
+            new PlanLineSegment(
+                new PlanPoint(50, 105),
+                new PlanPoint(270, 105)),
+            unaryScore: 0.90) with
+        {
+            SourceWallIds = ["wall:shared-physical-body"],
+            SourceWallComponentIds = ["component:shared-physical-body"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var graph = Graph(
+            new[] { first, second },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        var run = Assert.Single(solution.WallRuns);
+        Assert.Equal(2, run.AssemblyLeafCount);
+        Assert.Equal(102.5, run.CenterLine.Start.Y, precision: 6);
+        Assert.Equal(102.5, run.CenterLine.End.Y, precision: 6);
+        Assert.Equal(9, run.Thickness, precision: 6);
+        Assert.Equal(
+            new[] { first.Id, second.Id }.Order(StringComparer.Ordinal),
+            run.CandidateIds);
+    }
+
+    [Fact]
+    public void CanonicalTopology_ResolvesComponentBackedStaggeredWallContinuation()
+    {
+        var first = Candidate(
+            "staggered-wall-first",
+            new PlanLineSegment(
+                new PlanPoint(0, 100),
+                new PlanPoint(130, 100)),
+            unaryScore: 0.90) with
+        {
+            SourceWallComponentIds = ["component:staggered-wall"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var second = Candidate(
+            "staggered-wall-second",
+            new PlanLineSegment(
+                new PlanPoint(110, 102.75),
+                new PlanPoint(270, 102.75)),
+            unaryScore: 0.90) with
+        {
+            SourceWallComponentIds = ["component:staggered-wall"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var graph = Graph(
+            new[] { first, second },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        var run = Assert.Single(solution.WallRuns);
+        Assert.Equal(2, run.AssemblyLeafCount);
+        Assert.Equal(101.375, run.CenterLine.Start.Y, precision: 6);
+        Assert.Equal(101.375, run.CenterLine.End.Y, precision: 6);
+        Assert.Equal(6.75, run.Thickness, precision: 6);
+        Assert.Equal(270, run.DrawingLength, precision: 6);
+        Assert.Contains(
+            run.Evidence,
+            item => item.Contains(
+                "resolved staggered physical wall continuation",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_ReconcilesSourceBackedShellWithPhysicalExteriorBody()
+    {
+        var shell = Candidate(
+            "source-backed-shell-duplicate",
+            new PlanLineSegment(
+                new PlanPoint(20, 100),
+                new PlanPoint(220, 100)),
+            unaryScore: 0.92) with
+        {
+            WallType = WallType.Exterior,
+            Origins =
+                StructuralCandidateOrigin.RecoveredWall
+                | StructuralCandidateOrigin.ExteriorShell,
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.RecoveredWallBody, 0.24),
+                Signal(StructuralEvidenceSignalKind.ExteriorShell, 0.16)
+            ],
+            Evidence =
+            [
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors"
+            ]
+        };
+        var body = Candidate(
+            "filled-exterior-body",
+            new PlanLineSegment(
+                new PlanPoint(0, 105.75),
+                new PlanPoint(180, 105.75)),
+            unaryScore: 0.94) with
+        {
+            Thickness = 6,
+            WallType = WallType.Exterior,
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.38)
+            ],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall type exterior: source-backed shell"
+            ]
+        };
+        var graph = Graph(
+            new[] { shell, body },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        var run = Assert.Single(solution.WallRuns);
+        Assert.Equal(WallType.Exterior, run.WallType);
+        Assert.Equal(0, run.CenterLine.Start.X, precision: 6);
+        Assert.Equal(220, run.CenterLine.End.X, precision: 6);
+        Assert.Equal(105.75, run.CenterLine.Start.Y, precision: 6);
+        Assert.Equal(105.75, run.CenterLine.End.Y, precision: 6);
+        Assert.Equal(6, run.Thickness, precision: 6);
+        Assert.Equal(2, run.AssemblyLeafCount);
+        Assert.Equal(
+            new[] { body.Id, shell.Id }.Order(StringComparer.Ordinal),
+            run.CandidateIds);
+        Assert.Contains(
+            run.Evidence,
+            item => item.Contains(
+                "reconciled source-backed exterior shell",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_PreservesSeparatedSourceBackedShellAndExteriorBody()
+    {
+        var shell = Candidate(
+            "source-backed-shell-separated",
+            new PlanLineSegment(
+                new PlanPoint(20, 100),
+                new PlanPoint(220, 100)),
+            unaryScore: 0.92) with
+        {
+            WallType = WallType.Exterior,
+            Origins =
+                StructuralCandidateOrigin.RecoveredWall
+                | StructuralCandidateOrigin.ExteriorShell,
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.RecoveredWallBody, 0.24),
+                Signal(StructuralEvidenceSignalKind.ExteriorShell, 0.16)
+            ],
+            Evidence =
+            [
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors"
+            ]
+        };
+        var body = Candidate(
+            "filled-exterior-body-separated",
+            new PlanLineSegment(
+                new PlanPoint(0, 120),
+                new PlanPoint(180, 120)),
+            unaryScore: 0.94) with
+        {
+            Thickness = 6,
+            WallType = WallType.Exterior,
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.38)
+            ],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall type exterior: source-backed shell"
+            ]
+        };
+        var graph = Graph(
+            new[] { shell, body },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(2, solution.WallRuns.Count);
+        Assert.DoesNotContain(
+            solution.WallRuns.SelectMany(run => run.Evidence),
+            item => item.Contains(
+                "reconciled source-backed exterior shell",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_TrimsSourceBackedShellAtTrustedInteriorTransition()
+    {
+        var shell = Candidate(
+            "source-backed-shell-transition",
+            new PlanLineSegment(
+                new PlanPoint(0, 100),
+                new PlanPoint(350, 100)),
+            unaryScore: 0.92) with
+        {
+            WallType = WallType.Exterior,
+            Evidence =
+            [
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors"
+            ]
+        };
+        var interior = Candidate(
+            "trusted-interior-transition",
+            new PlanLineSegment(
+                new PlanPoint(145, 104.5),
+                new PlanPoint(400, 104.5)),
+            unaryScore: 0.92) with
+        {
+            SourceRoomIds = ["room:north", "room:south"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall type refined interior: shared by room adjacency boundary"
+            ]
+        };
+        var graph = Graph(
+            new[] { shell, interior },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(2, solution.WallRuns.Count);
+        var exteriorRun = Assert.Single(
+            solution.WallRuns,
+            run => run.WallType == WallType.Exterior);
+        var interiorRun = Assert.Single(
+            solution.WallRuns,
+            run => run.WallType == WallType.Interior);
+        Assert.Equal(0, exteriorRun.CenterLine.Start.X, precision: 6);
+        Assert.Equal(145, exteriorRun.CenterLine.End.X, precision: 6);
+        Assert.Equal(145, interiorRun.CenterLine.Start.X, precision: 6);
+        Assert.Equal(400, interiorRun.CenterLine.End.X, precision: 6);
+        Assert.Contains(
+            exteriorRun.Evidence,
+            item => item.Contains(
+                "trimmed source-backed exterior shell overlap",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_PreservesOffsetSourceBackedShell()
+    {
+        var shell = Candidate(
+            "offset-source-backed-shell",
+            new PlanLineSegment(
+                new PlanPoint(0, 100),
+                new PlanPoint(350, 100)),
+            unaryScore: 0.92) with
+        {
+            WallType = WallType.Exterior,
+            Evidence =
+            [
+                "wall evidence: source-backed exterior shell closure recovered from long PDF line with shell anchors"
+            ]
+        };
+        var interior = Candidate(
+            "offset-interior-wall",
+            new PlanLineSegment(
+                new PlanPoint(145, 114),
+                new PlanPoint(400, 114)),
+            unaryScore: 0.92) with
+        {
+            SourceRoomIds = ["room:north", "room:south"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "wall type refined interior: shared by room adjacency boundary"
+            ]
+        };
+        var graph = Graph(
+            new[] { shell, interior },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(2, solution.WallRuns.Count);
+        var exteriorRun = Assert.Single(
+            solution.WallRuns,
+            run => run.WallType == WallType.Exterior);
+        Assert.Equal(0, exteriorRun.CenterLine.Start.X, precision: 6);
+        Assert.Equal(350, exteriorRun.CenterLine.End.X, precision: 6);
+        Assert.DoesNotContain(
+            exteriorRun.Evidence,
+            item => item.Contains(
+                "trimmed source-backed exterior shell overlap",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_AbsorbsContainedParallelShadowWithoutMovingWallAxis()
+    {
+        var dominant = Candidate(
+            "filled-dominant-wall",
+            new PlanLineSegment(
+                new PlanPoint(0, 100),
+                new PlanPoint(220, 100)),
+            unaryScore: 0.92) with
+        {
+            SourceWallComponentIds = ["component:dominant"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var shadow = Candidate(
+            "contained-detail-shadow",
+            new PlanLineSegment(
+                new PlanPoint(45, 109),
+                new PlanPoint(105, 109)),
+            unaryScore: 0.86) with
+        {
+            SourceWallComponentIds = ["component:detail-shadow"],
+            SourceOpeningIds = ["opening:shadow-host"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.31)
+            ],
+            Evidence = ["parallel wall-face pair"]
+        };
+        var graph = Graph(
+            new[] { dominant, shadow },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        var run = Assert.Single(solution.WallRuns);
+        Assert.Equal(100, run.CenterLine.Start.Y, precision: 6);
+        Assert.Equal(100, run.CenterLine.End.Y, precision: 6);
+        Assert.Equal(220, run.DrawingLength, precision: 6);
+        Assert.Equal(2, run.AssemblyLeafCount);
+        Assert.Contains("opening:shadow-host", run.SourceOpeningIds);
+        Assert.Contains(
+            run.Evidence,
+            item => item.Contains(
+                "absorbed contained parallel detail shadow",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CanonicalTopology_PreservesContainedIndependentRoomBoundaryWall()
+    {
+        var dominant = Candidate(
+            "parallel-room-dominant",
+            new PlanLineSegment(
+                new PlanPoint(0, 100),
+                new PlanPoint(220, 100)),
+            unaryScore: 0.92) with
+        {
+            SourceWallComponentIds = ["component:dominant-room-wall"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var independent = Candidate(
+            "parallel-independent-room-wall",
+            new PlanLineSegment(
+                new PlanPoint(45, 109),
+                new PlanPoint(105, 109)),
+            unaryScore: 0.90) with
+        {
+            SourceWallComponentIds = ["component:independent-room-wall"],
+            SourceRoomIds = ["room:left", "room:right"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36)
+            ],
+            Evidence = ["parallel wall-face pair", "filled wall-solid primitive"]
+        };
+        var graph = Graph(
+            new[] { dominant, independent },
+            Array.Empty<StructuralEvidenceRelation>());
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(2, solution.WallRuns.Count);
+        Assert.All(solution.WallRuns, run => Assert.Equal(1, run.AssemblyLeafCount));
     }
 
     [Fact]
