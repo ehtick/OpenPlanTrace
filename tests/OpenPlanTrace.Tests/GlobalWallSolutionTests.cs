@@ -2604,6 +2604,137 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task StructuralCore_RetainsTrustedRecoveredPairedContinuationExtent()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var trusted = HostWallFragment(
+            templateWall,
+            "trusted-lower-wall-body",
+            new LineExport(
+                new PointExport(250, 155.7),
+                new PointExport(250, 395.9))) with
+        {
+            WallComponentId = "main-structural-component",
+            WallComponentKind = "MainStructural"
+        };
+        var recovered = HostWallFragment(
+            templateWall,
+            "recovered-upper-wall-body",
+            new LineExport(
+                new PointExport(250, 103.1),
+                new PointExport(250, 153.5))) with
+        {
+            DetectionKind = "ParallelLinePair",
+            WallComponentId = trusted.WallComponentId,
+            WallComponentKind = trusted.WallComponentKind,
+            Confidence = 0.876,
+            Reliability = new PlacementReliabilityExport(
+                ReadyForCoordinatePlacement: false,
+                ReadyForMetricPlacement: false,
+                RequiresReview: true,
+                Confidence: 0.876,
+                Reasons:
+                [
+                    "wall evidence requires review",
+                    "wall omitted from clean placement topology (duplicate_wall_face)"
+                ]),
+            PlacementOmission = new PlacementWallOmissionExport(
+                Code: "duplicate_wall_face",
+                Category: "DuplicateWallFace",
+                Message: "Earlier geometry classified this wall as a duplicate.",
+                RecommendedAction: "Use synchronized geometry to verify the relationship.",
+                LinkedWallIds: [trusted.Id],
+                RepairCandidateIds: Array.Empty<string>(),
+                Evidence:
+                [
+                    $"recovered duplicate wall body already represented by {trusted.Id}"
+                ]),
+            EvidenceAssessment = new WallEvidenceAssessmentExport(
+                Category: "MediumWallBody",
+                Confidence: 0.876,
+                PlacementReady: false,
+                RequiresReview: true,
+                RejectedAsNoise: false,
+                ScoreBreakdown: new WallEvidenceScoreBreakdownExport(
+                    PositiveScore: 0.9,
+                    NegativeScore: 0,
+                    DecisionScore: 0.9,
+                    PairSupportScore: 0.5,
+                    LayerSupportScore: 0,
+                    StructuralSupportScore: 0.2,
+                    RecoverySupportScore: 0.2,
+                    NoisePenalty: 0,
+                    FragmentReviewPenalty: 0,
+                    PositiveEvidence:
+                    [
+                        "strong parallel-face wall pair",
+                        "both endpoints supported by structural context",
+                        "missing-wall recovery evidence"
+                    ],
+                    NegativeEvidence:
+                    [
+                        "not placement-ready without review"
+                    ]),
+                SourcePrimitiveIds: ["recovered-upper-wall-body"],
+                Evidence:
+                [
+                    "recovered by wall evidence map from unclaimed parallel wall-face evidence"
+                ]),
+            Evidence = Enumerable.Range(0, 64)
+                .Select(index => $"recovered wall source provenance {index:00}")
+                .Concat(
+                [
+                    "recovered by wall evidence map from unclaimed parallel wall-face evidence",
+                    "parallel wall-face pair",
+                    "room boundary",
+                    "main structural wall body"
+                ])
+                .ToArray()
+        };
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [trusted]);
+        var runTemplate = structural.WallRuns[0];
+        structural = structural with
+        {
+            WallRuns =
+            [
+                runTemplate with
+                {
+                    CenterLine = new PlanLineSegment(
+                        new PlanPoint(250, 103.1),
+                        new PlanPoint(250, 395.9)),
+                    SourceWallIds = [trusted.Id, recovered.Id],
+                    SourcePrimitiveIds = trusted.SourcePrimitiveIds
+                        .Concat(recovered.SourcePrimitiveIds)
+                        .ToArray()
+                }
+            ]
+        };
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [trusted, recovered],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var run = Assert.Single(solutions.SelectedWallRuns);
+        Assert.Equal(103.1, Math.Min(run.CenterLine.Start.Y, run.CenterLine.End.Y), 6);
+        Assert.Equal(395.9, Math.Max(run.CenterLine.Start.Y, run.CenterLine.End.Y), 6);
+        Assert.Equal(292.8, run.DrawingLength, 6);
+        Assert.Contains(
+            run.Evidence,
+            evidence => evidence.Contains(
+                "retained an adjacent source-backed recovered wall-body continuation",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task StructuralCore_ClipsDominantRoomHypothesisTailBeyondCleanSource()
     {
         var result = await CreateScanResultAsync();

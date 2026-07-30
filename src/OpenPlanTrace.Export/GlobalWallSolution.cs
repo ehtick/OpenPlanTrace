@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v16";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v17";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -692,6 +692,12 @@ public static partial class GlobalWallSolutionBuilder
                             "canonical structural run extent clipped to coordinate-ready source-wall support; unsupported structural-hypothesis tails remain provenance"
                         }
                         : Array.Empty<string>())
+                    .Concat(sourceAwareGeometry.RetainedRecoveredContinuation
+                        ? new[]
+                        {
+                            "canonical structural run extent retained an adjacent source-backed recovered wall-body continuation after synchronized geometry disproved the earlier duplicate classification"
+                        }
+                        : Array.Empty<string>())
                     .Append($"selected by {structuralSolution.SolverVersion}")
                     .Append("canonical structural run supplied by core interpretation")
                     .Distinct(StringComparer.Ordinal)
@@ -741,14 +747,18 @@ public static partial class GlobalWallSolutionBuilder
             .ToArray();
     }
 
-    private static (LineExport CenterLine, bool Trimmed) ResolveStructuralSourceAwareGeometry(
+    private static (
+        LineExport CenterLine,
+        bool Trimmed,
+        bool RetainedRecoveredContinuation)
+        ResolveStructuralSourceAwareGeometry(
         LineExport centerLine,
         double thickness,
         IReadOnlyList<PlacementWallExport> sourceWalls)
     {
         if (Orientation(centerLine) == WallOrientation.Diagonal)
         {
-            return (centerLine, false);
+            return (centerLine, false, false);
         }
 
         var cleanSources = sourceWalls
@@ -760,23 +770,38 @@ public static partial class GlobalWallSolutionBuilder
                 && LineDistance(wall.CenterLine, centerLine)
                     <= Math.Max(3.0, thickness))
             .ToArray();
-        var hasReviewOnlySource = sourceWalls.Any(wall =>
-            !wall.Reliability.ReadyForCoordinatePlacement
-            || wall.Reliability.CoordinatePlacementBlocked
-            || WallRequiresSolverReview(wall));
         if (cleanSources.Length == 0)
         {
-            return (centerLine, false);
+            return (centerLine, false, false);
         }
 
+        var recoveredContinuationSources = sourceWalls
+            .Where(wall => IsTrustedRecoveredExtentContinuation(
+                wall,
+                centerLine,
+                thickness,
+                cleanSources))
+            .ToArray();
+        var recoveredContinuationIds = recoveredContinuationSources
+            .Select(wall => wall.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        var extentSources = cleanSources
+            .Concat(recoveredContinuationSources)
+            .DistinctBy(wall => wall.Id, StringComparer.Ordinal)
+            .ToArray();
+        var hasReviewOnlySource = sourceWalls.Any(wall =>
+            (!wall.Reliability.ReadyForCoordinatePlacement
+                || wall.Reliability.CoordinatePlacementBlocked
+                || WallRequiresSolverReview(wall))
+            && !recoveredContinuationIds.Contains(wall.Id));
         var originalStart = IntervalStart(centerLine);
         var originalEnd = IntervalEnd(centerLine);
         var supportedStart = Math.Max(
             originalStart,
-            cleanSources.Min(wall => IntervalStart(wall.CenterLine)));
+            extentSources.Min(wall => IntervalStart(wall.CenterLine)));
         var supportedEnd = Math.Min(
             originalEnd,
-            cleanSources.Max(wall => IntervalEnd(wall.CenterLine)));
+            extentSources.Max(wall => IntervalEnd(wall.CenterLine)));
         var originalLength = originalEnd - originalStart;
         var supportedLength = supportedEnd - supportedStart;
         var hasDominantUnbackedTail =
@@ -786,7 +811,10 @@ public static partial class GlobalWallSolutionBuilder
                 >= Math.Max(12.0, Math.Max(1.0, thickness) * 4.0);
         if (!hasReviewOnlySource && !hasDominantUnbackedTail)
         {
-            return (centerLine, false);
+            return (
+                centerLine,
+                false,
+                recoveredContinuationSources.Length > 0);
         }
 
         if (supportedLength <= 0
@@ -794,7 +822,10 @@ public static partial class GlobalWallSolutionBuilder
             || (supportedStart - originalStart < 1.0
                 && originalEnd - supportedEnd < 1.0))
         {
-            return (centerLine, false);
+            return (
+                centerLine,
+                false,
+                recoveredContinuationSources.Length > 0);
         }
 
         var axis = AxisCoordinate(centerLine);
@@ -805,7 +836,125 @@ public static partial class GlobalWallSolutionBuilder
             : new LineExport(
                 new PointExport(axis, supportedStart),
                 new PointExport(axis, supportedEnd));
-        return (trimmed, true);
+        return (
+            trimmed,
+            true,
+            recoveredContinuationSources.Length > 0);
+    }
+
+    private static bool IsTrustedRecoveredExtentContinuation(
+        PlacementWallExport wall,
+        LineExport structuralCenterLine,
+        double structuralThickness,
+        IReadOnlyList<PlacementWallExport> cleanSources)
+    {
+        var assessment = wall.EvidenceAssessment;
+        var omission = wall.PlacementOmission;
+        if (wall.Reliability.ReadyForCoordinatePlacement
+            && !wall.Reliability.CoordinatePlacementBlocked
+            && !WallRequiresSolverReview(wall))
+        {
+            return false;
+        }
+
+        if (wall.ExcludedFromStructuralTopology
+            || wall.Reliability.CoordinatePlacementBlocked
+            || !string.Equals(
+                wall.DetectionKind,
+                "ParallelLinePair",
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(
+                wall.WallComponentKind,
+                "MainStructural",
+                StringComparison.OrdinalIgnoreCase)
+            || wall.Confidence < 0.80
+            || assessment is null
+            || assessment.Confidence < 0.80
+            || assessment.RejectedAsNoise
+            || assessment.ScoreBreakdown.PairSupportScore < 0.45
+            || assessment.ScoreBreakdown.StructuralSupportScore < 0.15
+            || assessment.ScoreBreakdown.RecoverySupportScore < 0.15
+            || assessment.ScoreBreakdown.NegativeScore > 0.01
+            || assessment.ScoreBreakdown.NoisePenalty > 0.01
+            || !assessment.ScoreBreakdown.PositiveEvidence.Any(item =>
+                item.Contains(
+                    "both endpoints supported by structural context",
+                    StringComparison.OrdinalIgnoreCase))
+            || omission is null
+            || !string.Equals(
+                omission.Code,
+                "duplicate_wall_face",
+                StringComparison.OrdinalIgnoreCase)
+            || Orientation(wall.CenterLine) == WallOrientation.Diagonal
+            || !SameOrientation(wall.CenterLine, structuralCenterLine)
+            || LineDistance(wall.CenterLine, structuralCenterLine)
+                > Math.Max(3.0, structuralThickness)
+            || HasStrongNegativeEvidence(
+                wall.Evidence
+                    .Concat(assessment.Evidence)
+                    .Concat(wall.Reliability.Reasons)
+                    .ToArray()))
+        {
+            return false;
+        }
+
+        var linkedCleanSource = cleanSources
+            .Where(source => omission.LinkedWallIds.Contains(
+                source.Id,
+                StringComparer.Ordinal))
+            .Where(source => SameOrientation(source.CenterLine, wall.CenterLine))
+            .Where(source => CompatibleWallTypes(source.WallType, wall.WallType))
+            .Where(source =>
+                !string.IsNullOrWhiteSpace(wall.WallComponentId)
+                && string.Equals(
+                    source.WallComponentId,
+                    wall.WallComponentId,
+                    StringComparison.Ordinal))
+            .OrderBy(source => ProjectedIntervalGap(
+                source.CenterLine,
+                wall.CenterLine))
+            .FirstOrDefault();
+        if (linkedCleanSource is null)
+        {
+            return false;
+        }
+
+        var overlap = ProjectedOverlapLength(
+            linkedCleanSource.CenterLine,
+            wall.CenterLine);
+        var minimumLength = Math.Min(
+            linkedCleanSource.DrawingLength,
+            wall.DrawingLength);
+        if (minimumLength <= 0
+            || overlap / minimumLength > 0.20)
+        {
+            return false;
+        }
+
+        var maximumContinuationGap = Math.Max(
+            IntervalMergeGap,
+            Math.Min(
+                linkedCleanSource.ThicknessDrawingUnits,
+                wall.ThicknessDrawingUnits));
+        return ProjectedIntervalGap(
+                linkedCleanSource.CenterLine,
+                wall.CenterLine)
+            <= maximumContinuationGap;
+    }
+
+    private static double ProjectedIntervalGap(
+        LineExport first,
+        LineExport second)
+    {
+        var firstStart = IntervalStart(first);
+        var firstEnd = IntervalEnd(first);
+        var secondStart = IntervalStart(second);
+        var secondEnd = IntervalEnd(second);
+        return secondStart > firstEnd
+            ? secondStart - firstEnd
+            : firstStart > secondEnd
+                ? firstStart - secondEnd
+                : 0;
     }
 
     private static SolvedHypothesis? BuildStructuralCoreHypothesis(
@@ -1863,6 +2012,13 @@ public static partial class GlobalWallSolutionBuilder
                 openingIntervals);
             var solidDrawingLength = solidIntervals.Sum(interval => interval.DrawingLength);
             var openingDrawingLength = Math.Max(0, drawingLength - solidDrawingLength);
+            var canonicalExtentEvidence = run.Contributors
+                .SelectMany(candidate => candidate.Evidence)
+                .Where(item => item.StartsWith(
+                    "canonical structural run extent",
+                    StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
             var evidence = new[]
                 {
                     $"global wall solver compacted {candidateIds.Length} selected candidate(s)",
@@ -1880,6 +2036,7 @@ public static partial class GlobalWallSolutionBuilder
                     $"wall evidence reconciliation status {reconciliation.Status}",
                     $"wall evidence reconciliation confidence {reconciliation.Confidence:0.###}"
                 }
+                .Concat(canonicalExtentEvidence)
                 .Concat(run.Contributors.SelectMany(candidate => candidate.Evidence))
                 .Concat(reconciliation.Evidence)
                 .Distinct(StringComparer.Ordinal)
