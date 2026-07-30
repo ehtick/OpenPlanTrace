@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v19";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v20";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -275,6 +275,8 @@ public static partial class GlobalWallSolutionBuilder
     private const double MinimumConsensusSourceBackedRecallScore = 0.90;
     private const double MinimumConsensusRecallUncoveredLength = 24.0;
     private const double MinimumConsensusRecallUncoveredThicknessMultiple = 4.0;
+    private const double MinimumStructuralBridgeRecallScore = 0.44;
+    private const int MaximumStructuralBridgeRecallPassCount = 2;
     private const double MinimumMajorRecallGain = 0.010;
     private const double MinimumStructuralOverrideScoreGain = 0.006;
     private const double MinimumStructuralOverrideNoiseReduction = 0.010;
@@ -344,6 +346,10 @@ public static partial class GlobalWallSolutionBuilder
         "excluded, unanchored wall-graph island",
         "belongs only to excluded",
         "outdoor or conflicted room context cannot promote",
+        "objectorfixturedetail",
+        "opening-clearance rectangle",
+        "parallel offset detail shadow",
+        "shadowed by stronger parallel wall",
         "rejected as noise"
     ];
 
@@ -484,7 +490,8 @@ public static partial class GlobalWallSolutionBuilder
                 .ToArray(),
             candidates,
             rooms,
-            openings);
+            openings,
+            selected.TrustedCoordinateRecoveredCandidateIds);
         var selectedRuns = solvedRuns.Runs;
         var hypothesisExports = solved
             .Select(hypothesis => hypothesis.Export(
@@ -547,7 +554,7 @@ public static partial class GlobalWallSolutionBuilder
                 $"global solver compared {solved.Length} deterministic wall graph hypotheses",
                 structuralHypothesis is null
                     ? "legacy wall hypotheses selected the canonical candidate set"
-                    : $"joint structural core proposed {structuralHypothesis.InitialCandidateCount} canonical candidate(s) and recovered {structuralHypothesis.RecoveredCandidateCount} unanimous recall candidate(s)",
+                    : $"joint structural core proposed {structuralHypothesis.InitialCandidateCount} canonical candidate(s) and recovered {structuralHypothesis.RecoveredCandidateCount} guarded recall candidate(s)",
                 structuralHypothesis is null
                     ? "no joint structural hypothesis was available for guarded arbitration"
                     : string.Equals(selected.Id, structuralHypothesis.Id, StringComparison.Ordinal)
@@ -1005,13 +1012,24 @@ public static partial class GlobalWallSolutionBuilder
         }
 
         var withheldReviewCount = structuralIds.Count - selectedIds.Count;
-        var recovered = SelectConsensusRecallCandidates(
+        var consensusRecovered = SelectConsensusRecallCandidates(
             legacyHypotheses,
             candidates,
             selectedIds,
             rooms,
             openings);
-        selectedIds.UnionWith(recovered.Select(candidate => candidate.Id));
+        selectedIds.UnionWith(consensusRecovered.Select(candidate => candidate.Id));
+        var bridgeRecovered = SelectStructuralBridgeRecallCandidates(
+            candidates,
+            selectedIds,
+            rooms,
+            openings);
+        selectedIds.UnionWith(bridgeRecovered.Select(candidate => candidate.Id));
+        var recoveredCount = consensusRecovered
+            .Concat(bridgeRecovered)
+            .Select(candidate => candidate.Id)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
         var metrics = Evaluate(selectedIds, candidates, rooms, openings);
         var profile = new WallSolverProfile(
             "joint-structural",
@@ -1026,8 +1044,12 @@ public static partial class GlobalWallSolutionBuilder
             structuralSolution.Metrics.OptimizationPassCount,
             structuralIds.Count,
             selectedIds.Order(StringComparer.Ordinal).ToArray(),
-            RecoveredCandidateCount: recovered.Count,
+            RecoveredCandidateCount: recoveredCount,
             RemovedCandidateCount: withheldReviewCount,
+            TrustedCoordinateRecoveredCandidateIds: bridgeRecovered
+                .Select(candidate => candidate.Id)
+                .Order(StringComparer.Ordinal)
+                .ToArray(),
             metrics);
     }
 
@@ -1175,6 +1197,118 @@ public static partial class GlobalWallSolutionBuilder
             "TopologySpan" => 1,
             _ => 0
         };
+
+    private static IReadOnlyList<GlobalWallCandidate> SelectStructuralBridgeRecallCandidates(
+        IReadOnlyList<GlobalWallCandidate> candidates,
+        IReadOnlySet<string> selectedStructuralIds,
+        IReadOnlyList<PlacementRoomExport> rooms,
+        IReadOnlyList<PlacementOpeningExport> openings)
+    {
+        var selectedIds = selectedStructuralIds.ToHashSet(StringComparer.Ordinal);
+        var recovered = new List<GlobalWallCandidate>();
+        for (var pass = 0; pass < MaximumStructuralBridgeRecallPassCount; pass++)
+        {
+            var selectedRuns = PrepareSelectedRuns(
+                candidates.Where(candidate => selectedIds.Contains(candidate.Id)).ToArray(),
+                candidates,
+                rooms,
+                openings);
+            var passRecovered = 0;
+            foreach (var candidate in candidates
+                         .Where(candidate => !selectedIds.Contains(candidate.Id))
+                         .OrderByDescending(candidate => candidate.LocalScore)
+                         .ThenByDescending(candidate => candidate.StructuralEvidenceCount)
+                         .ThenByDescending(candidate => candidate.DrawingLength)
+                         .ThenBy(candidate => candidate.Id, StringComparer.Ordinal))
+            {
+                if (!HasStructuralBridgeRecallSupport(candidate, selectedRuns))
+                {
+                    continue;
+                }
+
+                selectedIds.Add(candidate.Id);
+                recovered.Add(candidate);
+                passRecovered++;
+                selectedRuns = PrepareSelectedRuns(
+                    candidates.Where(item => selectedIds.Contains(item.Id)).ToArray(),
+                    candidates,
+                    rooms,
+                    openings);
+            }
+
+            if (passRecovered == 0)
+            {
+                break;
+            }
+        }
+
+        return recovered
+            .OrderBy(candidate => candidate.PageNumber)
+            .ThenBy(candidate => candidate.Bounds.Y)
+            .ThenBy(candidate => candidate.Bounds.X)
+            .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool HasStructuralBridgeRecallSupport(
+        GlobalWallCandidate candidate,
+        IReadOnlyList<CompactedWallRun> selectedRuns)
+    {
+        if (!string.Equals(candidate.PrimaryOrigin, "SourceWall", StringComparison.Ordinal)
+            || candidate.ExcludedFromStructuralTopology
+            || candidate.StrongNegativeEvidence
+            || !candidate.RequiresReview
+            || candidate.LocalScore < MinimumStructuralBridgeRecallScore
+            || candidate.StructuralEvidenceCount < 1
+            || candidate.WeakNegativeEvidenceCount > 1
+            || Orientation(candidate.CenterLine) == WallOrientation.Diagonal
+            || !HasMainStructuralSourceComponent(candidate)
+            || !HasExplicitVectorWallBodyEvidence(candidate))
+        {
+            return false;
+        }
+
+        var coverage = CoverageRatio(candidate, selectedRuns);
+        if (coverage >= MaximumConsensusRecallCoverage
+            || !HasSufficientUncoveredConsensusRecallLength(
+                candidate.DrawingLength,
+                coverage,
+                candidate.ThicknessDrawingUnits))
+        {
+            return false;
+        }
+
+        var selectedEndpointSupport = CountSelectedRunEndpointSupport(
+            candidate,
+            selectedRuns);
+        return selectedEndpointSupport >= 2
+            || (selectedEndpointSupport >= 1
+                && candidate.OpeningSupportCount >= 1
+                && HasGeometricRoomBoundaryEvidence(candidate));
+    }
+
+    private static bool HasMainStructuralSourceComponent(GlobalWallCandidate candidate) =>
+        candidate.SourceWallComponents.Any(component =>
+            string.Equals(
+                component.Kind,
+                "MainStructural",
+                StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasExplicitVectorWallBodyEvidence(GlobalWallCandidate candidate)
+    {
+        var text = string.Join(" | ", candidate.Evidence).ToLowerInvariant();
+        return text.Contains("parallel wall-face pair")
+            || text.Contains("strong parallel-face wall pair")
+            || text.Contains("filled wall-solid primitive")
+            || text.Contains("filled closed vector wall body")
+            || text.Contains("merged collinear wall fragments")
+            || text.Contains("unclaimed parallel wall-face evidence");
+    }
+
+    private static bool HasGeometricRoomBoundaryEvidence(GlobalWallCandidate candidate) =>
+        candidate.Evidence.Any(evidence => evidence.Contains(
+            "geometric room boundary",
+            StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<GlobalWallCandidate> BuildCandidatePool(
         IReadOnlyList<PlacementWallExport> walls,
@@ -1695,6 +1829,7 @@ public static partial class GlobalWallSolutionBuilder
             selected.Order(StringComparer.Ordinal).ToArray(),
             recoveredCount,
             removedCount,
+            Array.Empty<string>(),
             metrics);
     }
 
@@ -1959,8 +2094,11 @@ public static partial class GlobalWallSolutionBuilder
         IReadOnlyList<GlobalWallCandidate> selected,
         IReadOnlyList<GlobalWallCandidate> allCandidates,
         IReadOnlyList<PlacementRoomExport> rooms,
-        IReadOnlyList<PlacementOpeningExport> openings)
+        IReadOnlyList<PlacementOpeningExport> openings,
+        IReadOnlyList<string> trustedCoordinateRecoveredCandidateIds)
     {
+        var trustedCoordinateRecoveredIds = trustedCoordinateRecoveredCandidateIds
+            .ToHashSet(StringComparer.Ordinal);
         var compacted = PrepareSelectedRuns(selected, allCandidates, rooms, openings);
         var endpointClusters = BuildEndpointClusters(compacted);
         var runs = new List<PlacementSolvedWallRunExport>();
@@ -1981,13 +2119,29 @@ public static partial class GlobalWallSolutionBuilder
                 : null;
             var drawingLength = LineLength(adjustedLine);
             var bounds = BoundsFor(adjustedLine, run.ThicknessDrawingUnits);
-            var ready = run.Contributors.Any(candidate => candidate.ReadyForCoordinatePlacement);
-            var requiresReview = RunRequiresReview(run);
+            var trustedBridgeRecovery = CanPromoteRecoveredRun(
+                run.Contributors.Select(candidate => candidate.Id),
+                run.Contributors
+                    .Where(candidate => candidate.RequiresReview)
+                    .Select(candidate => candidate.Id),
+                trustedCoordinateRecoveredIds);
+            var ready = trustedBridgeRecovery
+                || run.Contributors.Any(candidate => candidate.ReadyForCoordinatePlacement);
+            var requiresReview = RunRequiresReview(run) && !trustedBridgeRecovery;
             var reliabilityReasons = run.Contributors
-                .Where(candidate => candidate.RequiresReview)
+                .Where(candidate =>
+                    candidate.RequiresReview
+                    && !trustedCoordinateRecoveredIds.Contains(candidate.Id))
                 .Select(candidate => $"candidate {candidate.Id} requires review")
-                .Concat(run.Contributors.All(candidate => OriginPriority(candidate.PrimaryOrigin) < 3)
+                .Concat(!trustedBridgeRecovery
+                    && run.Contributors.All(candidate => OriginPriority(candidate.PrimaryOrigin) < 3)
                     ? new[] { "run was recovered without a clean placement graph contributor" }
+                    : Array.Empty<string>())
+                .Concat(trustedBridgeRecovery
+                    ? new[]
+                    {
+                        "global topology promoted a source-backed MainStructural bridge with selected-run endpoint support"
+                    }
                     : Array.Empty<string>())
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
@@ -1999,7 +2153,10 @@ public static partial class GlobalWallSolutionBuilder
             var sourceLayers = run.Contributors.SelectMany(candidate => candidate.SourceLayers).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
             var reliability = new PlacementReliabilityExport(
                 ready,
-                ready && scale is > 0 && run.Contributors.Any(candidate => candidate.ReadyForMetricPlacement),
+                ready
+                    && scale is > 0
+                    && (trustedBridgeRecovery
+                        || run.Contributors.Any(candidate => candidate.ReadyForMetricPlacement)),
                 requiresReview,
                 run.Confidence,
                 reliabilityReasons);
@@ -2104,6 +2261,15 @@ public static partial class GlobalWallSolutionBuilder
             topology.Runs,
             BuildReconciliationSummary(topology.Runs),
             topology.Summary);
+    }
+
+    internal static bool CanPromoteRecoveredRun(
+        IEnumerable<string> contributorIds,
+        IEnumerable<string> reviewContributorIds,
+        IReadOnlySet<string> trustedRecoveredCandidateIds)
+    {
+        return contributorIds.Any(trustedRecoveredCandidateIds.Contains)
+            && reviewContributorIds.All(trustedRecoveredCandidateIds.Contains);
     }
 
     private static IReadOnlyList<CompactedWallRun> PrepareSelectedRuns(
@@ -2428,13 +2594,13 @@ public static partial class GlobalWallSolutionBuilder
         var constrainedEnd = end < fullEnd - 0.01;
         var contributors = constrainedStart || constrainedEnd
             ? group.Select(candidate => candidate with
-                {
-                    Evidence = candidate.Evidence
+            {
+                Evidence = candidate.Evidence
                         .Append(
                             $"canonical extent constrained to trusted support {start:0.###}-{end:0.###}; weak review-only contributors could corroborate overlap but could not extend the wall")
                         .Distinct(StringComparer.Ordinal)
                         .ToArray()
-                })
+            })
                 .ToArray()
             : group.ToArray();
         var line = orientation == WallOrientation.Horizontal
@@ -3977,6 +4143,53 @@ public static partial class GlobalWallSolutionBuilder
         return count;
     }
 
+    private static int CountSelectedRunEndpointSupport(
+        GlobalWallCandidate candidate,
+        IReadOnlyList<CompactedWallRun> runs)
+    {
+        var count = 0;
+        if (EndpointSupportedBySelectedRun(candidate, candidate.CenterLine.Start, runs))
+        {
+            count++;
+        }
+
+        if (EndpointSupportedBySelectedRun(candidate, candidate.CenterLine.End, runs))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private static bool EndpointSupportedBySelectedRun(
+        GlobalWallCandidate candidate,
+        PointExport endpoint,
+        IReadOnlyList<CompactedWallRun> runs)
+    {
+        var point = ToPlanPoint(endpoint);
+        foreach (var run in runs)
+        {
+            if (run.PageNumber != candidate.PageNumber)
+            {
+                continue;
+            }
+
+            if (Distance(point, ToPlanPoint(run.CenterLine.Start)) <= JunctionCompletionDistance
+                || Distance(point, ToPlanPoint(run.CenterLine.End)) <= JunctionCompletionDistance)
+            {
+                return true;
+            }
+
+            if (!SameOrientation(candidate.CenterLine, run.CenterLine)
+                && PointToSegmentDistance(point, run.CenterLine) <= JunctionCompletionDistance)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool EndpointSupported(
         CompactedWallRun run,
         PointExport endpoint,
@@ -4890,6 +5103,7 @@ public static partial class GlobalWallSolutionBuilder
         IReadOnlyList<string> SelectedCandidateIds,
         int RecoveredCandidateCount,
         int RemovedCandidateCount,
+        IReadOnlyList<string> TrustedCoordinateRecoveredCandidateIds,
         GlobalWallMetrics Metrics)
     {
         public PlacementWallHypothesisExport Export(bool selected) =>

@@ -8,6 +8,14 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.027] - 2026-07-30
+
+- Improved source-backed structural wall bridge recovery.
+- Improved coordinate readiness for topology-proven recovered walls.
+- Fixed fixture, opening-clearance, and parallel-shadow recall blockers.
+- Fixed recovered-run trust propagation across merged review contributors.
+- Updated wall solver schema contracts.
+
 ## [0.11.026] - 2026-07-30
 
 - Improved authoritative exterior wall classification.

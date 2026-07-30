@@ -1213,6 +1213,195 @@ public sealed class GlobalWallSolutionTests
             run => run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal));
     }
 
+    [Fact]
+    public async Task StructuralCore_RecoversReviewedMainStructuralBridgeBetweenSelectedRuns()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var target = ReviewedMainStructuralBridge(
+            template,
+            "reviewed-two-ended-bridge",
+            new LineExport(
+                new PointExport(100, 200),
+                new PointExport(400, 200)));
+        var supports = new[]
+        {
+            HostWallFragment(
+                template,
+                "reviewed-two-ended-left",
+                new LineExport(new PointExport(100, 80), new PointExport(100, 320))),
+            HostWallFragment(
+                template,
+                "reviewed-two-ended-right",
+                new LineExport(new PointExport(400, 80), new PointExport(400, 320)))
+        };
+        var structuralSolution = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            supports);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            supports.Append(target).ToArray(),
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structuralSolution);
+
+        var selected = Assert.Single(solutions.Hypotheses.Where(hypothesis =>
+            hypothesis.Selected));
+        Assert.Equal("hypothesis:joint-structural-core", selected.Id);
+        Assert.Equal(1, selected.RecoveredCandidateCount);
+        var recoveredRun = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal)));
+        Assert.True(recoveredRun.Reliability.ReadyForCoordinatePlacement);
+        Assert.False(recoveredRun.Reliability.RequiresReview);
+        Assert.Contains(
+            recoveredRun.Reliability.Reasons,
+            reason => reason.Contains(
+                "global topology promoted",
+                StringComparison.Ordinal));
+        var decision = Assert.Single(solutions.CandidateDecisions.Where(candidate =>
+            candidate.CandidateId == $"candidate:wall:{target.Id}"));
+        Assert.Equal("Selected", decision.Decision);
+        Assert.Contains(selected.Id, decision.SelectedByHypothesisIds);
+    }
+
+    [Fact]
+    public async Task StructuralCore_RecoversReviewedOpeningLinkedBridgeWithOneSelectedEndpoint()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var target = ReviewedMainStructuralBridge(
+            template,
+            "reviewed-one-ended-opening-bridge",
+            new LineExport(
+                new PointExport(100, 200),
+                new PointExport(400, 200))) with
+        {
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "layer evidence: contains dimension-like text",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+            ]
+        };
+        var support = HostWallFragment(
+            template,
+            "reviewed-one-ended-support",
+            new LineExport(new PointExport(100, 80), new PointExport(100, 320)));
+        var opening = AnchoredOpening(
+            "reviewed-one-ended-opening",
+            target.Id,
+            support.Id);
+        var structuralSolution = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [support]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [support, target],
+            Array.Empty<PlacementRoomExport>(),
+            [opening],
+            EmptyGraph(placement.WallGraph),
+            structuralSolution);
+
+        var selected = Assert.Single(solutions.Hypotheses.Where(hypothesis =>
+            hypothesis.Selected));
+        Assert.Equal("hypothesis:joint-structural-core", selected.Id);
+        Assert.Equal(1, selected.RecoveredCandidateCount);
+        var recoveredRun = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal)));
+        Assert.True(recoveredRun.Reliability.ReadyForCoordinatePlacement);
+        Assert.False(recoveredRun.Reliability.RequiresReview);
+    }
+
+    [Fact]
+    public void StructuralCore_DoesNotClearReviewForUntrustedMergedContributor()
+    {
+        var trusted = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "candidate:wall:trusted-bridge"
+        };
+
+        Assert.True(GlobalWallSolutionBuilder.CanPromoteRecoveredRun(
+            ["candidate:wall:trusted-bridge"],
+            ["candidate:wall:trusted-bridge"],
+            trusted));
+        Assert.False(GlobalWallSolutionBuilder.CanPromoteRecoveredRun(
+            [
+                "candidate:wall:trusted-bridge",
+                "candidate:wall:untrusted-overlap"
+            ],
+            [
+                "candidate:wall:trusted-bridge",
+                "candidate:wall:untrusted-overlap"
+            ],
+            trusted));
+        Assert.False(GlobalWallSolutionBuilder.CanPromoteRecoveredRun(
+            ["candidate:wall:untrusted-overlap"],
+            ["candidate:wall:untrusted-overlap"],
+            trusted));
+    }
+
+    [Fact]
+    public async Task StructuralCore_DoesNotRecoverReviewedFixtureDetailBetweenSelectedRuns()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var target = ReviewedMainStructuralBridge(
+            template,
+            "reviewed-fixture-detail",
+            new LineExport(
+                new PointExport(100, 200),
+                new PointExport(400, 200))) with
+        {
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "wall evidence assessment: ObjectOrFixtureDetail / review / confidence 0.71"
+            ]
+        };
+        var supports = new[]
+        {
+            HostWallFragment(
+                template,
+                "reviewed-fixture-left",
+                new LineExport(new PointExport(100, 80), new PointExport(100, 320))),
+            HostWallFragment(
+                template,
+                "reviewed-fixture-right",
+                new LineExport(new PointExport(400, 80), new PointExport(400, 320)))
+        };
+        var structuralSolution = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            supports);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            supports.Append(target).ToArray(),
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structuralSolution);
+
+        var selected = Assert.Single(solutions.Hypotheses.Where(hypothesis =>
+            hypothesis.Selected));
+        Assert.Equal(0, selected.RecoveredCandidateCount);
+        Assert.DoesNotContain(
+            solutions.SelectedWallRuns,
+            run => run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal));
+        var decision = Assert.Single(solutions.CandidateDecisions.Where(candidate =>
+            candidate.CandidateId == $"candidate:wall:{target.Id}"));
+        Assert.True(decision.StrongNegativeEvidence);
+        Assert.Equal("Rejected", decision.Decision);
+    }
+
     [Theory]
     [InlineData(320.97, 0.888, 4.0, true)]
     [InlineData(320.97, 0.950, 4.0, false)]
@@ -1770,6 +1959,12 @@ public sealed class GlobalWallSolutionTests
 
         Assert.True(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
             ["wall evidence: reclassified as object/fixture detail because the component is object-like"]));
+        Assert.True(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
+            ["wall evidence assessment: ObjectOrFixtureDetail / review / confidence 0.71"]));
+        Assert.True(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
+            ["parallel offset detail shadow retained as review evidence"]));
+        Assert.True(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
+            ["unfilled exterior opening-clearance rectangle is not a wall body"]));
         Assert.True(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
             ["test unlayered short line follows door swing symbol"]));
         Assert.False(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
@@ -3746,6 +3941,29 @@ public sealed class GlobalWallSolutionTests
                 "parallel wall-face pair",
                 "room boundary",
                 "main structural wall body"
+            ]
+        };
+
+    private static PlacementWallExport ReviewedMainStructuralBridge(
+        PlacementWallExport template,
+        string id,
+        LineExport centerLine) =>
+        HostWallFragment(template, id, centerLine) with
+        {
+            WallComponentId = $"{id}:component",
+            WallComponentKind = "MainStructural",
+            Confidence = 0.85,
+            Reliability = new PlacementReliabilityExport(
+                ReadyForCoordinatePlacement: false,
+                ReadyForMetricPlacement: false,
+                RequiresReview: true,
+                Confidence: 0.85,
+                Reasons: ["dense local detail requires review"]),
+            SourceLayers = ["(unlayered)"],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer evidence: contains dimension-like text"
             ]
         };
 
