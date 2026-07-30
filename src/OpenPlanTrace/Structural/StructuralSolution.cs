@@ -123,7 +123,7 @@ public sealed record StructuralPlanSolution(
     StructuralSolutionMetrics Metrics,
     IReadOnlyList<string> Evidence)
 {
-    public const string CurrentSolverVersion = "openplantrace.joint-structural-solver.v11";
+    public const string CurrentSolverVersion = "openplantrace.joint-structural-solver.v12";
 
     public static StructuralPlanSolution Empty { get; } =
         new(

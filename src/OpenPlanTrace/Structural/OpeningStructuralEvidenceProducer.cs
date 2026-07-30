@@ -6,10 +6,21 @@ internal sealed class OpeningStructuralEvidenceProducer : IStructuralEvidencePro
 
     public void Produce(StructuralEvidenceBuildContext context)
     {
+        var roomContexts =
+            RoomBoundaryStructuralEvidenceProducer.ClassifyRoomContexts(
+                context.Source.Rooms);
+        var trustedRoomIds = roomContexts
+            .Where(item => item.Value == StructuralRoomLoopContext.Indoor)
+            .Select(item => item.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
         foreach (var opening in context.Source.Openings
                      .OrderBy(opening => opening.PageNumber)
                      .ThenBy(opening => opening.Id, StringComparer.Ordinal))
         {
+            var support = StructuralOpeningSupport.Assess(
+                opening,
+                trustedRoomIds);
             var hostWallIds = opening.HostWallIds
                 .Concat(opening.AdjacentWallIds)
                 .Append(opening.WallId ?? string.Empty)
@@ -33,12 +44,15 @@ internal sealed class OpeningStructuralEvidenceProducer : IStructuralEvidencePro
             {
                 candidate.SourceOpeningIds.Add(opening.Id);
                 var explicitHost = candidate.SourceWallIds.Any(hostWallIds.Contains);
-                if (explicitHost)
+                var supportsStructure =
+                    !support.HasAmbiguousRoomTopology
+                    && !candidate.HasRejectedWallEvidence;
+                if (explicitHost && supportsStructure)
                 {
                     candidate.AddOrigin(StructuralCandidateOrigin.OpeningHost);
                 }
 
-                var weight = candidate.HasRejectedWallEvidence
+                var weight = !supportsStructure
                     ? 0
                     : explicitHost
                         ? 0.10
@@ -51,6 +65,8 @@ internal sealed class OpeningStructuralEvidenceProducer : IStructuralEvidencePro
                         opening.Id,
                         candidate.HasRejectedWallEvidence
                             ? $"opening {opening.Id} proximity retained as provenance but not support after final wall rejection"
+                            : support.HasAmbiguousRoomTopology
+                                ? $"{support.Evidence}; opening proximity retained as provenance without structural support"
                             : explicitHost
                                 ? $"candidate explicitly hosts opening {opening.Id}"
                                 : $"candidate is geometrically near opening {opening.Id}",
@@ -67,6 +83,7 @@ internal sealed class OpeningStructuralEvidenceProducer : IStructuralEvidencePro
                     opening.Confidence,
                     opening.SourcePrimitiveIds,
                     opening.Evidence
+                        .Append(support.Evidence)
                         .Append($"matched {hostCandidates.Length} possible structural host candidate(s)")
                         .ToArray()));
         }

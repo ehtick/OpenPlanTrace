@@ -268,7 +268,7 @@ public sealed record StructuralEvidenceGraph(
     IReadOnlyList<string> Producers,
     IReadOnlyList<string> Evidence)
 {
-    public const string CurrentContractVersion = "openplantrace.structural-evidence.v9";
+    public const string CurrentContractVersion = "openplantrace.structural-evidence.v10";
 
     public static StructuralEvidenceGraph Empty { get; } =
         new(

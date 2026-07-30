@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.025] - 2026-07-30
+
+- Fixed ambiguous opening evidence promoting equipment details as walls.
+- Improved isolated wall rejection without weakening valid two-room opening hosts.
+- Updated structural evidence and solver contracts.
+
 ## [0.11.024] - 2026-07-30
 
 - Improved source-backed wall-body junction normalization.

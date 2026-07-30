@@ -3532,6 +3532,204 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void EvidenceGraph_DoesNotLetAmbiguousMultiRoomOpeningAnchorExcludedWallIsland()
+    {
+        var wall = PairedWall(
+            "equipment-counter-detail",
+            y: 180,
+            thickness: 8,
+            length: 42);
+        var rooms = Enumerable.Range(1, 4)
+            .Select(index => Room(
+                $"overlapping-room-{index}",
+                new PlanRect(index * 20, 100, 120, 100),
+                [
+                    new PlanPoint(index * 20, 100),
+                    new PlanPoint((index * 20) + 120, 100),
+                    new PlanPoint((index * 20) + 120, 200),
+                    new PlanPoint(index * 20, 200)
+                ]))
+            .ToArray();
+        var opening = new OpeningCandidate(
+            "ambiguous-equipment-opening",
+            1,
+            OpeningType.Window,
+            new PlanRect(4, 174, 34, 12),
+            new Confidence(0.62))
+        {
+            WallId = wall.Id,
+            HostWallIds = [wall.Id],
+            AdjacentWallIds = [wall.Id],
+            ConnectedRoomIds = rooms.Select(room => room.Id).ToArray(),
+            ConnectedRoomLinks = rooms
+                .Select((room, index) => new OpeningRoomConnection(
+                    room.Id,
+                    room.Id,
+                    RoomUseKind.Office,
+                    Array.Empty<string>(),
+                    index % 2 == 0
+                        ? OpeningRoomSide.PositiveNormalSide
+                        : OpeningRoomSide.NegativeNormalSide,
+                    new PlanPoint(20 + index, 190),
+                    new PlanPoint(20 + index, 180),
+                    SignedDistanceFromOpening: index % 2 == 0 ? 10 : -10,
+                    DistanceToOpening: 1,
+                    SharesHostWall: true,
+                    Confidence.High,
+                    ["opening touches overlapping room hypothesis"]))
+                .ToArray(),
+            RoomAdjacencyIds = rooms
+                .Select(room => $"adjacency:{room.Id}")
+                .ToArray(),
+            CenterLine = new PlanLineSegment(
+                new PlanPoint(4, 180),
+                new PlanPoint(38, 180))
+        };
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                acceptedWalls: Array.Empty<WallSegment>(),
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [ReviewAssessment(wall, WallEvidenceCategory.MediumWallBody)],
+                    SourceCandidateWallCount: 1),
+                wallGraph: WallGraphFor(
+                    [wall],
+                    WallGraphComponentKind.IsolatedFragment,
+                    excludedFromStructuralTopology: false),
+                rooms: rooms,
+                openings: [opening]));
+
+        var candidate = Assert.Single(
+            graph.WallCandidates,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.Contains(opening.Id, candidate.SourceOpeningIds);
+        Assert.False(
+            candidate.Origins.HasFlag(StructuralCandidateOrigin.OpeningHost));
+        Assert.Contains(
+            candidate.Signals,
+            signal =>
+                signal.Kind == StructuralEvidenceSignalKind.OpeningHost
+                && signal.Weight == 0
+                && signal.Description.Contains(
+                    "at most two opposing territories",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            candidate.Signals,
+            signal =>
+                signal.Kind == StructuralEvidenceSignalKind.IsolatedStructuralIsland
+                && signal.Weight <= -1);
+        Assert.DoesNotContain(
+            JointStructuralSolver.Solve(graph).WallRuns,
+            run => run.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void EvidenceGraph_PreservesTwoTerritoryOpeningAnchorForIsolatedWall()
+    {
+        var wall = PairedWall(
+            "valid-two-room-opening-host",
+            y: 100,
+            thickness: 4,
+            length: 120);
+        var firstRoom = Room(
+            "first-opening-room",
+            new PlanRect(0, 0, 120, 100),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(120, 0),
+                new PlanPoint(120, 100),
+                new PlanPoint(0, 100)
+            ]);
+        var secondRoom = Room(
+            "second-opening-room",
+            new PlanRect(0, 100, 120, 100),
+            [
+                new PlanPoint(0, 100),
+                new PlanPoint(120, 100),
+                new PlanPoint(120, 200),
+                new PlanPoint(0, 200)
+            ]);
+        var opening = new OpeningCandidate(
+            "valid-two-room-opening",
+            1,
+            OpeningType.Door,
+            new PlanRect(45, 94, 30, 12),
+            Confidence.High)
+        {
+            WallId = wall.Id,
+            HostWallIds = [wall.Id],
+            AdjacentWallIds = [wall.Id],
+            ConnectedRoomIds = [firstRoom.Id, secondRoom.Id],
+            ConnectedRoomLinks =
+            [
+                new OpeningRoomConnection(
+                    firstRoom.Id,
+                    firstRoom.Id,
+                    RoomUseKind.Office,
+                    Array.Empty<string>(),
+                    OpeningRoomSide.NegativeNormalSide,
+                    new PlanPoint(60, 90),
+                    new PlanPoint(60, 100),
+                    SignedDistanceFromOpening: -10,
+                    DistanceToOpening: 0,
+                    SharesHostWall: true,
+                    Confidence.High,
+                    ["first opposing room"]),
+                new OpeningRoomConnection(
+                    secondRoom.Id,
+                    secondRoom.Id,
+                    RoomUseKind.Office,
+                    Array.Empty<string>(),
+                    OpeningRoomSide.PositiveNormalSide,
+                    new PlanPoint(60, 110),
+                    new PlanPoint(60, 100),
+                    SignedDistanceFromOpening: 10,
+                    DistanceToOpening: 0,
+                    SharesHostWall: true,
+                    Confidence.High,
+                    ["second opposing room"])
+            ],
+            RoomAdjacencyIds = ["adjacency:valid-opening"],
+            CenterLine = new PlanLineSegment(
+                new PlanPoint(45, 100),
+                new PlanPoint(75, 100))
+        };
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                acceptedWalls: Array.Empty<WallSegment>(),
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [ReviewAssessment(wall, WallEvidenceCategory.MediumWallBody)],
+                    SourceCandidateWallCount: 1),
+                wallGraph: WallGraphFor(
+                    [wall],
+                    WallGraphComponentKind.IsolatedFragment,
+                    excludedFromStructuralTopology: false),
+                rooms: [firstRoom, secondRoom],
+                openings: [opening]));
+
+        var candidate = Assert.Single(
+            graph.WallCandidates,
+            value => value.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+        Assert.True(candidate.Origins.HasFlag(StructuralCandidateOrigin.OpeningHost));
+        Assert.DoesNotContain(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.IsolatedStructuralIsland);
+        Assert.Contains(
+            candidate.Signals,
+            signal =>
+                signal.Kind == StructuralEvidenceSignalKind.OpeningHost
+                && signal.Weight > 0);
+        Assert.Contains(
+            JointStructuralSolver.Solve(graph).WallRuns,
+            run => run.SourceWallIds.Contains(wall.Id, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void EvidenceGraph_DoesNotPropagateTrustIntoMediumIsolatedDetail()
     {
         var host = Wall(

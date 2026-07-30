@@ -136,7 +136,10 @@ internal sealed class TopologyStructuralEvidenceProducer : IStructuralEvidencePr
             .Select(item => item.Key)
             .ToHashSet(StringComparer.Ordinal);
         var openingHostWallIds = context.Source.Openings
-            .Where(opening => HasTrustedOpeningRoomContext(opening, trustedRoomIds))
+            .Where(opening =>
+                StructuralOpeningSupport
+                    .Assess(opening, trustedRoomIds)
+                    .HasTrustedRoomContext)
             .SelectMany(opening => opening.HostWallIds
                 .Concat(opening.AdjacentWallIds)
                 .Append(opening.WallId ?? string.Empty))
@@ -274,25 +277,6 @@ internal sealed class TopologyStructuralEvidenceProducer : IStructuralEvidencePr
         }
 
         return supported;
-    }
-
-    private static bool HasTrustedOpeningRoomContext(
-        OpeningCandidate opening,
-        IReadOnlySet<string> trustedRoomIds)
-    {
-        var trustedLinks = opening.ConnectedRoomLinks
-            .Where(link => trustedRoomIds.Contains(link.RoomId))
-            .ToArray();
-        if (trustedLinks.Length > 0)
-        {
-            return trustedLinks.Any(link =>
-                link.SharesHostWall
-                || link.Confidence.Value >= 0.65);
-        }
-
-        return opening.ConnectedRoomIds.Any(trustedRoomIds.Contains)
-            && (opening.RoomAdjacencyIds.Count > 0
-                || opening.Confidence.Value >= 0.70);
     }
 
     private static bool HasPlausibleStructuralConnection(
