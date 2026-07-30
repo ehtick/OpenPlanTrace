@@ -2709,7 +2709,7 @@
       ],
       "properties": {
         "reconcilerVersion": {
-          "const": "openplantrace.wall-evidence-reconciler.v9"
+          "const": "openplantrace.wall-evidence-reconciler.v10"
         },
         "evaluatedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "adjustedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
@@ -2952,7 +2952,7 @@
       ],
       "properties": {
         "solverVersion": {
-          "const": "openplantrace.global-wall-solver.v18"
+          "const": "openplantrace.global-wall-solver.v19"
         },
         "selectedHypothesisId": {
           "type": "string",

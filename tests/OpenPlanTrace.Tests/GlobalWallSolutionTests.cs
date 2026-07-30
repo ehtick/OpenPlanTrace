@@ -1576,6 +1576,189 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task Solver_PreservesPlacementReadyExteriorShellTypeAcrossMixedCompaction()
+    {
+        var placement = PlanPlacementExport.From(await CreateScanResultAsync());
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var line = new LineExport(
+            new PointExport(100, 200),
+            new PointExport(400, 200));
+        var interior = HostWallFragment(template, "mixed-shell-interior", line);
+        var exteriorShell = HostWallFragment(
+            template,
+            "page:1:wall-exterior-shell-inferred:001",
+            line) with
+        {
+            WallType = "Exterior",
+            Confidence = 0.75,
+            Evidence =
+            [
+                "wall evidence: inferred exterior shell wall from indoor room boundary with outside on opposite side",
+                "wall evidence: exterior-shell inference source-line support coverage 1 from 8 primitive(s)"
+            ]
+        };
+        var edge = CleanGraphEdge(interior, "mixed-shell-edge") with
+        {
+            SourceWallIds = [interior.Id, exteriorShell.Id],
+            SourcePrimitiveIds = interior.SourcePrimitiveIds
+                .Concat(exteriorShell.SourcePrimitiveIds)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            Evidence = interior.Evidence
+                .Concat(exteriorShell.Evidence)
+                .ToArray()
+        };
+        var graph = EmptyGraph(placement.WallGraph) with
+        {
+            Edges = [edge]
+        };
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [interior, exteriorShell],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            graph);
+
+        var run = Assert.Single(solutions.SelectedWallRuns);
+        Assert.Equal("Exterior", run.WallType);
+        Assert.Contains(interior.Id, run.SourceWallIds);
+        Assert.Contains(exteriorShell.Id, run.SourceWallIds);
+        Assert.Contains(
+            run.Evidence,
+            evidence => evidence.Contains(
+                "resolved mixed wall type as Exterior",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Solver_DoesNotPromoteGenericMixedCompactionToExterior()
+    {
+        var placement = PlanPlacementExport.From(await CreateScanResultAsync());
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var line = new LineExport(
+            new PointExport(100, 200),
+            new PointExport(400, 200));
+        var interior = HostWallFragment(template, "generic-mixed-interior", line);
+        var exterior = HostWallFragment(template, "generic-mixed-exterior", line) with
+        {
+            WallType = "Exterior"
+        };
+        var edge = CleanGraphEdge(interior, "generic-mixed-edge") with
+        {
+            SourceWallIds = [interior.Id, exterior.Id],
+            SourcePrimitiveIds = interior.SourcePrimitiveIds
+                .Concat(exterior.SourcePrimitiveIds)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            Evidence = interior.Evidence
+                .Concat(exterior.Evidence)
+                .ToArray()
+        };
+        var graph = EmptyGraph(placement.WallGraph) with
+        {
+            Edges = [edge]
+        };
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [interior, exterior],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            graph);
+
+        var run = Assert.Single(solutions.SelectedWallRuns);
+        Assert.Equal("Mixed", run.WallType);
+        Assert.DoesNotContain(
+            run.Evidence,
+            evidence => evidence.Contains(
+                "resolved mixed wall type as Exterior",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Solver_DoesNotOverrideTwoSidedInteriorAuthorityWithExteriorShellProvenance()
+    {
+        var placement = PlanPlacementExport.From(await CreateScanResultAsync());
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var line = new LineExport(
+            new PointExport(100, 200),
+            new PointExport(400, 200));
+        var interior = HostWallFragment(template, "two-sided-mixed-interior", line);
+        var exteriorShell = HostWallFragment(
+            template,
+            "page:1:wall-exterior-shell-inferred:002",
+            line) with
+        {
+            WallType = "Exterior",
+            Confidence = 0.75,
+            Evidence =
+            [
+                "wall evidence: inferred exterior shell wall from indoor room boundary with outside on opposite side",
+                "wall evidence: exterior-shell inference source-line support coverage 1 from 8 primitive(s)"
+            ]
+        };
+        var edge = CleanGraphEdge(interior, "two-sided-mixed-edge") with
+        {
+            SourceWallIds = [interior.Id, exteriorShell.Id],
+            SourcePrimitiveIds = interior.SourcePrimitiveIds
+                .Concat(exteriorShell.SourcePrimitiveIds)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            Evidence = interior.Evidence
+                .Concat(exteriorShell.Evidence)
+                .ToArray()
+        };
+        var graph = EmptyGraph(placement.WallGraph) with
+        {
+            Edges = [edge]
+        };
+        var rooms = new[]
+        {
+            RoomBoundaryWithHorizontalSpanBetween(
+                placement.Rooms.First(),
+                "two-sided-mixed-above",
+                [interior.Id, exteriorShell.Id],
+                startX: 100,
+                endX: 400,
+                top: 80,
+                bottom: 200) with
+            {
+                UseKind = "Living"
+            },
+            RoomBoundaryWithHorizontalSpanBetween(
+                placement.Rooms.First(),
+                "two-sided-mixed-below",
+                [interior.Id, exteriorShell.Id],
+                startX: 100,
+                endX: 400,
+                top: 200,
+                bottom: 320) with
+            {
+                UseKind = "Living"
+            }
+        };
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [interior, exteriorShell],
+            rooms,
+            Array.Empty<PlacementOpeningExport>(),
+            graph);
+
+        var run = Assert.Single(solutions.SelectedWallRuns);
+        Assert.Equal("Mixed", run.WallType);
+        Assert.DoesNotContain(
+            run.Evidence,
+            evidence => evidence.Contains(
+                "resolved mixed wall type as Exterior",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Solver_DistinguishesContextualLayerRiskFromExplicitNonWallEvidence()
     {
         Assert.False(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
@@ -1591,6 +1774,23 @@ public sealed class GlobalWallSolutionTests
             ["test unlayered short line follows door swing symbol"]));
         Assert.False(GlobalWallSolutionBuilder.HasStrongNegativeEvidence(
             ["opening support includes door swing evidence near a real host wall"]));
+    }
+
+    [Fact]
+    public void Reconciler_UsesProvenanceBeforeSemanticTypeForGeometryVotes()
+    {
+        Assert.True(GlobalWallSolutionBuilder.ReconciliationWallTypesCompatible(
+            "Interior",
+            "Exterior",
+            authoritativeSourceLinked: true));
+        Assert.False(GlobalWallSolutionBuilder.ReconciliationWallTypesCompatible(
+            "Interior",
+            "Exterior",
+            authoritativeSourceLinked: false));
+        Assert.True(GlobalWallSolutionBuilder.ReconciliationWallTypesCompatible(
+            "Mixed",
+            "Exterior",
+            authoritativeSourceLinked: false));
     }
 
     [Fact]

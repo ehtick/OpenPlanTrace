@@ -2,7 +2,7 @@ namespace OpenPlanTrace.Export;
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v9";
+    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v10";
 
     private const double MinimumReconciliationMovement = 0.05;
     private const double MaximumReconciliationAxisShift = 8.0;
@@ -180,6 +180,8 @@ public static partial class GlobalWallSolutionBuilder
             .ToHashSet(StringComparer.Ordinal);
         var resolvedPhysicalAssembly = IsResolvedPhysicalWallAssembly(run);
         var resolvedAssemblyAxis = AxisCoordinate(run.CenterLine);
+        var authoritativeExteriorShell =
+            UsesAuthoritativeExteriorShellTypeResolution(run.Contributors);
 
         foreach (var contributor in run.Contributors)
         {
@@ -203,18 +205,21 @@ public static partial class GlobalWallSolutionBuilder
                 run.ThicknessDrawingUnits * 1.25));
         foreach (var candidate in allCandidates)
         {
+            var sourceLinked = candidate.SourceWallIds.Any(sourceWallIds.Contains);
             if (contributorIds.Contains(candidate.Id)
                 || candidate.PageNumber != run.PageNumber
                 || Orientation(candidate.CenterLine) != orientation
                 || candidate.StrongNegativeEvidence
-                || !CompatibleWallTypes(candidate.WallType, run.WallType)
+                || !ReconciliationWallTypesCompatible(
+                    candidate.WallType,
+                    run.WallType,
+                    sourceLinked && authoritativeExteriorShell)
                 || LineDistance(candidate.CenterLine, run.CenterLine) > contextualAxisTolerance)
             {
                 continue;
             }
 
             var overlapRatio = LengthOverlapRatio(candidate.CenterLine, run.CenterLine);
-            var sourceLinked = candidate.SourceWallIds.Any(sourceWallIds.Contains);
             var independentlyStructural = candidate.ReadyForCoordinatePlacement
                 && !candidate.ExcludedFromStructuralTopology
                 && candidate.StructuralEvidenceCount >= 2
@@ -379,6 +384,13 @@ public static partial class GlobalWallSolutionBuilder
 
         return votes;
     }
+
+    internal static bool ReconciliationWallTypesCompatible(
+        string candidateWallType,
+        string runWallType,
+        bool authoritativeSourceLinked) =>
+        authoritativeSourceLinked
+        || CompatibleWallTypes(candidateWallType, runWallType);
 
     private static LineExport NormalizeSourceLinkedAssemblyVote(
         LineExport line,

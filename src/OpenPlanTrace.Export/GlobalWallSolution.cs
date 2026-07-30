@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v18";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v19";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -2025,6 +2025,14 @@ public static partial class GlobalWallSolutionBuilder
                     StringComparison.Ordinal))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
+            var wallTypeResolutionEvidence =
+                string.Equals(run.WallType, "Exterior", StringComparison.OrdinalIgnoreCase)
+                && UsesAuthoritativeExteriorShellTypeResolution(run.Contributors)
+                    ? new[]
+                    {
+                        "global wall solver resolved mixed wall type as Exterior from placement-ready exterior-shell provenance without conflicting two-sided room-boundary evidence"
+                    }
+                    : Array.Empty<string>();
             var evidence = new[]
                 {
                     $"global wall solver compacted {candidateIds.Length} selected candidate(s)",
@@ -2045,6 +2053,7 @@ public static partial class GlobalWallSolutionBuilder
                     $"wall evidence reconciliation status {reconciliation.Status}",
                     $"wall evidence reconciliation confidence {reconciliation.Confidence:0.###}"
                 }
+                .Concat(wallTypeResolutionEvidence)
                 .Concat(canonicalExtentEvidence)
                 .Concat(run.Contributors.SelectMany(candidate => candidate.Evidence))
                 .Concat(reconciliation.Evidence)
@@ -4427,8 +4436,42 @@ public static partial class GlobalWallSolutionBuilder
     private static string ResolveWallType(IReadOnlyList<PlacementWallExport> walls) =>
         ResolveWallType(walls.Select(wall => wall.WallType));
 
-    private static string ResolveWallType(IReadOnlyList<GlobalWallCandidate> candidates) =>
-        ResolveWallType(candidates.Select(candidate => candidate.WallType));
+    private static string ResolveWallType(IReadOnlyList<GlobalWallCandidate> candidates)
+    {
+        var resolved = ResolveWallType(candidates.Select(candidate => candidate.WallType));
+        return UsesAuthoritativeExteriorShellTypeResolution(candidates)
+                ? "Exterior"
+                : resolved;
+    }
+
+    private static bool UsesAuthoritativeExteriorShellTypeResolution(
+        IReadOnlyList<GlobalWallCandidate> candidates) =>
+        !string.Equals(
+            ResolveWallType(candidates.Select(candidate => candidate.WallType)),
+            "Exterior",
+            StringComparison.OrdinalIgnoreCase)
+        && HasAuthoritativeExteriorShellProvenance(candidates)
+        && !candidates.Any(candidate =>
+            candidate.TwoSidedSourceLinkedRoomBoundarySupport
+            && candidate.OutdoorRoomBoundarySupportCount == 0);
+
+    private static bool HasAuthoritativeExteriorShellProvenance(
+        IReadOnlyList<GlobalWallCandidate> candidates) =>
+        candidates.Any(candidate =>
+            candidate.ReadyForCoordinatePlacement
+            && !candidate.RequiresReview
+            && !candidate.StrongNegativeEvidence
+            && (string.Equals(candidate.WallType, "Exterior", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(candidate.WallType, "Mixed", StringComparison.OrdinalIgnoreCase))
+            && candidate.SourceWallIds.Any(IsAuthoritativeExteriorShellSourceId));
+
+    private static bool IsAuthoritativeExteriorShellSourceId(string sourceWallId) =>
+        sourceWallId.Contains(
+            "wall-exterior-shell-inferred:",
+            StringComparison.Ordinal)
+        || sourceWallId.Contains(
+            "wall-exterior-shell-source-backed:",
+            StringComparison.Ordinal);
 
     private static string ResolveWallType(IEnumerable<string> types)
     {
