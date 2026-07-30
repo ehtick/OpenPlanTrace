@@ -4438,7 +4438,9 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var assessmentsByWallId = BuildEvidenceByWallId(context.WallEvidenceMap);
         var updatedAssessments = new Dictionary<string, WallEvidenceWallAssessment>(StringComparer.Ordinal);
         var demotedWallIds = new HashSet<string>(StringComparer.Ordinal);
-        var sourcePrimitiveIds = new HashSet<string>(StringComparer.Ordinal);
+        var preservedWallIds = new HashSet<string>(StringComparer.Ordinal);
+        var demotedSourcePrimitiveIds = new HashSet<string>(StringComparer.Ordinal);
+        var preservedSourcePrimitiveIds = new HashSet<string>(StringComparer.Ordinal);
 
         for (var index = 0; index < context.Walls.Count; index++)
         {
@@ -4454,6 +4456,37 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     out var separation,
                     out var overlapRatio))
             {
+                continue;
+            }
+
+            if (TryFindCollinearStructuralBodyContinuation(
+                    wall,
+                    assessment,
+                    context.Walls,
+                    assessmentsByWallId,
+                    context.Options,
+                    out var continuation,
+                    out var continuationSeparation,
+                    out var continuationOverlapRatio))
+            {
+                var continuationEvidence = new[]
+                {
+                    $"wall evidence: kept placement-ready because collinear strong wall body {continuation.Id} confirms structural continuation; separation {continuationSeparation.ToString("0.###", CultureInfo.InvariantCulture)}, overlap ratio {continuationOverlapRatio.ToString("0.###", CultureInfo.InvariantCulture)}",
+                    "wall evidence: collinear wall-body continuation overrides distant parallel detail-shadow suppression"
+                };
+                var preservedAssessment = assessment with
+                {
+                    Evidence = AppendEvidence(assessment.Evidence, continuationEvidence)
+                };
+
+                updatedAssessments[wall.Id] = preservedAssessment;
+                assessmentsByWallId[wall.Id] = preservedAssessment;
+                context.Walls[index] = wall with
+                {
+                    Evidence = AppendEvidence(wall.Evidence, continuationEvidence)
+                };
+                preservedWallIds.Add(wall.Id);
+                preservedSourcePrimitiveIds.UnionWith(wall.SourcePrimitiveIds);
                 continue;
             }
 
@@ -4480,7 +4513,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 Evidence = AppendEvidence(wall.Evidence, evidence)
             };
             demotedWallIds.Add(wall.Id);
-            sourcePrimitiveIds.UnionWith(wall.SourcePrimitiveIds);
+            demotedSourcePrimitiveIds.UnionWith(wall.SourcePrimitiveIds);
         }
 
         if (updatedAssessments.Count == 0)
@@ -4496,20 +4529,128 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     : assessment)
                 .ToArray()
         };
-        context.AddDiagnostic(
-            "walls.parallel_offset_detail_shadows_demoted",
-            DiagnosticSeverity.Info,
-            StageName,
-            $"{demotedWallIds.Count} weak unpaired wall candidate(s) were retained for review after stronger parallel wall bodies explained their placement.",
-            confidence: Confidence.High,
-            scope: DiagnosticScope.Detection,
-            sourcePrimitiveIds: sourcePrimitiveIds,
-            properties: new Dictionary<string, string>
-            {
-                ["demotedWallCount"] = demotedWallIds.Count.ToString(CultureInfo.InvariantCulture),
-                ["wallIds"] = string.Join(",", demotedWallIds.OrderBy(id => id, StringComparer.Ordinal).Take(20))
-            });
+        if (demotedWallIds.Count > 0)
+        {
+            context.AddDiagnostic(
+                "walls.parallel_offset_detail_shadows_demoted",
+                DiagnosticSeverity.Info,
+                StageName,
+                $"{demotedWallIds.Count} weak unpaired wall candidate(s) were retained for review after stronger parallel wall bodies explained their placement.",
+                confidence: Confidence.High,
+                scope: DiagnosticScope.Detection,
+                sourcePrimitiveIds: demotedSourcePrimitiveIds,
+                properties: new Dictionary<string, string>
+                {
+                    ["demotedWallCount"] = demotedWallIds.Count.ToString(CultureInfo.InvariantCulture),
+                    ["wallIds"] = string.Join(",", demotedWallIds.OrderBy(id => id, StringComparer.Ordinal).Take(20))
+                });
+        }
+
+        if (preservedWallIds.Count > 0)
+        {
+            context.AddDiagnostic(
+                "walls.parallel_offset_structural_continuations_preserved",
+                DiagnosticSeverity.Info,
+                StageName,
+                $"{preservedWallIds.Count} collinear room-boundary continuation(s) remained placement-ready despite distant parallel wall bodies.",
+                confidence: Confidence.High,
+                scope: DiagnosticScope.Detection,
+                sourcePrimitiveIds: preservedSourcePrimitiveIds,
+                properties: new Dictionary<string, string>
+                {
+                    ["preservedWallCount"] = preservedWallIds.Count.ToString(CultureInfo.InvariantCulture),
+                    ["wallIds"] = string.Join(",", preservedWallIds.OrderBy(id => id, StringComparer.Ordinal).Take(20))
+                });
+        }
+
         return demotedWallIds.Count;
+    }
+
+    private static bool TryFindCollinearStructuralBodyContinuation(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        IReadOnlyList<WallSegment> walls,
+        IReadOnlyDictionary<string, WallEvidenceWallAssessment> assessmentsByWallId,
+        ScannerOptions options,
+        out WallSegment continuation,
+        out double separation,
+        out double overlapRatio)
+    {
+        continuation = null!;
+        separation = 0;
+        overlapRatio = 0;
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        if (wall.DetectionKind != WallDetectionKind.FragmentMerged
+            || wall.FragmentEvidence is not { GapRatio: <= 0.03 }
+            || !EvidenceContainsAny(
+                evidence,
+                "geometric room boundary support",
+                "explicit room boundary support")
+            || !TryResolveAxisInterval(
+                wall.CenterLine,
+                out var orientation,
+                out var coordinate,
+                out var start,
+                out var end))
+        {
+            return false;
+        }
+
+        var coordinateTolerance = Math.Max(2.5, options.WallSnapTolerance * 1.25);
+        var minimumOverlap = Math.Max(24.0, wall.DrawingLength * 0.40);
+        var matches = new List<(WallSegment Wall, double Separation, double Overlap, double OverlapRatio)>();
+        foreach (var other in walls)
+        {
+            if (string.Equals(other.Id, wall.Id, StringComparison.Ordinal)
+                || other.PageNumber != wall.PageNumber
+                || !assessmentsByWallId.TryGetValue(other.Id, out var otherAssessment)
+                || !IsTrustedParallelStructuralShadow(other, otherAssessment)
+                || !TryResolveAxisInterval(
+                    other.CenterLine,
+                    out var otherOrientation,
+                    out var otherCoordinate,
+                    out var otherStart,
+                    out var otherEnd)
+                || otherOrientation != orientation)
+            {
+                continue;
+            }
+
+            var candidateSeparation = Math.Abs(otherCoordinate - coordinate);
+            if (candidateSeparation > coordinateTolerance)
+            {
+                continue;
+            }
+
+            var overlap = Math.Max(0, Math.Min(end, otherEnd) - Math.Max(start, otherStart));
+            var candidateOverlapRatio = overlap / Math.Max(wall.DrawingLength, 0.001);
+            if (overlap < minimumOverlap || candidateOverlapRatio < 0.40)
+            {
+                continue;
+            }
+
+            matches.Add((other, candidateSeparation, overlap, candidateOverlapRatio));
+        }
+
+        if (matches.Count == 0)
+        {
+            return false;
+        }
+
+        var best = matches
+            .OrderByDescending(match => match.OverlapRatio)
+            .ThenBy(match => match.Separation)
+            .ThenByDescending(match => match.Wall.Confidence.Value)
+            .ThenBy(match => match.Wall.Id, StringComparer.Ordinal)
+            .First();
+        continuation = best.Wall;
+        separation = best.Separation;
+        overlapRatio = best.OverlapRatio;
+        return true;
     }
 
     private static bool TryFindParallelOffsetStructuralShadow(

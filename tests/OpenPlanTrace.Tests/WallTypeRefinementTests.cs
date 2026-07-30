@@ -5102,6 +5102,138 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_KeepsRoomBoundaryContinuationCorroboratedByCollinearWallBody()
+    {
+        var continuation = new WallSegment(
+            "wall-room-boundary-continuation",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 100), new PlanPoint(240, 100)),
+            4,
+            new Confidence(0.84))
+        {
+            DetectionKind = WallDetectionKind.FragmentMerged,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "continuation-source" },
+            FragmentEvidence = new WallFragmentEvidence(
+                FragmentCount: 18,
+                TotalHealedGap: 0,
+                MaxHealedGap: 0,
+                DuplicatePrimitiveCount: 4,
+                GapRatio: 0,
+                RequiresGeometryReview: false,
+                Evidence: Array.Empty<string>()),
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "layer (unlayered) classified Unknown (0.35)",
+                "wall type refined interior: shared by room adjacency boundary",
+                "wall evidence: geometric room boundary support from reliable room-boundary alignment"
+            ]
+        };
+        var collinearBody = new WallSegment(
+            "wall-collinear-filled-body",
+            1,
+            new PlanLineSegment(new PlanPoint(100, 101), new PlanPoint(190, 101)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "filled-body-source" },
+            Evidence =
+            [
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body"
+            ]
+        };
+        var parallelWall = new WallSegment(
+            "wall-distant-parallel-body",
+            1,
+            new PlanLineSegment(new PlanPoint(90, 136), new PlanPoint(260, 136)),
+            6,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = new[] { "parallel-body-source" },
+            Evidence =
+            [
+                "filled wall-solid primitive",
+                "wall evidence: filled closed vector wall body"
+            ]
+        };
+        var context = CreateContext("collinear-room-boundary-continuation");
+        context.Walls.Add(continuation);
+        context.Walls.Add(collinearBody);
+        context.Walls.Add(parallelWall);
+        context.WallGraph = GraphFor(continuation, collinearBody, parallelWall);
+        context.WallEvidenceMap = new WallEvidenceMap(
+            Array.Empty<WallEvidenceSegment>(),
+            Array.Empty<WallEvidenceBand>(),
+            new[]
+            {
+                new WallEvidenceWallAssessment(
+                    continuation.Id,
+                    continuation.PageNumber,
+                    continuation.Bounds,
+                    WallEvidenceCategory.MediumWallBody,
+                    new Confidence(0.84),
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    continuation.SourcePrimitiveIds,
+                    continuation.Evidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                },
+                new WallEvidenceWallAssessment(
+                    collinearBody.Id,
+                    collinearBody.PageNumber,
+                    collinearBody.Bounds,
+                    WallEvidenceCategory.StrongWallBody,
+                    Confidence.High,
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    collinearBody.SourcePrimitiveIds,
+                    collinearBody.Evidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                },
+                new WallEvidenceWallAssessment(
+                    parallelWall.Id,
+                    parallelWall.PageNumber,
+                    parallelWall.Bounds,
+                    WallEvidenceCategory.StrongWallBody,
+                    Confidence.High,
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false,
+                    parallelWall.SourcePrimitiveIds,
+                    parallelWall.Evidence)
+                {
+                    Decision = WallEvidenceDecision.Accept
+                }
+            });
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var continuationAssessment = Assert.Single(
+            context.WallEvidenceMap.WallAssessments,
+            assessment => assessment.WallId == continuation.Id);
+        Assert.True(continuationAssessment.PlacementReady);
+        Assert.False(continuationAssessment.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, continuationAssessment.Decision);
+        Assert.Contains(
+            continuationAssessment.Evidence,
+            item => item.Contains("collinear wall-body continuation", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.parallel_offset_structural_continuations_preserved"
+                && diagnostic.Properties["preservedWallCount"] == "1");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_KeepsDistantUnpairedWallWhenParallelWallDoesNotExplainIt()
     {
         var wall = new WallSegment(
