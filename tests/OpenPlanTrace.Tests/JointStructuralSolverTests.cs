@@ -1947,6 +1947,226 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void JointSolver_RecoversMutuallySupportingRoomEdgesAsCoherentBundle()
+    {
+        var top = Candidate(
+            "room-top",
+            new PlanLineSegment(new PlanPoint(0, 0), new PlanPoint(100, 0)),
+            unaryScore: 0.50) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.AcceptedWall
+                | StructuralCandidateOrigin.RoomBoundary
+        };
+        var right = Candidate(
+            "room-right",
+            new PlanLineSegment(new PlanPoint(100, 0), new PlanPoint(100, 80)),
+            unaryScore: -0.50) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.AcceptedWall
+                | StructuralCandidateOrigin.RoomBoundary
+        };
+        var bottom = Candidate(
+            "room-bottom",
+            new PlanLineSegment(new PlanPoint(0, 80), new PlanPoint(100, 80)),
+            unaryScore: 0.50) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.AcceptedWall
+                | StructuralCandidateOrigin.RoomBoundary
+        };
+        var left = Candidate(
+            "room-left",
+            new PlanLineSegment(new PlanPoint(0, 0), new PlanPoint(0, 80)),
+            unaryScore: -0.50) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.AcceptedWall
+                | StructuralCandidateOrigin.RoomBoundary
+        };
+        var loop = RoomLoop("bundle-room", top, right, bottom, left);
+        var graph = Graph(
+            new[] { top, right, bottom, left },
+            Array.Empty<StructuralEvidenceRelation>(),
+            new[] { loop });
+
+        var localOnly = JointStructuralSolver.Solve(
+            graph,
+            new StructuralSolverOptions
+            {
+                EnableCoherentBundleOptimization = false
+            });
+        var solution = JointStructuralSolver.Solve(graph);
+        var reversed = JointStructuralSolver.Solve(
+            Graph(
+                new[] { left, bottom, right, top },
+                Array.Empty<StructuralEvidenceRelation>(),
+                new[] { loop with { BoundaryEdges = loop.BoundaryEdges.Reverse().ToArray() } }));
+
+        Assert.Equal(2, localOnly.Metrics.SelectedCandidateCount);
+        Assert.Equal(4, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(1, solution.Metrics.AcceptedCoherentBundleCount);
+        Assert.Equal(2, solution.Metrics.BundleRecoveredCandidateCount);
+        Assert.True(Assert.Single(solution.RoomClosures).IsClosed);
+        Assert.Equal(
+            solution.CandidateDecisions
+                .Where(decision => decision.Decision == StructuralWallDecisionKind.Selected)
+                .Select(decision => decision.CandidateId)
+                .Order(StringComparer.Ordinal),
+            reversed.CandidateDecisions
+                .Where(decision => decision.Decision == StructuralWallDecisionKind.Selected)
+                .Select(decision => decision.CandidateId)
+                .Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void JointSolver_DoesNotBundleRoomClosureAcrossSemanticBlocker()
+    {
+        var top = Candidate(
+            "blocked-room-top",
+            new PlanLineSegment(new PlanPoint(0, 0), new PlanPoint(100, 0)),
+            unaryScore: 0.50);
+        var right = Candidate(
+            "blocked-room-right",
+            new PlanLineSegment(new PlanPoint(100, 0), new PlanPoint(100, 80)),
+            unaryScore: -0.50) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.AcceptedWall
+                | StructuralCandidateOrigin.RoomBoundary
+        };
+        var bottom = Candidate(
+            "blocked-room-bottom",
+            new PlanLineSegment(new PlanPoint(0, 80), new PlanPoint(100, 80)),
+            unaryScore: 0.50);
+        var left = Candidate(
+            "blocked-room-left",
+            new PlanLineSegment(new PlanPoint(0, 0), new PlanPoint(0, 80)),
+            unaryScore: -0.50) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.AcceptedWall
+                | StructuralCandidateOrigin.RoomBoundary,
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.ObjectOrFixture, -0.80)
+            ]
+        };
+        var graph = Graph(
+            new[] { top, right, bottom, left },
+            Array.Empty<StructuralEvidenceRelation>(),
+            new[] { RoomLoop("blocked-room", top, right, bottom, left) });
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(2, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(0, solution.Metrics.AcceptedCoherentBundleCount);
+        Assert.False(Assert.Single(solution.RoomClosures).IsClosed);
+        Assert.DoesNotContain(
+            solution.CandidateDecisions,
+            decision =>
+                decision.CandidateId == left.Id
+                && decision.Decision == StructuralWallDecisionKind.Selected);
+    }
+
+    [Fact]
+    public void JointSolver_RecoversSourceBackedContinuationChainAsCoherentBundle()
+    {
+        var anchor = Candidate(
+            "continuation-anchor",
+            new PlanLineSegment(new PlanPoint(0, 20), new PlanPoint(40, 20)),
+            unaryScore: 0.40);
+        var middle = Candidate(
+            "continuation-middle",
+            new PlanLineSegment(new PlanPoint(40, 20), new PlanPoint(80, 20)),
+            unaryScore: -0.15);
+        var end = Candidate(
+            "continuation-end",
+            new PlanLineSegment(new PlanPoint(80, 20), new PlanPoint(120, 20)),
+            unaryScore: -0.15);
+        var graph = Graph(
+            new[] { anchor, middle, end },
+            new[]
+            {
+                Relation(
+                    StructuralEvidenceRelationKind.Continuation,
+                    anchor,
+                    middle,
+                    weight: 0.10),
+                Relation(
+                    StructuralEvidenceRelationKind.Continuation,
+                    middle,
+                    end,
+                    weight: 0.22)
+            });
+
+        var localOnly = JointStructuralSolver.Solve(
+            graph,
+            new StructuralSolverOptions
+            {
+                EnableCoherentBundleOptimization = false
+            });
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(1, localOnly.Metrics.SelectedCandidateCount);
+        Assert.Equal(3, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(1, solution.Metrics.AcceptedCoherentBundleCount);
+        Assert.Equal(2, solution.Metrics.BundleRecoveredCandidateCount);
+        Assert.Equal(120, Assert.Single(solution.WallRuns).DrawingLength, precision: 6);
+    }
+
+    [Fact]
+    public void JointSolver_DoesNotBundleFixtureLikeContinuationChain()
+    {
+        var anchor = Candidate(
+            "fixture-chain-anchor",
+            new PlanLineSegment(new PlanPoint(0, 20), new PlanPoint(40, 20)),
+            unaryScore: 0.40);
+        var middle = Candidate(
+            "fixture-chain-middle",
+            new PlanLineSegment(new PlanPoint(40, 20), new PlanPoint(80, 20)),
+            unaryScore: -0.15) with
+        {
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.ObjectOrFixture, -0.80)
+            ]
+        };
+        var end = Candidate(
+            "fixture-chain-end",
+            new PlanLineSegment(new PlanPoint(80, 20), new PlanPoint(120, 20)),
+            unaryScore: -0.15) with
+        {
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.ObjectOrFixture, -0.80)
+            ]
+        };
+        var graph = Graph(
+            new[] { anchor, middle, end },
+            new[]
+            {
+                Relation(
+                    StructuralEvidenceRelationKind.Continuation,
+                    anchor,
+                    middle,
+                    weight: 0.10),
+                Relation(
+                    StructuralEvidenceRelationKind.Continuation,
+                    middle,
+                    end,
+                    weight: 0.22)
+            });
+
+        var solution = JointStructuralSolver.Solve(graph);
+
+        Assert.Equal(1, solution.Metrics.SelectedCandidateCount);
+        Assert.Equal(0, solution.Metrics.AcceptedCoherentBundleCount);
+        Assert.Equal(anchor.Id, Assert.Single(solution.WallRuns).CandidateIds.Single());
+    }
+
+    [Fact]
     public void JointSolver_CompactsCollinearFragmentsIntoOneCanonicalRun()
     {
         var first = Candidate(
@@ -4512,16 +4732,64 @@ public sealed class JointStructuralSolverTests
 
     private static StructuralEvidenceGraph Graph(
         IReadOnlyList<StructuralWallCandidate> candidates,
-        IReadOnlyList<StructuralEvidenceRelation> relations) =>
+        IReadOnlyList<StructuralEvidenceRelation> relations,
+        IReadOnlyList<StructuralRoomLoopCandidate>? roomLoops = null) =>
         new(
             StructuralEvidenceGraph.CurrentContractVersion,
             candidates,
             relations,
             Array.Empty<StructuralJunctionCandidate>(),
-            Array.Empty<StructuralRoomLoopCandidate>(),
+            roomLoops ?? Array.Empty<StructuralRoomLoopCandidate>(),
             Array.Empty<StructuralOpeningConstraint>(),
             new[] { "test" },
             Array.Empty<string>());
+
+    private static StructuralRoomLoopCandidate RoomLoop(
+        string id,
+        StructuralWallCandidate top,
+        StructuralWallCandidate right,
+        StructuralWallCandidate bottom,
+        StructuralWallCandidate left) =>
+        new(
+            $"loop:{id}",
+            id,
+            1,
+            new[]
+            {
+                top.CenterLine.Start,
+                top.CenterLine.End,
+                bottom.CenterLine.End,
+                bottom.CenterLine.Start
+            },
+            new[]
+            {
+                new StructuralRoomBoundaryEdge(
+                    $"edge:{id}:top",
+                    top.CenterLine,
+                    new[] { top.Id },
+                    Array.Empty<string>()),
+                new StructuralRoomBoundaryEdge(
+                    $"edge:{id}:right",
+                    right.CenterLine,
+                    new[] { right.Id },
+                    Array.Empty<string>()),
+                new StructuralRoomBoundaryEdge(
+                    $"edge:{id}:bottom",
+                    bottom.CenterLine,
+                    new[] { bottom.Id },
+                    Array.Empty<string>()),
+                new StructuralRoomBoundaryEdge(
+                    $"edge:{id}:left",
+                    left.CenterLine,
+                    new[] { left.Id },
+                    Array.Empty<string>())
+            },
+            Confidence.High,
+            Weight: 1,
+            Array.Empty<string>())
+        {
+            Context = StructuralRoomLoopContext.Indoor
+        };
 
     private static StructuralWallCandidate Candidate(
         string id,

@@ -170,7 +170,10 @@ internal sealed class StructuralInterpretationStage : IPipelineStage
                         .Select(candidate =>
                             $"{candidate.Id}|score={candidate.UnaryScore:0.###}|origins={candidate.Origins}|rooms={candidate.SourceRoomIds.Count}|signals={string.Join(",", candidate.Signals.Where(signal => signal.Weight < 0).Select(signal => $"{signal.Kind}:{signal.Weight:0.###}"))}")),
                 ["objectiveScore"] = solution.ObjectiveScore.ToString("0.######", CultureInfo.InvariantCulture),
-                ["optimizationPassCount"] = solution.Metrics.OptimizationPassCount.ToString(CultureInfo.InvariantCulture)
+                ["optimizationPassCount"] = solution.Metrics.OptimizationPassCount.ToString(CultureInfo.InvariantCulture),
+                ["coherentBundlePassCount"] = solution.Metrics.CoherentBundlePassCount.ToString(CultureInfo.InvariantCulture),
+                ["acceptedCoherentBundleCount"] = solution.Metrics.AcceptedCoherentBundleCount.ToString(CultureInfo.InvariantCulture),
+                ["bundleRecoveredCandidateCount"] = solution.Metrics.BundleRecoveredCandidateCount.ToString(CultureInfo.InvariantCulture)
             });
 
         if (solution.Metrics.StrongNegativeSelectedCandidateCount > 0)

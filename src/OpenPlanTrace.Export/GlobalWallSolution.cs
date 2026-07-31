@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v21";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v22";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -276,6 +276,12 @@ public static partial class GlobalWallSolutionBuilder
     private const double MinimumConsensusRecallUncoveredLength = 24.0;
     private const double MinimumConsensusRecallUncoveredThicknessMultiple = 4.0;
     private const double MinimumStructuralBridgeRecallScore = 0.44;
+    private const double MinimumGuardedStructuralReviewRecallScore = 0.52;
+    private const double MinimumGuardedStructuralReviewCoverageGain = 0.004;
+    private const double MaximumGuardedStructuralReviewScoreRegression = 0.015;
+    private const double MaximumGuardedStructuralReviewDuplicateRatio = 0.040;
+    private const double MaximumGuardedStructuralReviewNoiseRatio = 0.030;
+    private const double MaximumGuardedStructuralReviewRatio = 0.100;
     private const int MaximumStructuralBridgeRecallPassCount = 2;
     private const double MinimumMajorRecallGain = 0.010;
     private const double MinimumStructuralOverrideScoreGain = 0.006;
@@ -293,6 +299,7 @@ public static partial class GlobalWallSolutionBuilder
     private const double MaximumRecallScoreRegression = 0.025;
     private const double MaximumStructuralOverrideMajorCoverageLoss = 0.015;
     private const double MaximumStructuralOverrideLongCoverageLoss = 0.006;
+    private const double MaximumStructuralOverrideExteriorContinuityLoss = 0.050;
     private const double MaximumStructuralOverrideRoomClosureLoss = 0.150;
     private const double MaximumStructuralOverrideDuplicateRatio = 0.080;
     private const double MaximumStructuralOverrideNoiseRatio = 0.080;
@@ -348,6 +355,7 @@ public static partial class GlobalWallSolutionBuilder
         "outdoor or conflicted room context cannot promote",
         "objectorfixturedetail",
         "opening-clearance rectangle",
+        "duplicate wall-face line already represented",
         "parallel offset detail shadow",
         "shadowed by stronger parallel wall",
         "rejected as noise"
@@ -686,7 +694,7 @@ public static partial class GlobalWallSolutionBuilder
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
                 var sourceEvidence = sourceWalls
-                    .SelectMany(wall => wall.Evidence)
+                    .SelectMany(StructuralSourceWallEvidence)
                     .Concat(run.Evidence)
                     .Concat(run.Reliability.Reasons)
                     .Concat(sourceWalls.Any(wall => wall.Reliability.CoordinatePlacementBlocked)
@@ -716,14 +724,18 @@ public static partial class GlobalWallSolutionBuilder
                     && !run.Reliability.RequiresReview
                     && run.Confidence.Value >= 0.5;
                 var requiresReview = !readyForCoordinates;
-                var structuralNegative = run.Reliability.RequiresReview
-                    && run.Reliability.Reasons.Any(reason =>
-                        reason.Contains(
-                            "unsupported geometry or context-only negative evidence",
-                            StringComparison.OrdinalIgnoreCase)
-                        || reason.Contains(
-                            "excluded, unanchored wall-graph island",
-                            StringComparison.OrdinalIgnoreCase));
+                var sourceStrongNegativeVotes = sourceWalls.Count(
+                    HasUnresolvedStructuralSourceNegative);
+                var runStrongNegativeVote =
+                    run.Reliability.RequiresReview
+                    && HasStrongNegativeEvidence(
+                        run.Evidence
+                            .Concat(run.Reliability.Reasons)
+                            .ToArray())
+                        ? 1
+                        : 0;
+                var structuralEvidenceContributorCount =
+                    Math.Max(1, sourceWalls.Length + 1);
 
                 return CreateCandidate(
                     $"candidate:structural:{run.Id}",
@@ -748,13 +760,58 @@ public static partial class GlobalWallSolutionBuilder
                     run.SourcePrimitiveIds,
                     sourceLayers,
                     BuildSourceWallComponentReferences(sourceWalls),
-                    strongNegativeEvidenceVotes: structuralNegative
-                        ? Math.Max(1, run.CandidateIds.Count)
-                        : 0,
-                    evidenceContributorCount: Math.Max(1, run.CandidateIds.Count),
+                    strongNegativeEvidenceVotes:
+                        sourceStrongNegativeVotes + runStrongNegativeVote,
+                    evidenceContributorCount: structuralEvidenceContributorCount,
                     sourceEvidence);
             })
             .ToArray();
+    }
+
+    private static IReadOnlyList<string> StructuralSourceWallEvidence(
+        PlacementWallExport wall) =>
+        wall.Evidence
+            .Concat(wall.EvidenceAssessment?.Evidence ?? Array.Empty<string>())
+            .Concat(wall.Reliability.Reasons)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool HasUnresolvedStructuralSourceNegative(
+        PlacementWallExport wall)
+    {
+        var evidence = StructuralSourceWallEvidence(wall);
+        if (!HasStrongNegativeEvidence(evidence))
+        {
+            return false;
+        }
+
+        var text = string.Join(" | ", evidence).ToLowerInvariant();
+        var intrinsicBlocker =
+            text.Contains("wall evidence rejected as non-wall/noise")
+            || text.Contains("reclassified as object/fixture detail")
+            || text.Contains("door swing linework")
+            || text.Contains("door leaf linework")
+            || text.Contains("door arc linework")
+            || text.Contains("witness/extension line")
+            || text.Contains("repeated short detail linework")
+            || text.Contains("inferred repeated detail family")
+            || text.Contains("objectorfixturedetail")
+            || text.Contains("opening-clearance rectangle")
+            || text.Contains("duplicate wall-face line already represented")
+            || text.Contains("parallel offset detail shadow")
+            || text.Contains("shadowed by stronger parallel wall")
+            || text.Contains("rejected as noise");
+        if (intrinsicBlocker)
+        {
+            return true;
+        }
+
+        var independentFilledWallBody =
+            text.Contains("filled wall-solid primitive")
+            || text.Contains("filled closed vector wall body")
+            || text.Contains("strong parallel-face wall pair");
+        return !independentFilledWallBody;
     }
 
     private static (
@@ -1011,7 +1068,15 @@ public static partial class GlobalWallSolutionBuilder
             return null;
         }
 
-        var withheldReviewCount = structuralIds.Count - selectedIds.Count;
+        var guardedStructuralReviewRecovered =
+            SelectGuardedStructuralReviewRecallCandidates(
+                structuralCandidates,
+                candidates,
+                selectedIds,
+                rooms,
+                openings);
+        selectedIds.UnionWith(
+            guardedStructuralReviewRecovered.Select(candidate => candidate.Id));
         var consensusRecovered = SelectConsensusRecallCandidates(
             legacyHypotheses,
             candidates,
@@ -1025,11 +1090,14 @@ public static partial class GlobalWallSolutionBuilder
             rooms,
             openings);
         selectedIds.UnionWith(bridgeRecovered.Select(candidate => candidate.Id));
-        var recoveredCount = consensusRecovered
+        var recoveredCount = guardedStructuralReviewRecovered
+            .Concat(consensusRecovered)
             .Concat(bridgeRecovered)
             .Select(candidate => candidate.Id)
             .Distinct(StringComparer.Ordinal)
             .Count();
+        var withheldReviewCount = structuralIds.Count(candidateId =>
+            !selectedIds.Contains(candidateId));
         var metrics = Evaluate(selectedIds, candidates, rooms, openings);
         var profile = new WallSolverProfile(
             "joint-structural",
@@ -1052,6 +1120,101 @@ public static partial class GlobalWallSolutionBuilder
                 .ToArray(),
             metrics);
     }
+
+    private static IReadOnlyList<GlobalWallCandidate> SelectGuardedStructuralReviewRecallCandidates(
+        IReadOnlyList<GlobalWallCandidate> structuralCandidates,
+        IReadOnlyList<GlobalWallCandidate> allCandidates,
+        IReadOnlySet<string> initiallySelectedIds,
+        IReadOnlyList<PlacementRoomExport> rooms,
+        IReadOnlyList<PlacementOpeningExport> openings)
+    {
+        var selectedIds = initiallySelectedIds.ToHashSet(StringComparer.Ordinal);
+        var recovered = new List<GlobalWallCandidate>();
+        foreach (var candidate in structuralCandidates
+                     .Where(candidate => !selectedIds.Contains(candidate.Id))
+                     .Where(IsGuardedStructuralReviewRecallCandidate)
+                     .OrderByDescending(candidate => candidate.LocalScore)
+                     .ThenByDescending(candidate => candidate.DrawingLength)
+                     .ThenBy(candidate => candidate.Id, StringComparer.Ordinal))
+        {
+            var selectedRuns = PrepareSelectedRuns(
+                allCandidates
+                    .Where(item => selectedIds.Contains(item.Id))
+                    .ToArray(),
+                allCandidates,
+                rooms,
+                openings);
+            var coverage = CoverageRatio(candidate, selectedRuns);
+            if (coverage >= MaximumConsensusRecallCoverage
+                || !HasSufficientUncoveredConsensusRecallLength(
+                    candidate.DrawingLength,
+                    coverage,
+                    candidate.ThicknessDrawingUnits))
+            {
+                continue;
+            }
+
+            var current = Evaluate(
+                selectedIds,
+                allCandidates,
+                rooms,
+                openings);
+            var trialIds = selectedIds.ToHashSet(StringComparer.Ordinal);
+            trialIds.Add(candidate.Id);
+            var trial = Evaluate(
+                trialIds,
+                allCandidates,
+                rooms,
+                openings);
+            var coverageGain =
+                trial.MajorWallCoverageRatio - current.MajorWallCoverageRatio;
+            if (coverageGain < MinimumGuardedStructuralReviewCoverageGain
+                || trial.ObjectiveScore
+                    + MaximumGuardedStructuralReviewScoreRegression
+                    < current.ObjectiveScore
+                || trial.DuplicateLengthRatio
+                    > MaximumGuardedStructuralReviewDuplicateRatio
+                || trial.NoiseLengthRatio
+                    > MaximumGuardedStructuralReviewNoiseRatio
+                || trial.ReviewLengthRatio
+                    > MaximumGuardedStructuralReviewRatio)
+            {
+                continue;
+            }
+
+            selectedIds.Add(candidate.Id);
+            recovered.Add(candidate);
+        }
+
+        return recovered
+            .OrderBy(candidate => candidate.PageNumber)
+            .ThenBy(candidate => candidate.Bounds.Y)
+            .ThenBy(candidate => candidate.Bounds.X)
+            .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool IsGuardedStructuralReviewRecallCandidate(
+        GlobalWallCandidate candidate) =>
+        string.Equals(
+            candidate.PrimaryOrigin,
+            "StructuralCore",
+            StringComparison.Ordinal)
+        && candidate.RequiresReview
+        && !candidate.ReadyForCoordinatePlacement
+        && !candidate.ExcludedFromStructuralTopology
+        && !candidate.StrongNegativeEvidence
+        && candidate.MajorWallCandidate
+        && candidate.LocalScore >= MinimumGuardedStructuralReviewRecallScore
+        && candidate.SupportedEndpointCount >= 2
+        && candidate.StructuralEvidenceCount >= 1
+        && candidate.WeakNegativeEvidenceCount <= 1
+        && candidate.RoomBoundarySupportCount + candidate.OpeningSupportCount >= 1
+        && !string.Equals(
+            candidate.WallType,
+            "Unknown",
+            StringComparison.OrdinalIgnoreCase)
+        && Orientation(candidate.CenterLine) != WallOrientation.Diagonal;
 
     private static IReadOnlyList<GlobalWallCandidate> SelectConsensusRecallCandidates(
         IReadOnlyList<SolvedHypothesis> legacyHypotheses,
@@ -2046,6 +2209,9 @@ public static partial class GlobalWallSolutionBuilder
             && alternativeMetrics.LongWallCoverageRatio
                 + MaximumStructuralOverrideLongCoverageLoss
                 >= structuralMetrics.LongWallCoverageRatio
+            && alternativeMetrics.ExteriorContinuityRatio
+                + MaximumStructuralOverrideExteriorContinuityLoss
+                >= structuralMetrics.ExteriorContinuityRatio
             && alternativeMetrics.RoomBoundaryClosureRatio
                 + MaximumStructuralOverrideRoomClosureLoss
                 >= structuralMetrics.RoomBoundaryClosureRatio
@@ -2078,6 +2244,9 @@ public static partial class GlobalWallSolutionBuilder
                 >= structural.MajorWallCoverageRatio + MinimumDecisiveMajorRecallGain
             && alternative.LongWallCoverageRatio
                 >= structural.LongWallCoverageRatio + MinimumDecisiveLongRecallGain
+            && alternative.ExteriorContinuityRatio
+                + MaximumStructuralOverrideExteriorContinuityLoss
+                >= structural.ExteriorContinuityRatio
             && alternative.EndpointConnectivityRatio
                 + MaximumDecisiveEndpointConnectivityLoss
                 >= structural.EndpointConnectivityRatio

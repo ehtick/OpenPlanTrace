@@ -137,6 +137,11 @@ public sealed class GlobalWallSolutionTests
             alternative with { LongWallCoverageRatio = 0.82 },
             structuralScore: 0.793,
             structural));
+        Assert.False(GlobalWallSolutionBuilder.IsDecisiveRecallRescue(
+            alternativeScore: 0.879,
+            alternative with { ExteriorContinuityRatio = 0.70 },
+            structuralScore: 0.793,
+            structural));
     }
 
     [Fact]
@@ -243,12 +248,12 @@ public sealed class GlobalWallSolutionTests
                 ReadyForMetricPlacement: false,
                 RequiresReview: true,
                 Confidence: 0.65,
-                Reasons: ["opening-clearance geometry requires review"]),
+                Reasons: ["source-backed wall body requires structural review"]),
             SourceLayers = ["(unlayered)"],
             Evidence =
             [
-                "single wall-length vector run",
-                "unfilled exterior opening-clearance rectangle retained as review geometry"
+                "parallel wall-face pair",
+                "main structural wall body"
             ]
         };
         var allWalls = trustedWalls.Append(reviewOnly).ToArray();
@@ -323,7 +328,7 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
-    public async Task StructuralCore_WithholdsReviewOnlyRunsWhenReadyRunsExist()
+    public async Task StructuralCore_WithholdsUnsupportedReviewOnlyRunsWhenReadyRunsExist()
     {
         var result = await CreateScanResultAsync();
         var placement = PlanPlacementExport.From(result);
@@ -363,6 +368,131 @@ public sealed class GlobalWallSolutionTests
         Assert.DoesNotContain(
             structural.Id,
             reviewDecision.SelectedByHypothesisIds);
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("duplicate wall-face line already represented by stronger paired wall body", false)]
+    [InlineData("overlaps non-structural surface/detail pattern", true)]
+    [InlineData("parallel offset detail shadow retained for review", false)]
+    public async Task StructuralCore_GuardedMajorReviewRecallHonorsSourceNegativeEvidence(
+        string? sourceNegativeEvidence,
+        bool expectedSelected)
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var template = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var templateEvidenceAssessment = Assert.IsType<WallEvidenceAssessmentExport>(
+            template.EvidenceAssessment);
+        var target = HostWallFragment(
+            template,
+            "guarded-structural-review-target",
+            new LineExport(
+                new PointExport(100, 200),
+                new PointExport(400, 200))) with
+        {
+            Confidence = 0.88,
+            Reliability = new PlacementReliabilityExport(
+                ReadyForCoordinatePlacement: false,
+                ReadyForMetricPlacement: false,
+                RequiresReview: true,
+                Confidence: 0.88,
+                Reasons: ["source-backed major wall requires review"]),
+            Evidence =
+            [
+                "filled wall-solid primitive",
+                "filled closed vector wall body",
+                "parallel wall-face pair",
+                "main structural wall body"
+            ],
+            EvidenceAssessment = sourceNegativeEvidence is null
+                ? templateEvidenceAssessment
+                : templateEvidenceAssessment with
+                {
+                    Evidence = templateEvidenceAssessment.Evidence
+                        .Append(sourceNegativeEvidence)
+                        .ToArray()
+                }
+        };
+        var supports = new[]
+        {
+            HostWallFragment(
+                template,
+                "guarded-structural-review-left",
+                new LineExport(new PointExport(100, 80), new PointExport(100, 320))),
+            HostWallFragment(
+                template,
+                "guarded-structural-review-right",
+                new LineExport(new PointExport(400, 80), new PointExport(400, 320))),
+            HostWallFragment(
+                template,
+                "guarded-structural-review-upper",
+                new LineExport(new PointExport(-600, 50), new PointExport(1200, 50))),
+            HostWallFragment(
+                template,
+                "guarded-structural-review-lower",
+                new LineExport(new PointExport(-600, 350), new PointExport(1200, 350)))
+        };
+        var structuralSolution = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            supports.Append(target).ToArray());
+        structuralSolution = structuralSolution with
+        {
+            WallRuns = structuralSolution.WallRuns
+                .Select(run => run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal)
+                    ? run with
+                    {
+                        Reliability = new StructuralWallRunReliability(
+                            ReadyForCoordinatePlacement: false,
+                            RequiresReview: true,
+                            Confidence: 0.88,
+                            Reasons: ["source-backed major wall requires review"])
+                    }
+                    : run)
+                .ToArray()
+        };
+        var room = RoomBoundaryAtAxis(
+            placement.Rooms.First(),
+            target.Id,
+            axis: 200,
+            sourceLinked: true);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            supports.Append(target).ToArray(),
+            [room],
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structuralSolution);
+
+        var structural = Assert.Single(solutions.Hypotheses.Where(hypothesis =>
+            hypothesis.Id == "hypothesis:joint-structural-core"));
+        var decision = Assert.Single(solutions.CandidateDecisions.Where(candidate =>
+            candidate.Origin == "StructuralCore"
+            && candidate.SourceWallIds.Contains(target.Id, StringComparer.Ordinal)));
+        var targetCandidateId = decision.CandidateId;
+
+        Assert.Equal(expectedSelected, structural.SelectedCandidateIds.Contains(
+            targetCandidateId,
+            StringComparer.Ordinal));
+        Assert.Equal(!expectedSelected, decision.StrongNegativeEvidence);
+        if (expectedSelected)
+        {
+            Assert.True(decision.MajorWallCandidate);
+            Assert.Equal("Selected", decision.Decision);
+            Assert.Contains(
+                solutions.SelectedWallRuns,
+                run => run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal));
+        }
+        else
+        {
+            Assert.False(decision.MajorWallCandidate);
+            Assert.Equal("Rejected", decision.Decision);
+            Assert.DoesNotContain(
+                solutions.SelectedWallRuns,
+                run => run.SourceWallIds.Contains(target.Id, StringComparer.Ordinal));
+        }
     }
 
     [Fact]
@@ -4157,9 +4287,14 @@ public sealed class GlobalWallSolutionTests
         Assert.Equal(placement.WallSolutions.SelectedHypothesisId, structure.WallSolver.SelectedHypothesisId);
         Assert.Equal(placement.WallSolutions.SelectedProfile, structure.WallSolver.SelectedProfile);
         Assert.Equal(placement.WallSolutions.SelectedScore, structure.WallSolver.SelectedScore);
+        var placementRunsById = placement.WallSolutions.SelectedWallRuns
+            .ToDictionary(run => run.Id, StringComparer.Ordinal);
         Assert.Equal(
-            placement.WallSolutions.SelectedWallRuns.Select(run => run.CenterLine),
-            structure.WallRuns.Select(run => run.CenterLine));
+            placementRunsById.Keys.Order(StringComparer.Ordinal),
+            structure.WallRuns.Select(run => run.Id).Order(StringComparer.Ordinal));
+        Assert.All(
+            structure.WallRuns,
+            run => Assert.Equal(placementRunsById[run.Id].CenterLine, run.CenterLine));
     }
 
     private static IEnumerable<(PlacementSolvedWallRunExport First, PlacementSolvedWallRunExport Second)>

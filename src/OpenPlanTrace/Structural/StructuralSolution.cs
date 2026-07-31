@@ -110,7 +110,10 @@ public sealed record StructuralSolutionMetrics(
     int PreliminaryAcceptedCandidateCount,
     int RecoveredSelectedCandidateCount,
     int StrongNegativeSelectedCandidateCount,
-    int OptimizationPassCount);
+    int OptimizationPassCount,
+    int CoherentBundlePassCount,
+    int AcceptedCoherentBundleCount,
+    int BundleRecoveredCandidateCount);
 
 public sealed record StructuralPlanSolution(
     string SolverVersion,
@@ -123,7 +126,7 @@ public sealed record StructuralPlanSolution(
     StructuralSolutionMetrics Metrics,
     IReadOnlyList<string> Evidence)
 {
-    public const string CurrentSolverVersion = "openplantrace.joint-structural-solver.v12";
+    public const string CurrentSolverVersion = "openplantrace.joint-structural-solver.v13";
 
     public static StructuralPlanSolution Empty { get; } =
         new(
@@ -134,7 +137,7 @@ public sealed record StructuralPlanSolution(
             Array.Empty<StructuralWallRun>(),
             Array.Empty<StructuralJunction>(),
             Array.Empty<StructuralRoomClosure>(),
-            new StructuralSolutionMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            new StructuralSolutionMetrics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
             Array.Empty<string>());
 
     public int ArtifactCount =>

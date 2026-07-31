@@ -47,6 +47,91 @@ public static class JointStructuralSolver
             .ThenBy(candidate => candidate.Id, StringComparer.Ordinal)
             .ToArray();
 
+        var completedPasses = OptimizeSingleCandidateMoves(
+            considered,
+            selected,
+            objective,
+            options);
+        var bundleResult = StructuralCoherentBundleOptimizer.Optimize(
+            graph,
+            considered,
+            selected,
+            objective,
+            options);
+        if (bundleResult.AcceptedBundleCount > 0)
+        {
+            completedPasses += OptimizeSingleCandidateMoves(
+                considered,
+                selected,
+                objective,
+                options);
+        }
+
+        ResolveHardConflicts(graph, selected, objective);
+        var topology = CanonicalStructuralTopologyBuilder.Build(graph, selected, options);
+        var roomClosures = BuildRoomClosures(graph, selected, topology.WallRuns, objective);
+        var decisions = BuildDecisions(
+            graph,
+            selected,
+            objective,
+            options,
+            dominatedByCandidateId);
+        var objectiveScore = objective.Evaluate(selected);
+        var meanCoverage = roomClosures.Count == 0
+            ? 0
+            : roomClosures.Average(room => room.BoundaryCoverage);
+        var metrics = new StructuralSolutionMetrics(
+            graph.WallCandidates.Count,
+            graph.WallCandidates.Count(candidate => candidate.IsEligible),
+            selected.Count,
+            decisions.Count(decision => decision.Decision == StructuralWallDecisionKind.Rejected),
+            decisions.Count(decision => decision.Decision == StructuralWallDecisionKind.RetainedForReview),
+            topology.WallRuns.Count,
+            topology.Junctions.Count,
+            roomClosures.Count,
+            roomClosures.Count(room => room.IsClosed),
+            Round(meanCoverage),
+            graph.WallCandidates.Count(candidate => candidate.WasAcceptedByPreliminaryPipeline),
+            graph.WallCandidates.Count(candidate =>
+                selected.Contains(candidate.Id)
+                && !candidate.WasAcceptedByPreliminaryPipeline),
+            graph.WallCandidates.Count(candidate =>
+                selected.Contains(candidate.Id)
+                && candidate.HasStrongNegativeEvidence),
+            completedPasses,
+            bundleResult.CompletedPassCount,
+            bundleResult.AcceptedBundleCount,
+            bundleResult.AddedCandidateCount);
+
+        return new StructuralPlanSolution(
+            StructuralPlanSolution.CurrentSolverVersion,
+            graph.ContractVersion,
+            Round(objectiveScore),
+            decisions,
+            topology.WallRuns,
+            topology.Junctions,
+            roomClosures,
+            metrics,
+            new[]
+            {
+                $"joint solver considered {considered.Length} of {graph.WallCandidates.Count} retained candidate(s)",
+                $"suppressed {dominatedByCandidateId.Count} contained fragment or duplicate wall-face representation(s) behind stronger source-backed wall bodies",
+                $"joint solver selected {selected.Count} candidate(s) after {completedPasses} deterministic pass(es)",
+                $"coherent bundle search accepted {bundleResult.AcceptedBundleCount} bundle(s) and recovered {bundleResult.AddedCandidateCount} mutually supporting candidate(s)",
+                $"accepted bundles included {bundleResult.AcceptedRoomClosureBundleCount} room closure bundle(s) and {bundleResult.AcceptedContinuationBundleCount} continuation bundle(s)",
+                $"selected candidates compacted into {topology.WallRuns.Count} canonical wall run(s)",
+                $"canonical topology contains {topology.Junctions.Count} unsplit junction reference(s)",
+                $"room-loop objective closed {metrics.ClosedRoomLoopCount} of {metrics.EvaluatedRoomLoopCount} evaluated room loop(s)",
+                "preliminary detections and rejects remain available in the structural evidence graph"
+            });
+    }
+
+    private static int OptimizeSingleCandidateMoves(
+        IReadOnlyList<StructuralWallCandidate> considered,
+        HashSet<string> selected,
+        StructuralObjective objective,
+        StructuralSolverOptions options)
+    {
         var completedPasses = 0;
         for (var pass = 0; pass < options.MaximumOptimizationPasses; pass++)
         {
@@ -82,58 +167,7 @@ public static class JointStructuralSolver
             }
         }
 
-        ResolveHardConflicts(graph, selected, objective);
-        var topology = CanonicalStructuralTopologyBuilder.Build(graph, selected, options);
-        var roomClosures = BuildRoomClosures(graph, selected, topology.WallRuns, objective);
-        var decisions = BuildDecisions(
-            graph,
-            selected,
-            objective,
-            options,
-            dominatedByCandidateId);
-        var objectiveScore = objective.Evaluate(selected);
-        var meanCoverage = roomClosures.Count == 0
-            ? 0
-            : roomClosures.Average(room => room.BoundaryCoverage);
-        var metrics = new StructuralSolutionMetrics(
-            graph.WallCandidates.Count,
-            graph.WallCandidates.Count(candidate => candidate.IsEligible),
-            selected.Count,
-            decisions.Count(decision => decision.Decision == StructuralWallDecisionKind.Rejected),
-            decisions.Count(decision => decision.Decision == StructuralWallDecisionKind.RetainedForReview),
-            topology.WallRuns.Count,
-            topology.Junctions.Count,
-            roomClosures.Count,
-            roomClosures.Count(room => room.IsClosed),
-            Round(meanCoverage),
-            graph.WallCandidates.Count(candidate => candidate.WasAcceptedByPreliminaryPipeline),
-            graph.WallCandidates.Count(candidate =>
-                selected.Contains(candidate.Id)
-                && !candidate.WasAcceptedByPreliminaryPipeline),
-            graph.WallCandidates.Count(candidate =>
-                selected.Contains(candidate.Id)
-                && candidate.HasStrongNegativeEvidence),
-            completedPasses);
-
-        return new StructuralPlanSolution(
-            StructuralPlanSolution.CurrentSolverVersion,
-            graph.ContractVersion,
-            Round(objectiveScore),
-            decisions,
-            topology.WallRuns,
-            topology.Junctions,
-            roomClosures,
-            metrics,
-            new[]
-            {
-                $"joint solver considered {considered.Length} of {graph.WallCandidates.Count} retained candidate(s)",
-                $"suppressed {dominatedByCandidateId.Count} contained fragment or duplicate wall-face representation(s) behind stronger source-backed wall bodies",
-                $"joint solver selected {selected.Count} candidate(s) after {completedPasses} deterministic pass(es)",
-                $"selected candidates compacted into {topology.WallRuns.Count} canonical wall run(s)",
-                $"canonical topology contains {topology.Junctions.Count} unsplit junction reference(s)",
-                $"room-loop objective closed {metrics.ClosedRoomLoopCount} of {metrics.EvaluatedRoomLoopCount} evaluated room loop(s)",
-                "preliminary detections and rejects remain available in the structural evidence graph"
-            });
+        return completedPasses;
     }
 
     private static HashSet<string> BuildInitialSelection(

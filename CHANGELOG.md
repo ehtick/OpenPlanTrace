@@ -8,6 +8,14 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.12.000] - 2026-07-31
+
+- Improved coupled missing-wall recovery with coherent structural bundles.
+- Improved wall recall without reviving dimension and fixture linework.
+- Improved duplicate wall-face and parallel-shadow rejection.
+- Improved exterior-continuity arbitration between solver hypotheses.
+- Added structural bundle and semantic-veto regression coverage.
+
 ## [0.11.029] - 2026-07-31
 
 - Improved wall-face continuation alignment.

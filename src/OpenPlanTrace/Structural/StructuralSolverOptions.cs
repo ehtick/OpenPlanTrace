@@ -32,6 +32,14 @@ public sealed record StructuralSolverOptions
 
     public double ObjectiveImprovementTolerance { get; init; } = 0.0001;
 
+    public bool EnableCoherentBundleOptimization { get; init; } = true;
+
+    public int MaximumCoherentBundlePasses { get; init; } = 6;
+
+    public int MaximumCoherentBundleSize { get; init; } = 8;
+
+    public double MinimumCoherentBundleCandidateScore { get; init; } = -0.60;
+
     public double RoomClosureBonus { get; init; } = 0.85;
 
     public double ExteriorContinuityBonus { get; init; } = 0.16;
