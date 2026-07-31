@@ -208,6 +208,8 @@ internal sealed class OpeningDetectionStage : IPipelineStage
         }
 
         var addedSymbolOpenings = new List<OpeningCandidate>();
+        var unsupportedTickPairCount = 0;
+        var endpointTickPairCount = 0;
 
         foreach (var wall in axisWalls)
         {
@@ -251,13 +253,44 @@ internal sealed class OpeningDetectionStage : IPipelineStage
                     continue;
                 }
 
+                var hasExplicitOpeningHint =
+                    LooksLikeOpeningSource(previous.Symbol.Line)
+                    || LooksLikeOpeningSource(next.Symbol.Line);
+                if (!hasExplicitOpeningHint
+                    && IsNearUnsupportedHostEndpoint(
+                        wall,
+                        previous.Along,
+                        next.Along,
+                        context.Options))
+                {
+                    endpointTickPairCount++;
+                    continue;
+                }
+
+                var hasWindowFrameEvidence = TryFindWindowFrameEvidence(
+                    page,
+                    context,
+                    wall,
+                    previous,
+                    next,
+                    out var frameSourceIds,
+                    out var frameEvidence);
+                if (!hasExplicitOpeningHint && !hasWindowFrameEvidence)
+                {
+                    unsupportedTickPairCount++;
+                    continue;
+                }
+
                 var centerLine = OpeningLineFromProjection(wall.Wall.CenterLine, previous.Along, next.Along);
                 if (HasNearbyOpening(context.Openings, page.Number, centerLine, context.Options))
                 {
                     continue;
                 }
 
-                var sourceIds = new[] { previous.Symbol.SourceId, next.Symbol.SourceId };
+                var sourceIds = new[] { previous.Symbol.SourceId, next.Symbol.SourceId }
+                    .Concat(frameSourceIds)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
                 var bounds = PlanRect
                     .Union(new[] { previous.Symbol.Line.Segment.Bounds, next.Symbol.Line.Segment.Bounds, centerLine.Bounds })
                     .Inflate(Math.Max(wall.Wall.Thickness, context.Options.WallSnapTolerance))
@@ -270,7 +303,7 @@ internal sealed class OpeningDetectionStage : IPipelineStage
                     page.Number,
                     bounds,
                     wall.Wall.SourceRegionId);
-                var confidence = new Confidence(0.58);
+                var confidence = new Confidence(hasWindowFrameEvidence ? 0.66 : 0.64);
                 var placement = CreateOpeningPlacement(
                     centerLine,
                     new[] { wall.Wall },
@@ -298,7 +331,10 @@ internal sealed class OpeningDetectionStage : IPipelineStage
                         {
                             $"paired perpendicular opening ticks {Math.Round(width, 3)} drawing units apart",
                             $"host wall {wall.Wall.Id}",
-                            $"orientation {orientation}"
+                            $"orientation {orientation}",
+                            hasWindowFrameEvidence
+                                ? frameEvidence
+                                : "explicit window/opening source metadata"
                         },
                         WidthMillimeters = context.Calibration.ToMillimeters(width, scaleGroup),
                         MeasurementScaleGroupId = scaleGroup?.Id
@@ -330,6 +366,23 @@ internal sealed class OpeningDetectionStage : IPipelineStage
                     ["candidateCount"] = addedSymbolOpenings.Count.ToString(),
                     ["openingType"] = OpeningType.Window.ToString(),
                     ["operation"] = OpeningOperation.Fixed.ToString()
+                });
+        }
+
+        if (unsupportedTickPairCount > 0 || endpointTickPairCount > 0)
+        {
+            context.AddDiagnostic(
+                "openings.unsupported_tick_pairs.suppressed",
+                DiagnosticSeverity.Info,
+                "openings",
+                $"Suppressed {unsupportedTickPairCount + endpointTickPairCount} paired-tick opening proposal(s) without sufficient window assembly evidence.",
+                page.Number,
+                confidence: Confidence.Medium,
+                scope: DiagnosticScope.Detection,
+                properties: new Dictionary<string, string>
+                {
+                    ["unsupportedFrameEvidenceCount"] = unsupportedTickPairCount.ToString(),
+                    ["nearHostEndpointCount"] = endpointTickPairCount.ToString()
                 });
         }
     }
@@ -1025,6 +1078,128 @@ internal sealed class OpeningDetectionStage : IPipelineStage
         return before >= minimumContinuation || after >= minimumContinuation;
     }
 
+    private static bool IsNearUnsupportedHostEndpoint(
+        AxisWall wall,
+        double firstAlong,
+        double secondAlong,
+        ScannerOptions options)
+    {
+        var start = Math.Min(firstAlong, secondAlong);
+        var end = Math.Max(firstAlong, secondAlong);
+        var endpointGuard = Math.Max(
+            options.WallSnapTolerance * 1.5,
+            wall.Wall.Thickness * 1.25);
+        return start <= endpointGuard
+            || wall.Wall.CenterLine.Length - end <= endpointGuard;
+    }
+
+    private static bool TryFindWindowFrameEvidence(
+        PlanPage page,
+        ScanContext context,
+        AxisWall wall,
+        ProjectedOpeningSymbol first,
+        ProjectedOpeningSymbol second,
+        out IReadOnlyList<string> sourceIds,
+        out string evidence)
+    {
+        var start = Math.Min(first.Along, second.Along);
+        var end = Math.Max(first.Along, second.Along);
+        var width = end - start;
+        if (width <= 0)
+        {
+            sourceIds = Array.Empty<string>();
+            evidence = string.Empty;
+            return false;
+        }
+
+        var minimumLength = width * 0.72;
+        var maximumLength = width * 1.35;
+        var minimumOverlap = width * 0.80;
+        var maximumAxisDistance = Math.Max(
+            context.Options.WallSnapTolerance * 3.0,
+            wall.Wall.Thickness * 3.0);
+        var tickSourceIds = new HashSet<string>(
+            new[] { first.Symbol.SourceId, second.Symbol.SourceId },
+            StringComparer.Ordinal);
+        var candidates = new List<WindowFrameLine>();
+
+        for (var index = 0; index < page.Primitives.Count; index++)
+        {
+            if (page.Primitives[index] is not LinePrimitive line)
+            {
+                continue;
+            }
+
+            var sourceId = context.PrimitiveId(page.Number, index, line);
+            if (tickSourceIds.Contains(sourceId)
+                || !IsParallelWindowFrameLine(wall, line, context.Options)
+                || line.Segment.Length < minimumLength
+                || line.Segment.Length > maximumLength
+                || wall.Wall.CenterLine.DistanceToPoint(line.Segment.Midpoint) > maximumAxisDistance)
+            {
+                continue;
+            }
+
+            var firstProjection =
+                wall.Wall.CenterLine.ProjectParameter(line.Segment.Start)
+                * wall.Wall.CenterLine.Length;
+            var secondProjection =
+                wall.Wall.CenterLine.ProjectParameter(line.Segment.End)
+                * wall.Wall.CenterLine.Length;
+            var overlap = Math.Max(
+                0,
+                Math.Min(end, Math.Max(firstProjection, secondProjection))
+                    - Math.Max(start, Math.Min(firstProjection, secondProjection)));
+            if (overlap < minimumOverlap)
+            {
+                continue;
+            }
+
+            var offset = wall.Orientation == WallOrientation.Horizontal
+                ? line.Segment.Midpoint.Y - wall.Coordinate
+                : line.Segment.Midpoint.X - wall.Coordinate;
+            candidates.Add(new WindowFrameLine(sourceId, offset));
+        }
+
+        var distinctOffsets = new List<WindowFrameLine>();
+        var offsetTolerance = Math.Max(
+            0.35,
+            context.Options.GeometryTolerance.Distance * 0.75);
+        foreach (var candidate in candidates
+                     .OrderBy(item => item.Offset)
+                     .ThenBy(item => item.SourceId, StringComparer.Ordinal))
+        {
+            if (distinctOffsets.All(existing =>
+                    Math.Abs(existing.Offset - candidate.Offset) > offsetTolerance))
+            {
+                distinctOffsets.Add(candidate);
+            }
+        }
+
+        if (distinctOffsets.Count < 2)
+        {
+            sourceIds = Array.Empty<string>();
+            evidence = string.Empty;
+            return false;
+        }
+
+        sourceIds = distinctOffsets
+            .Select(item => item.SourceId)
+            .Take(8)
+            .ToArray();
+        evidence =
+            $"window assembly supported by {distinctOffsets.Count} distinct parallel frame line(s)";
+        return true;
+    }
+
+    private static bool IsParallelWindowFrameLine(
+        AxisWall wall,
+        LinePrimitive line,
+        ScannerOptions options) =>
+        wall.Orientation == WallOrientation.Horizontal
+            ? line.Segment.IsHorizontal(options.GeometryTolerance.Distance)
+            : line.Segment.IsVertical(options.GeometryTolerance.Distance);
+
     private static PlanLineSegment OpeningLineFromProjection(PlanLineSegment wallLine, double startDistance, double endDistance)
     {
         var length = Math.Max(1, wallLine.Length);
@@ -1319,6 +1494,8 @@ internal sealed class OpeningDetectionStage : IPipelineStage
         bool SourceLooksLikeOpening);
 
     private sealed record ProjectedOpeningSymbol(OpeningSymbolLine Symbol, double Along);
+
+    private sealed record WindowFrameLine(string SourceId, double Offset);
 
     private sealed record ArcDoorCandidate(
         AxisWall Wall,

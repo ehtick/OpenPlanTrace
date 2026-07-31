@@ -671,7 +671,7 @@
       ],
       "properties": {
         "reconcilerVersion": {
-          "const": "openplantrace.wall-evidence-reconciler.v10"
+          "const": "openplantrace.wall-evidence-reconciler.v11"
         },
         "evaluatedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },
         "adjustedWallRunCount": { "$ref": "#/$defs/nonNegativeInteger" },

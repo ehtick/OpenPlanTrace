@@ -177,8 +177,8 @@ public sealed class ViewerScriptContractTests
         Assert.Contains("renderTabCard(\"Solved wall graph\"", normalized);
         Assert.Contains("\"Solver hypotheses\"", normalized);
         Assert.Contains("function canonicalWallDrawableSpans(edge)", normalized);
-        Assert.Contains("edge.solidIntervals", normalized);
-        Assert.Contains("canonical solid wall interval", normalized);
+        Assert.Contains("return edge ? [edge] : []", normalized);
+        Assert.Contains("canonical logical wall run", normalized);
         Assert.Contains("canonicalWallDrawableSpans(edge).forEach((span)", normalized);
     }
 

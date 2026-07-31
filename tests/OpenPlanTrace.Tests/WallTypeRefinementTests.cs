@@ -1077,6 +1077,102 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_RejectsWeakEmbeddedFixtureCutoutBoundary()
+    {
+        var wall = new WallSegment(
+            "wall-embedded-fixture-cutout",
+            1,
+            new PlanLineSegment(
+                new PlanPoint(56, 40),
+                new PlanPoint(56, 80)),
+            4,
+            Confidence.Medium)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = ["fixture-outline-left"],
+            Evidence =
+            [
+                "single wall-length vector run",
+                "layer (unlayered) classified Unknown (0.35)",
+                "wall type interior: supported wall evidence inside exterior envelope"
+            ]
+        };
+        var fixtureWallIds = new[]
+        {
+            wall.Id,
+            "fixture-host-top",
+            "fixture-host-right",
+            "fixture-host-bottom"
+        };
+        var parent = Room(
+            "room-parent-restroom",
+            RoomUseKind.Restroom,
+            new PlanRect(0, 0, 96, 80),
+            [
+                new PlanPoint(0, 0),
+                new PlanPoint(96, 0),
+                new PlanPoint(96, 40),
+                new PlanPoint(56, 40),
+                new PlanPoint(56, 80),
+                new PlanPoint(0, 80)
+            ],
+            fixtureWallIds);
+        var fixture = new RoomRegion(
+            "room-embedded-fixture-cutout",
+            1,
+            new PlanRect(56, 40, 40, 40),
+            [
+                new PlanPoint(56, 40),
+                new PlanPoint(96, 40),
+                new PlanPoint(96, 80),
+                new PlanPoint(56, 80)
+            ],
+            fixtureWallIds,
+            Confidence.High)
+        {
+            AreaSquareMeters = 0.8
+        };
+        var context = CreateContext(
+            "embedded-fixture-cutout-rejects-weak-wall");
+        context.Walls.Add(wall);
+        context.Rooms.Add(parent);
+        context.Rooms.Add(fixture);
+        context.WallGraph = SupportedEndpointGraphFor(wall);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(
+            context,
+            CancellationToken.None);
+
+        var rejected = Assert.Single(
+            context.WallEvidenceMap.WallAssessments);
+        Assert.Equal(WallEvidenceCategory.ObjectOrFixtureDetail, rejected.Category);
+        Assert.False(rejected.PlacementReady);
+        Assert.True(rejected.RequiresReview);
+        Assert.True(rejected.RejectedAsNoise);
+        Assert.Equal(WallEvidenceDecision.Reject, rejected.Decision);
+        Assert.Contains(
+            rejected.Evidence,
+            item => item.Contains(
+                "nested unlabeled micro-loop",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic =>
+                diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["fixtureLikeNestedRoomCount"] == "1"
+                && diagnostic.Properties[
+                    "nestedFixtureBoundaryPlacementDemotedWallCount"] == "1");
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_PromotesRoomBoundaryAlignedMediumWallWithoutExplicitRoomWallIds()
     {
         var wall = new WallSegment(

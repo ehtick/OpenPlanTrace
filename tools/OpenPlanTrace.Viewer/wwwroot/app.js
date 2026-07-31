@@ -3193,8 +3193,7 @@ function drawOverlay() {
         const className = placementGraphWallEdgeClassName(edge);
         canonicalWallDrawableSpans(edge).forEach((span) => {
           const title = [
-            `${span.id || edge.id} - ${edge.solverRun ? "canonical solid wall interval" : "placement graph edge"}`,
-            edge.solverRun && span.id ? `logical wall ${edge.id}` : "",
+            `${span.id || edge.id} - ${edge.solverRun ? "canonical logical wall run" : "placement graph edge"}`,
             edge.wallType ? `type ${edge.wallType}` : "",
             edge.wallComponentKind ? `component ${edge.wallComponentKind}` : "",
             edge.wallId ? `source wall ${edge.wallId}` : "",
@@ -3210,7 +3209,7 @@ function drawOverlay() {
             edge.confidence == null ? "" : `confidence ${formatNumber(edge.confidence)}`
           ].filter(Boolean).join(" - ");
           const inspection = describeItem(
-            edge.solverRun ? "canonical solid wall interval" : "placement wall graph edge",
+            edge.solverRun ? "canonical logical wall run" : "placement wall graph edge",
             edge.solverRun
               ? {
                 ...span,
@@ -4743,13 +4742,7 @@ function placementGraphWallEdges(scan = state.scan) {
 }
 
 function canonicalWallDrawableSpans(edge) {
-  if (!edge?.solverRun || !Array.isArray(edge.solidIntervals)) {
-    return [edge];
-  }
-
-  const solidIntervals = edge.solidIntervals
-    .filter((interval) => interval?.centerLine?.start && interval?.centerLine?.end);
-  return solidIntervals.length ? solidIntervals : [edge];
+  return edge ? [edge] : [];
 }
 
 function placementGraphWallEdgeClassName(edge) {

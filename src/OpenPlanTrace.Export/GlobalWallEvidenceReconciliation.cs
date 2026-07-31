@@ -2,7 +2,7 @@ namespace OpenPlanTrace.Export;
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v10";
+    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v11";
 
     private const double MinimumReconciliationMovement = 0.05;
     private const double MaximumReconciliationAxisShift = 8.0;
@@ -27,15 +27,17 @@ public static partial class GlobalWallSolutionBuilder
                 rooms,
                 openings))
             .ToArray();
+        var faceContinuationsCoalesced =
+            CoalesceReconciledFaceContinuations(axisAligned);
         var junctionCompleted = CompleteSupportedJunctions(
-            axisAligned,
+            faceContinuationsCoalesced,
             openings);
         var cornerNormalized = TrimSupportedExteriorCornerOverruns(junctionCompleted);
 
         return cornerNormalized
             .Select((run, index) =>
             {
-                var beforeJunction = axisAligned[index];
+                var beforeJunction = faceContinuationsCoalesced[index];
                 var state = beforeJunction.Reconciliation
                     ?? WallReconciliationState.Unchanged(beforeJunction.CenterLine);
                 var junctionSnapCount = Math.Max(
@@ -101,11 +103,21 @@ public static partial class GlobalWallSolutionBuilder
             Math.Min(
                 MaximumReconciliationAxisShift,
                 run.ThicknessDrawingUnits * 0.65));
-        var consensus = BuildAxisConsensus(
-            votes,
-            currentAxis,
-            run.ThicknessDrawingUnits,
-            allowedAxisShift);
+        var faceContinuation = ResolveWallFaceContinuation(
+            run,
+            runs,
+            orientation);
+        var consensus = faceContinuation is null
+            ? BuildAxisConsensus(
+                votes,
+                currentAxis,
+                run.ThicknessDrawingUnits,
+                allowedAxisShift)
+            : new AxisConsensus(
+                faceContinuation.Axis,
+                true,
+                faceContinuation.Confidence,
+                faceContinuation.Evidence);
         var reconciledAxis = consensus.Accepted
             ? consensus.Axis
             : currentAxis;
@@ -412,6 +424,142 @@ public static partial class GlobalWallSolutionBuilder
                 || item.Contains(
                     "resolved shared-source physical wall assembly",
                     StringComparison.OrdinalIgnoreCase)));
+
+    private static WallFaceContinuationAlignment? ResolveWallFaceContinuation(
+        CompactedWallRun run,
+        IReadOnlyList<CompactedWallRun> runs,
+        WallOrientation orientation)
+    {
+        if (orientation == WallOrientation.Diagonal
+            || !HasFragmentOnlyWallGeometry(run)
+            || !RunSupportsJunctionCompletion(run))
+        {
+            return null;
+        }
+
+        var currentAxis = AxisCoordinate(run.CenterLine);
+        var candidates = new List<WallFaceContinuationAlignment>();
+        foreach (var neighbor in runs)
+        {
+            if (ReferenceEquals(neighbor, run)
+                || neighbor.PageNumber != run.PageNumber
+                || Orientation(neighbor.CenterLine) != orientation
+                || !CompatibleWallTypes(neighbor.WallType, run.WallType)
+                || !HasStrongPhysicalWallBodyEvidence(neighbor)
+                || !RunSupportsJunctionCompletion(neighbor))
+            {
+                continue;
+            }
+
+            var maximumGap = Math.Max(
+                2.5,
+                Math.Min(6.0, neighbor.ThicknessDrawingUnits * 0.50));
+            var gap = GapBetween(run.CenterLine, neighbor.CenterLine);
+            if (gap > maximumGap)
+            {
+                continue;
+            }
+
+            var axisDelta = Math.Abs(
+                currentAxis - AxisCoordinate(neighbor.CenterLine));
+            if (axisDelta <= MinimumReconciliationMovement
+                || axisDelta > MaximumReconciliationAxisShift)
+            {
+                continue;
+            }
+
+            var expectedFaceOffset = neighbor.ThicknessDrawingUnits / 2.0;
+            var faceResidual = Math.Abs(axisDelta - expectedFaceOffset);
+            var faceTolerance = Math.Max(
+                0.75,
+                Math.Min(1.75, neighbor.ThicknessDrawingUnits * 0.20));
+            var fragmentThicknessLimit = Math.Max(
+                4.5,
+                neighbor.ThicknessDrawingUnits * 0.75);
+            if (faceResidual > faceTolerance
+                || run.ThicknessDrawingUnits > fragmentThicknessLimit)
+            {
+                continue;
+            }
+
+            var sourceIds = SourceWallIds(neighbor)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            var score = faceResidual + (gap * 0.05);
+            var confidence = Math.Clamp(
+                0.92
+                - (faceResidual / Math.Max(0.75, faceTolerance)) * 0.12
+                - (gap / Math.Max(2.5, maximumGap)) * 0.04,
+                0.72,
+                0.92);
+            candidates.Add(new WallFaceContinuationAlignment(
+                AxisCoordinate(neighbor.CenterLine),
+                confidence,
+                score,
+                $"wall-face continuation inherited physical wall assembly axis "
+                + $"{AxisCoordinate(neighbor.CenterLine):0.###}; face residual "
+                + $"{faceResidual:0.###}, endpoint gap {gap:0.###}, supporting wall(s) "
+                + $"{string.Join(",", sourceIds)}"));
+        }
+
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var ordered = candidates
+            .OrderBy(candidate => candidate.Score)
+            .ThenByDescending(candidate => candidate.Confidence)
+            .ThenBy(candidate => candidate.Axis)
+            .ToArray();
+        if (ordered.Length > 1
+            && Math.Abs(ordered[1].Score - ordered[0].Score) < 0.35
+            && Math.Abs(ordered[1].Axis - ordered[0].Axis) > 0.50)
+        {
+            return null;
+        }
+
+        return ordered[0];
+    }
+
+    private static bool HasFragmentOnlyWallGeometry(CompactedWallRun run)
+    {
+        var evidence = run.Contributors
+            .SelectMany(candidate => candidate.Evidence)
+            .ToArray();
+        return evidence.Any(item => item.Contains(
+                "merged collinear wall fragments",
+                StringComparison.OrdinalIgnoreCase))
+            && !HasStrongPhysicalWallBodyEvidence(run)
+            && !evidence.Any(item => item.Contains(
+                "ObjectOrFixtureDetail",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasStrongPhysicalWallBodyEvidence(
+        CompactedWallRun run)
+    {
+        var evidence = run.Contributors
+            .SelectMany(candidate => candidate.Evidence)
+            .ToArray();
+        var hasPairedFaces = evidence.Any(item => item.Contains(
+            "parallel wall-face pair",
+            StringComparison.OrdinalIgnoreCase));
+        var hasPhysicalBody = evidence.Any(item =>
+            item.Contains(
+                "filled wall-solid",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "filled closed vector wall body",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "strong double-edge wall body",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "main structural wall body",
+                StringComparison.OrdinalIgnoreCase));
+        return hasPairedFaces && hasPhysicalBody;
+    }
 
     private static AxisConsensus BuildAxisConsensus(
         IReadOnlyList<WallReconciliationVote> votes,
@@ -1212,6 +1360,12 @@ public static partial class GlobalWallSolutionBuilder
         int DistinctKindCount,
         int DistinctSourceCount,
         bool HasSemanticGeometry,
+        string Evidence);
+
+    private sealed record WallFaceContinuationAlignment(
+        double Axis,
+        double Confidence,
+        double Score,
         string Evidence);
 
     private sealed record WallReconciliationState(

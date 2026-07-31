@@ -2287,6 +2287,182 @@ public static partial class GlobalWallSolutionBuilder
             rooms,
             openings));
 
+    private static IReadOnlyList<CompactedWallRun> CoalesceReconciledFaceContinuations(
+        IReadOnlyList<CompactedWallRun> runs)
+    {
+        var retained = runs.ToList();
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (var firstIndex = 0; firstIndex < retained.Count && !changed; firstIndex++)
+            {
+                for (var secondIndex = firstIndex + 1; secondIndex < retained.Count; secondIndex++)
+                {
+                    if (!AreReconciledFaceContinuations(
+                            retained[firstIndex],
+                            retained[secondIndex]))
+                    {
+                        continue;
+                    }
+
+                    retained[firstIndex] = MergeReconciledFaceContinuations(
+                        retained[firstIndex],
+                        retained[secondIndex]);
+                    retained.RemoveAt(secondIndex);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        return retained
+            .OrderBy(run => run.PageNumber)
+            .ThenBy(run => Math.Min(run.CenterLine.Start.Y, run.CenterLine.End.Y))
+            .ThenBy(run => Math.Min(run.CenterLine.Start.X, run.CenterLine.End.X))
+            .ThenBy(run => run.WallType, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool AreReconciledFaceContinuations(
+        CompactedWallRun first,
+        CompactedWallRun second)
+    {
+        var orientation = Orientation(first.CenterLine);
+        if (first.PageNumber != second.PageNumber
+            || orientation == WallOrientation.Diagonal
+            || orientation != Orientation(second.CenterLine)
+            || !CompatibleWallTypes(first.WallType, second.WallType))
+        {
+            return false;
+        }
+
+        var firstIsContinuation = HasWallFaceContinuationEvidence(first)
+            && !HasStrongPhysicalWallBodyEvidence(first);
+        var secondIsContinuation = HasWallFaceContinuationEvidence(second)
+            && !HasStrongPhysicalWallBodyEvidence(second);
+        if (!firstIsContinuation && !secondIsContinuation)
+        {
+            return false;
+        }
+
+        var physicalBody = HasStrongPhysicalWallBodyEvidence(first)
+            ? first
+            : HasStrongPhysicalWallBodyEvidence(second)
+                ? second
+                : null;
+        if (physicalBody is null
+            || Math.Abs(
+                AxisCoordinate(first.CenterLine)
+                - AxisCoordinate(second.CenterLine)) > 0.20)
+        {
+            return false;
+        }
+
+        var maximumGap = Math.Max(
+            2.5,
+            Math.Min(6.0, physicalBody.ThicknessDrawingUnits * 0.50));
+        return GapBetween(first.CenterLine, second.CenterLine) <= maximumGap;
+    }
+
+    private static bool HasWallFaceContinuationEvidence(
+        CompactedWallRun run) =>
+        run.Reconciliation?.Evidence.Any(item => item.Contains(
+            "wall-face continuation inherited physical wall assembly axis",
+            StringComparison.OrdinalIgnoreCase)) == true;
+
+    private static CompactedWallRun MergeReconciledFaceContinuations(
+        CompactedWallRun first,
+        CompactedWallRun second)
+    {
+        var anchor = HasStrongPhysicalWallBodyEvidence(first)
+            ? first
+            : second;
+        var continuation = ReferenceEquals(anchor, first)
+            ? second
+            : first;
+        var orientation = Orientation(anchor.CenterLine);
+        var start = Math.Min(
+            IntervalStart(first.CenterLine),
+            IntervalStart(second.CenterLine));
+        var end = Math.Max(
+            IntervalEnd(first.CenterLine),
+            IntervalEnd(second.CenterLine));
+        var centerLine = WithInterval(
+            anchor.CenterLine,
+            orientation,
+            start,
+            end);
+        var contributors = anchor.Contributors
+            .Concat(continuation.Contributors)
+            .GroupBy(candidate => candidate.Id, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToArray();
+        var anchorState = anchor.Reconciliation
+            ?? WallReconciliationState.Unchanged(anchor.CenterLine);
+        var continuationState = continuation.Reconciliation
+            ?? WallReconciliationState.Unchanged(continuation.CenterLine);
+        var continuationSourceIds = SourceWallIds(continuation)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var evidence =
+            $"reconciler coalesced wall-face continuation into one physical wall "
+            + $"assembly run and preserved source wall provenance "
+            + $"{string.Join(",", continuationSourceIds)}";
+
+        return anchor with
+        {
+            CenterLine = centerLine,
+            WallType = string.Equals(
+                    anchor.WallType,
+                    "Unknown",
+                    StringComparison.OrdinalIgnoreCase)
+                ? continuation.WallType
+                : anchor.WallType,
+            MillimetersPerDrawingUnit = anchor.MillimetersPerDrawingUnit
+                ?? continuation.MillimetersPerDrawingUnit,
+            Confidence = Math.Max(anchor.Confidence, continuation.Confidence),
+            Contributors = contributors,
+            CompletedJunctionCount = Math.Max(
+                anchor.CompletedJunctionCount,
+                continuation.CompletedJunctionCount),
+            BodyContactJunctionCount = Math.Max(
+                anchor.BodyContactJunctionCount,
+                continuation.BodyContactJunctionCount),
+            BridgedOpeningIds = anchor.BridgedOpeningIds
+                .Concat(continuation.BridgedOpeningIds)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray(),
+            Reconciliation = anchorState with
+            {
+                CandidateVoteCount = anchorState.CandidateVoteCount
+                    + continuationState.CandidateVoteCount,
+                RoomBoundaryVoteCount = anchorState.RoomBoundaryVoteCount
+                    + continuationState.RoomBoundaryVoteCount,
+                OpeningVoteCount = anchorState.OpeningVoteCount
+                    + continuationState.OpeningVoteCount,
+                NeighborVoteCount = anchorState.NeighborVoteCount
+                    + continuationState.NeighborVoteCount,
+                JunctionSnapCount = anchorState.JunctionSnapCount
+                    + continuationState.JunctionSnapCount,
+                CollapsedDuplicateRunCount =
+                    anchorState.CollapsedDuplicateRunCount
+                    + continuationState.CollapsedDuplicateRunCount
+                    + 1,
+                Confidence = Math.Max(
+                    anchorState.Confidence,
+                    continuationState.Confidence),
+                Evidence = new[] { evidence }
+                    .Concat(anchorState.Evidence)
+                    .Concat(continuationState.Evidence)
+                    .Distinct(StringComparer.Ordinal)
+                    .Take(24)
+                    .ToArray()
+            }
+        };
+    }
+
     private static IReadOnlyList<CompactedWallRun> CollapseReconciledDuplicateRuns(
         IReadOnlyList<CompactedWallRun> runs)
     {
@@ -3307,13 +3483,18 @@ public static partial class GlobalWallSolutionBuilder
                     (source.ThicknessDrawingUnits + target.ThicknessDrawingUnits) * 0.5));
             var sourceBackedBodyContact =
                 distance > ordinaryAllowedDistance + MinimumReconciliationMovement;
+            var faceContinuationAxisAdjustment = Math.Max(
+                WallFaceContinuationAxisAdjustment(source),
+                WallFaceContinuationAxisAdjustment(target));
             var maximumDistance = sourceBackedBodyContact
                 ? Math.Max(
                     ordinaryAllowedDistance,
                     Math.Min(
-                        MaximumBodyContactJunctionDistance,
+                        MaximumBodyContactJunctionDistance
+                            + faceContinuationAxisAdjustment,
                         source.ThicknessDrawingUnits
-                            + target.ThicknessDrawingUnits))
+                            + target.ThicknessDrawingUnits
+                            + faceContinuationAxisAdjustment))
                 : ordinaryAllowedDistance;
             if (distance > maximumDistance
                 || (sourceBackedBodyContact
@@ -3338,6 +3519,29 @@ public static partial class GlobalWallSolutionBuilder
         }
 
         return best;
+    }
+
+    private static double WallFaceContinuationAxisAdjustment(
+        CompactedWallRun run)
+    {
+        if (!HasWallFaceContinuationEvidence(run)
+            || run.Reconciliation is null
+            || Orientation(run.CenterLine) == WallOrientation.Diagonal
+            || Orientation(run.Reconciliation.OriginalCenterLine)
+                != Orientation(run.CenterLine))
+        {
+            return 0;
+        }
+
+        var recordedAxisShift = Math.Abs(
+            AxisCoordinate(run.CenterLine)
+            - AxisCoordinate(run.Reconciliation.OriginalCenterLine));
+        var coalescedAssemblyAllowance = Math.Min(
+            4.0,
+            run.ThicknessDrawingUnits * 0.25);
+        return Math.Min(
+            MaximumReconciliationAxisShift,
+            Math.Max(recordedAxisShift, coalescedAssemblyAllowance));
     }
 
     private static bool CanCompleteSourceBackedBodyContactJunction(

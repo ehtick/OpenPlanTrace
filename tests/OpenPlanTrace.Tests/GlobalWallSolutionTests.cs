@@ -2665,6 +2665,209 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task Reconciler_CoalescesFragmentOnPhysicalWallFaceIntoAssemblyAxis()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var physicalBody = HostWallFragment(
+            templateWall,
+            "physical-wall-body",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(220, 100))) with
+        {
+            ThicknessDrawingUnits = 8
+        };
+        var faceContinuation = HostWallFragment(
+            templateWall,
+            "wall-face-continuation",
+            new LineExport(
+                new PointExport(221, 104.2),
+                new PointExport(360, 104.2))) with
+        {
+            ThicknessDrawingUnits = 4,
+            SourceLayers = ["(unlayered)"],
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "run merged 10 fragments",
+                "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.90"
+            ]
+        };
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [physicalBody, faceContinuation]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [physicalBody, faceContinuation],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var run = Assert.Single(solutions.SelectedWallRuns);
+        Assert.Equal(100, run.CenterLine.Start.Y, 6);
+        Assert.Equal(100, run.CenterLine.End.Y, 6);
+        Assert.Equal(100, Math.Min(run.CenterLine.Start.X, run.CenterLine.End.X), 6);
+        Assert.Equal(360, Math.Max(run.CenterLine.Start.X, run.CenterLine.End.X), 6);
+        Assert.Equal(8, run.ThicknessDrawingUnits, 6);
+        Assert.Equal(
+            new[] { physicalBody.Id, faceContinuation.Id },
+            run.SourceWallIds.Order(StringComparer.Ordinal));
+        Assert.Equal(1, run.Reconciliation.CollapsedDuplicateRunCount);
+        Assert.Contains(
+            run.Reconciliation.Evidence,
+            evidence => evidence.Contains(
+                "wall-face continuation inherited physical wall assembly axis",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            run.Reconciliation.Evidence,
+            evidence => evidence.Contains(
+                "coalesced wall-face continuation into one physical wall assembly run",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Reconciler_DoesNotCoalesceFragmentAwayFromPhysicalWallFace()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var physicalBody = HostWallFragment(
+            templateWall,
+            "physical-wall-body-guard",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(220, 100))) with
+        {
+            ThicknessDrawingUnits = 8
+        };
+        var unrelatedFragment = HostWallFragment(
+            templateWall,
+            "unrelated-fragment-guard",
+            new LineExport(
+                new PointExport(221, 106.5),
+                new PointExport(360, 106.5))) with
+        {
+            ThicknessDrawingUnits = 4,
+            SourceLayers = ["(unlayered)"],
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.90"
+            ]
+        };
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [physicalBody, unrelatedFragment]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [physicalBody, unrelatedFragment],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        Assert.Equal(2, solutions.SelectedWallRuns.Count);
+        Assert.Contains(
+            solutions.SelectedWallRuns,
+            run => Math.Abs(run.CenterLine.Start.Y - 100) < 0.001);
+        Assert.Contains(
+            solutions.SelectedWallRuns,
+            run => Math.Abs(run.CenterLine.Start.Y - 106.5) < 0.001);
+        Assert.All(
+            solutions.SelectedWallRuns,
+            run => Assert.DoesNotContain(
+                run.Reconciliation.Evidence,
+                evidence => evidence.Contains(
+                    "coalesced wall-face continuation",
+                    StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Reconciler_ReconnectsPerpendicularWallAfterFaceAxisInheritance()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var physicalBody = HostWallFragment(
+            templateWall,
+            "junction-physical-wall-body",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(220, 100))) with
+        {
+            ThicknessDrawingUnits = 8,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural"
+        };
+        var faceContinuation = HostWallFragment(
+            templateWall,
+            "junction-wall-face-continuation",
+            new LineExport(
+                new PointExport(221, 104.2),
+                new PointExport(360, 104.2))) with
+        {
+            ThicknessDrawingUnits = 4,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural",
+            SourceLayers = ["(unlayered)"],
+            Evidence =
+            [
+                "merged collinear wall fragments",
+                "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.90"
+            ]
+        };
+        var perpendicular = HostWallFragment(
+            templateWall,
+            "junction-perpendicular-wall",
+            new LineExport(
+                new PointExport(221, 113),
+                new PointExport(221, 300))) with
+        {
+            ThicknessDrawingUnits = 8,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural"
+        };
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [physicalBody, faceContinuation, perpendicular]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [physicalBody, faceContinuation, perpendicular],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        Assert.Equal(2, solutions.SelectedWallRuns.Count);
+        var horizontal = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(
+                faceContinuation.Id,
+                StringComparer.Ordinal)));
+        Assert.Equal(100, horizontal.CenterLine.Start.Y, 6);
+        Assert.Equal(360, Math.Max(
+            horizontal.CenterLine.Start.X,
+            horizontal.CenterLine.End.X), 6);
+
+        var vertical = Assert.Single(solutions.SelectedWallRuns.Where(run =>
+            run.SourceWallIds.Contains(
+                perpendicular.Id,
+                StringComparer.Ordinal)));
+        Assert.Equal(100, Math.Min(
+            vertical.CenterLine.Start.Y,
+            vertical.CenterLine.End.Y), 6);
+        Assert.True(vertical.Reconciliation.JunctionSnapCount > 0);
+    }
+
+    [Fact]
     public void Reconciler_ExpandsAxisToleranceOnlyForSharedGraphStructuralRepresentations()
     {
         var sharedCrossRepresentationTolerance =

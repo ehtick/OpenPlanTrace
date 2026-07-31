@@ -207,6 +207,70 @@ public sealed class OpeningSemanticsTests
     }
 
     [Fact]
+    public async Task ScanAsync_DetectsUnlayeredWindowTicksWithFrameAssembly()
+    {
+        var document = new PlanDocument(
+            "continuous-wall-unlayered-window-frame",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(600, 400),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-run", new PlanPoint(100, 100), new PlanPoint(400, 100)),
+                        ShortLine("window-tick-a", "0", new PlanPoint(220, 92), new PlanPoint(220, 98)),
+                        ShortLine("window-tick-b", "0", new PlanPoint(250, 92), new PlanPoint(250, 98)),
+                        ShortLine("window-frame-a", "0", new PlanPoint(220, 92), new PlanPoint(250, 92)),
+                        ShortLine("window-frame-b", "0", new PlanPoint(220, 95), new PlanPoint(250, 95))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+        var opening = Assert.Single(
+            result.Openings,
+            item => item.Evidence.Any(evidence =>
+                evidence.Contains("paired perpendicular", StringComparison.OrdinalIgnoreCase)));
+
+        Assert.Equal(OpeningType.Window, opening.Type);
+        Assert.Contains("window-frame-a", opening.SourcePrimitiveIds);
+        Assert.Contains("window-frame-b", opening.SourcePrimitiveIds);
+        Assert.Contains(
+            opening.Evidence,
+            item => item.Contains("window assembly", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ScanAsync_DoesNotTreatUnlayeredFixtureTicksAsWindow()
+    {
+        var document = new PlanDocument(
+            "continuous-wall-fixture-ticks",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(600, 400),
+                    new PlanPrimitive[]
+                    {
+                        Wall("wall-run", new PlanPoint(300, 50), new PlanPoint(300, 350)),
+                        ShortLine("fixture-tick-a", "0", new PlanPoint(294, 160), new PlanPoint(299, 160)),
+                        ShortLine("fixture-tick-b", "0", new PlanPoint(294, 180), new PlanPoint(299, 180)),
+                        ShortLine("fixture-outline", "0", new PlanPoint(250, 160), new PlanPoint(250, 180))
+                    })
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(document);
+
+        Assert.DoesNotContain(
+            result.Openings,
+            opening => opening.SourcePrimitiveIds.Contains("fixture-tick-a")
+                || opening.SourcePrimitiveIds.Contains("fixture-tick-b"));
+        Assert.Contains(
+            result.Diagnostics.Messages,
+            message => message.Code == "openings.unsupported_tick_pairs.suppressed");
+    }
+
+    [Fact]
     public async Task ScanAsync_DoesNotTreatClosedShortRectangleAsWindowTicks()
     {
         var document = new PlanDocument(
