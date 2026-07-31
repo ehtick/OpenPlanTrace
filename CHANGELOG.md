@@ -8,6 +8,13 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.12.001] - 2026-07-31
+
+- Improved plan-scale floor-finish and hatch rejection.
+- Preserved structural crossings and exterior shell anchors during pattern filtering.
+- Added public PDF corpus evaluation and curved-wall design guidance.
+- Changed project licensing to BSD 2-Clause attribution terms.
+
 ## [0.12.000] - 2026-07-31
 
 - Improved coupled missing-wall recovery with coherent structural bundles.
@@ -6845,5 +6852,5 @@ schema versions.
   annotations, grids, walls, wall graphs, rooms, openings, objects, diagnostics,
   confidence, calibration, and exports.
 - Initial JSON, SVG, GeoJSON, placement, benchmark, and viewer support.
-- MIT licensing, third-party notices, README, roadmap, samples, and baseline
+- Initial permissive licensing, third-party notices, README, roadmap, samples, and baseline
   test coverage.

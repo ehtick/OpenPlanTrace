@@ -4,9 +4,9 @@ OpenPlanTrace is a standalone .NET floorplan scanning engine for applications th
 
 The project intentionally does not contain downstream application UI code. It exposes a library boundary that other applications can consume later.
 
-**Project links:** [Architecture](docs/ARCHITECTURE.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
+**Project links:** [Architecture](docs/ARCHITECTURE.md) | [Public PDF evaluation](docs/PUBLIC-PDF-EVALUATION.md) | [Curved walls](docs/CURVED-WALL-DESIGN.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
 
-Current alpha version: `0.12.000`.
+Current alpha version: `0.12.001`.
 
 ## Versioning and Changelog
 
@@ -85,9 +85,9 @@ Applications can consume OpenPlanTrace through one engine facade while source-sp
 
 Clipboard input is modeled as a wrapper around an effective content kind. For example, clipboard PDF bytes can use `PlanSourceDescriptor.FromClipboard(PlanSourceKind.Pdf)`, then route to the same PDF loader used for files. Hosts that only know the clipboard item name or MIME type can use `PlanSourceDescriptor.FromClipboardContent(...)`, which infers PDF, DXF, DWG, raster image, or SVG/vector content from MIME type first and filename extension second. Clipboard DWG/DXF payloads route through the same legal loader/capability checks as file inputs; clipboard support is not a separate parser.
 
-DWG support should live in an optional adapter package because native DWG access usually depends on a licensed SDK or a GPL-compatible bridge. The MIT core should stay format-agnostic and consume only normalized `PlanDocument` primitives. `OpenPlanTrace.Dxf` includes a `DwgToDxfPlanDocumentLoader` boundary that accepts an `IDwgToDxfConverter` implementation supplied by the host application or a separate adapter package, then delegates the converted DXF stream to the real DXF loader. It also includes `ExternalDwgToDxfConverter`, an explicit external-process bridge for hosts that already have a licensed converter installed. OpenPlanTrace does not ship a DWG converter and the MIT CLI does not register DWG support by default.
+DWG support should live in an optional adapter package because native DWG access usually depends on a licensed SDK or a GPL-compatible bridge. The permissively licensed core should stay format-agnostic and consume only normalized `PlanDocument` primitives. `OpenPlanTrace.Dxf` includes a `DwgToDxfPlanDocumentLoader` boundary that accepts an `IDwgToDxfConverter` implementation supplied by the host application or a separate adapter package, then delegates the converted DXF stream to the real DXF loader. It also includes `ExternalDwgToDxfConverter`, an explicit external-process bridge for hosts that already have a licensed converter installed. OpenPlanTrace does not ship a DWG converter and the default CLI does not register DWG support.
 
-The core exposes source capability metadata through `PlanSourceCapabilityCatalog` and `PlanDocumentLoaderRegistry.GetCapabilities()`. This lets tools report whether a format is registered, known-but-not-registered, optional-adapter-required, planned, or a wrapper without pretending unsupported parsers exist. Scan JSON also includes `document.sourceReadiness`, a compact source-audit block that reports the ingestion path, whether vector geometry is directly usable, whether DWG/raster input required an external adapter, whether OCR is still needed, and the evidence behind that assessment. Raster/OCR support has a typed adapter boundary through `IRasterPlanPrimitiveExtractor`, `RasterPlanDocumentLoader`, `RasterExtractionResult`, and `RasterPlanDocumentBuilder`, but the current MIT CLI does not ship OCR/vectorization models or invent raster detections.
+The core exposes source capability metadata through `PlanSourceCapabilityCatalog` and `PlanDocumentLoaderRegistry.GetCapabilities()`. This lets tools report whether a format is registered, known-but-not-registered, optional-adapter-required, planned, or a wrapper without pretending unsupported parsers exist. Scan JSON also includes `document.sourceReadiness`, a compact source-audit block that reports the ingestion path, whether vector geometry is directly usable, whether DWG/raster input required an external adapter, whether OCR is still needed, and the evidence behind that assessment. Raster/OCR support has a typed adapter boundary through `IRasterPlanPrimitiveExtractor`, `RasterPlanDocumentLoader`, `RasterExtractionResult`, and `RasterPlanDocumentBuilder`, but the default CLI does not ship OCR/vectorization models or invent raster detections.
 
 ## Architecture
 
@@ -749,7 +749,7 @@ var dwgConverter = new ExternalDwgToDxfConverter(
 var loader = new DwgToDxfPlanDocumentLoader(dwgConverter);
 ```
 
-The external bridge writes the incoming DWG stream to a temporary file, runs the configured process without shell command-line concatenation, requires a DXF output file, and records `dwg.converter.executionMode=external-process`, executable name, exit code, duration, timeout, output byte count, and any host-supplied properties. Keep the external converter's license and deployment separate from the MIT core.
+The external bridge writes the incoming DWG stream to a temporary file, runs the configured process without shell command-line concatenation, requires a DXF output file, and records `dwg.converter.executionMode=external-process`, executable name, exit code, duration, timeout, output byte count, and any host-supplied properties. Keep the external converter's license and deployment separate from OpenPlanTrace core.
 
 Raster/OCR integration pattern for host applications:
 
@@ -929,7 +929,7 @@ The long-range implementation roadmap is tracked in [docs/ROADMAP.md](docs/ROADM
 
 ## Licensing
 
-OpenPlanTrace is MIT licensed. Third-party package notices are tracked in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+OpenPlanTrace uses the permissive [BSD 2-Clause License](LICENSE). You may use, modify, redistribute, and commercially integrate it without paying a fee or asking permission. Credit is preserved by retaining the OpenPlanTrace copyright notice, license conditions, and disclaimer in source distributions and in the documentation or other materials accompanying binary distributions. A splash-screen or visible in-product badge is appreciated but not required. Third-party package notices are tracked in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Visual PDF Viewer
 

@@ -1666,6 +1666,17 @@ internal sealed class WallGraphStage : IPipelineStage
         WallSegment wall,
         WallEvidenceWallAssessment assessment)
     {
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .ToArray();
+        var isFilledExteriorBody = wall.WallType == WallType.Exterior
+            && ContainsAnyEvidence(
+                evidence,
+                "filled wall-solid primitive",
+                "filled closed vector wall body");
+        var minimumLength = isFilledExteriorBody ? 42.0 : 72.0;
         if (assessment.RejectedAsNoise
             || assessment.Decision == WallEvidenceDecision.Reject
             || assessment.Category is not (WallEvidenceCategory.StrongWallBody
@@ -1675,7 +1686,7 @@ internal sealed class WallGraphStage : IPipelineStage
             || wall.WallType != WallType.Exterior
             || wall.DetectionKind != WallDetectionKind.ParallelLinePair
             || wall.PairEvidence is not { } pair
-            || wall.DrawingLength < 72.0
+            || wall.DrawingLength < minimumLength
             || wall.Confidence.Value < 0.74
             || assessment.Confidence.Value < 0.72
             || pair.Score < 0.78
@@ -1688,11 +1699,6 @@ internal sealed class WallGraphStage : IPipelineStage
             return false;
         }
 
-        var evidence = wall.Evidence
-            .Concat(assessment.Evidence)
-            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
-            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
-            .ToArray();
         if (!ContainsAnyEvidence(
                 evidence,
                 "wall type exterior",

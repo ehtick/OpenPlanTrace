@@ -7,7 +7,7 @@
     <Title>OpenPlanTrace</Title>
     <Description>Open-source PDF and architectural floorplan tracing engine.</Description>
     <Authors>OpenPlanTrace contributors</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>

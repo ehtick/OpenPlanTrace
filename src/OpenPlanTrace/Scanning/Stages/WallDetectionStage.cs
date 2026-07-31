@@ -299,6 +299,7 @@ internal sealed class WallDetectionStage : IPipelineStage
                         ["candidateClusterCount"] = densePatternClusters.Count.ToString(),
                         ["runClusterCount"] = densePatternRunClusters.Count.ToString(),
                         ["parallelClusterCount"] = denseParallelRunClusters.Count.ToString(),
+                        ["planScaleParallelClusterCount"] = denseParallelRunClusters.Count(cluster => cluster.IsPlanScale).ToString(),
                         ["filteredLineCount"] = densePatternFilteredSourceIds.Length.ToString(),
                         ["filteredRunCount"] = densePatternRuns.Count.ToString(),
                         ["eligibleLineCount"] = seeds.Length.ToString(),
@@ -309,7 +310,7 @@ internal sealed class WallDetectionStage : IPipelineStage
                             .Concat(densePatternRunClusters
                                 .Select(cluster => $"{cluster.HorizontalLineCount}h/{cluster.VerticalLineCount}v/{cluster.IntersectionCount}x"))
                             .Concat(denseParallelRunClusters
-                                .Select(cluster => $"{cluster.Orientation}:{cluster.LineCount} lines/{cluster.MedianSpacing:0.###} spacing")))
+                                .Select(cluster => $"{cluster.Orientation}:{cluster.LineCount} lines/{cluster.MedianSpacing:0.###} spacing{(cluster.IsPlanScale ? "/plan-scale" : string.Empty)}")))
                     });
             }
 
@@ -495,7 +496,7 @@ internal sealed class WallDetectionStage : IPipelineStage
                     "walls.unsupported_wall_body_linework_filtered",
                     DiagnosticSeverity.Info,
                     Name,
-                    $"{unsupportedWallBodyLinework.Length} weak unpaired wall-like line run(s) were removed because they were not supported by reconstructed wall bodies.",
+                    $"{unsupportedWallBodyLinework.Length} unsupported or densely repeated wall-like run(s) were removed after wall-body reconstruction.",
                     page.Number,
                     PlanRect.Union(unsupportedWallBodyLinework.Select(wall => wall.Bounds)).ClampTo(page.Bounds),
                     Confidence.Medium,
@@ -1188,7 +1189,7 @@ internal sealed class WallDetectionStage : IPipelineStage
             return false;
         }
 
-        var maxSpacing = MaxDenseParallelPatternSpacing(options) * 1.5;
+        var maxSpacing = MaxDenseParallelPatternSpacing(options) * 2.75;
         var first = targetIndex;
         while (first > 0 && coordinateBuckets[first] - coordinateBuckets[first - 1] <= maxSpacing)
         {
@@ -1219,15 +1220,23 @@ internal sealed class WallDetectionStage : IPipelineStage
         var maxMedianSpacing = MaxDenseParallelPatternSpacing(options)
             * (isShortRepeatedSlotCandidate ? 1.38 : 1.2);
         var minimumRegularity = isShortRepeatedSlotCandidate ? 0.36 : 0.42;
+        var spacingRegularity = Math.Max(
+            SpacingRegularity(spacings, medianSpacing),
+            PairedBandSpacingRegularity(spacings));
         if (medianSpacing <= 0
             || medianSpacing > maxMedianSpacing
-            || SpacingRegularity(spacings, medianSpacing) < minimumRegularity)
+            || spacingRegularity < minimumRegularity)
         {
             return false;
         }
 
         var supportTolerance = WallBodySupportTolerance(options);
+        var fragmentedPatternFamily = clusterCount >= 5
+            && spacingRegularity >= 0.60
+            && wall.PairEvidence is { } pairEvidence
+            && pairEvidence.FirstFaceFragmentCount + pairEvidence.SecondFaceFragmentCount >= 12;
         return isShortRepeatedSlotCandidate
+            || fragmentedPatternFamily
             || CountPerpendicularWallBodyContacts(wall, pageWalls, supportTolerance, options) < 2;
     }
 
@@ -1247,8 +1256,8 @@ internal sealed class WallDetectionStage : IPipelineStage
             return false;
         }
 
-        var maxPatternSpan = Math.Max(options.MaxCompositeObjectPrimitiveLength * 1.15, options.MinWallLength * 5.5);
-        var maxThinSeparation = Math.Max(options.DefaultWallThickness * 0.95, options.MinWallPairSeparation * 1.75);
+        var maxLocalPatternSpan = Math.Max(options.MaxCompositeObjectPrimitiveLength * 1.15, options.MinWallLength * 5.5);
+        var maxThinSeparation = Math.Max(options.DefaultWallThickness * 1.75, options.MinWallPairSeparation * 3.0);
         var maxShortSlotLength = Math.Max(options.MinWallLength * 1.45, options.DefaultWallThickness * 8.0);
         var maxShortSlotSeparation = Math.Max(options.DefaultWallThickness * 3.5, options.MinWallPairSeparation * 4.0);
 
@@ -1262,7 +1271,11 @@ internal sealed class WallDetectionStage : IPipelineStage
             return false;
         }
 
-        return wall.DrawingLength <= maxPatternSpan
+        var mainSpan = orientation == WallOrientation.Horizontal
+            ? mainRegion.Bounds.Width
+            : mainRegion.Bounds.Height;
+        var maxPlanScalePatternSpan = Math.Max(maxLocalPatternSpan, mainSpan * 0.97);
+        return wall.DrawingLength <= maxPlanScalePatternSpan
             && (isThinSurfacePair || isShortRepeatedSlotPair);
     }
 
@@ -2592,8 +2605,7 @@ internal sealed class WallDetectionStage : IPipelineStage
 
         var items = runs
             .Where(run => !HasStrongWallLayerEvidence(run.LayerEvidence)
-                && run.Length >= Math.Max(1, options.MinWallFragmentLength)
-                && run.Length <= Math.Max(options.MaxCompositeObjectPrimitiveLength, options.MinWallLength * 6.0))
+                && run.Length >= Math.Max(1, options.MinWallFragmentLength))
             .Select(DenseOrthogonalPatternWallRunNoiseItem.From)
             .ToArray();
         if (items.Length < 10)
@@ -2703,10 +2715,9 @@ internal sealed class WallDetectionStage : IPipelineStage
             return null;
         }
 
-        if (SpacingRegularity(spacings, medianSpacing) < 0.64)
-        {
-            return null;
-        }
+        var spacingRegularity = Math.Max(
+            SpacingRegularity(spacings, medianSpacing),
+            PairedBandSpacingRegularity(spacings));
 
         var bounds = PlanRect.Union(cluster.Select(item => item.Bounds));
         if (bounds.IsEmpty)
@@ -2715,31 +2726,56 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         var mainArea = Math.Max(1, mainRegionBounds.Area);
-        if (bounds.Area <= 0 || bounds.Area > mainArea * 0.18)
+        if (bounds.Area <= 0)
         {
             return null;
         }
 
         var repeatedSpan = orientation == WallOrientation.Horizontal ? bounds.Width : bounds.Height;
         var patternDepth = orientation == WallOrientation.Horizontal ? bounds.Height : bounds.Width;
+        var mainRepeatedSpan = orientation == WallOrientation.Horizontal
+            ? mainRegionBounds.Width
+            : mainRegionBounds.Height;
         var maximumRepeatedSpan = Math.Max(options.MinWallLength * 3.0, options.MaxCompositeObjectPrimitiveLength * 0.65);
-        if (repeatedSpan < options.MinWallLength
-            || repeatedSpan > maximumRepeatedSpan
-            || patternDepth < medianSpacing * 6.0)
+        var isPlanScale = repeatedSpan > maximumRepeatedSpan || bounds.Area > mainArea * 0.18;
+        if (repeatedSpan < options.MinWallLength)
+        {
+            return null;
+        }
+
+        if (isPlanScale)
+        {
+            if (coordinateBuckets.Count < 10
+                || spacingRegularity < 0.78
+                || bounds.Area > mainArea * 0.62
+                || repeatedSpan > Math.Max(1, mainRepeatedSpan) * 0.97
+                || patternDepth < medianSpacing * 8.0)
+            {
+                return null;
+            }
+        }
+        else if (spacingRegularity < 0.64
+                 || bounds.Area > mainArea * 0.18
+                 || repeatedSpan > maximumRepeatedSpan
+                 || patternDepth < medianSpacing * 6.0)
         {
             return null;
         }
 
         var totalLength = cluster.Sum(item => item.Length);
         var perimeter = Math.Max(1, (bounds.Width * 2) + (bounds.Height * 2));
-        if (totalLength < perimeter * 1.55)
+        var minimumPerimeterRatio = isPlanScale ? 2.2 : 1.55;
+        if (totalLength < perimeter * minimumPerimeterRatio)
         {
             return null;
         }
 
+        var perpendicularRuns = isPlanScale
+            ? Array.Empty<AxisRun>()
+            : FindPerpendicularRunsInsideDenseParallelPattern(bounds, orientation, allItems, medianSpacing, options);
         var runs = cluster
             .Select(item => item.Run)
-            .Concat(FindPerpendicularRunsInsideDenseParallelPattern(bounds, orientation, allItems, medianSpacing, options))
+            .Concat(perpendicularRuns)
             .Distinct()
             .ToArray();
         var sourcePrimitiveIds = runs
@@ -2754,7 +2790,8 @@ internal sealed class WallDetectionStage : IPipelineStage
             runs,
             orientation,
             coordinateBuckets.Count,
-            Math.Round(medianSpacing, 3));
+            Math.Round(medianSpacing, 3),
+            isPlanScale);
     }
 
     private static bool HasCompatibleDenseParallelSpan(
@@ -3106,13 +3143,14 @@ internal sealed class WallDetectionStage : IPipelineStage
                     ExcludedFromWallDetection: true,
                     ExcludedFromStructuralTopology: true,
                     cluster.SourcePrimitiveIds,
-                    new Confidence(0.72),
+                    new Confidence(cluster.IsPlanScale ? 0.82 : 0.72),
                     RequiresReview: true,
                     EvidenceForDenseParallelPattern(
                         cluster.SourcePrimitiveIds.Length,
                         cluster.Orientation,
                         cluster.LineCount,
                         cluster.MedianSpacing,
+                        cluster.IsPlanScale,
                         sourceRegionId)));
         }
 
@@ -3165,8 +3203,10 @@ internal sealed class WallDetectionStage : IPipelineStage
         WallOrientation orientation,
         int repeatedLineCount,
         double medianSpacing,
-        string sourceRegionId) =>
-        new[]
+        bool isPlanScale,
+        string sourceRegionId)
+    {
+        var evidence = new List<string>
         {
             "classified as dense repeated surface/detail band, not structural wall geometry",
             "excluded from wall detection and structural topology",
@@ -3175,6 +3215,15 @@ internal sealed class WallDetectionStage : IPipelineStage
             $"{repeatedLineCount} repeated {orientation.ToString().ToLowerInvariant()} line(s)",
             $"median spacing {FormatPatternNumber(medianSpacing)} drawing units"
         };
+
+        if (isPlanScale)
+        {
+            evidence.Add("plan-scale repeated band passed strict spacing, coverage, and perimeter-density checks");
+            evidence.Add("only parallel family runs were suppressed so crossing structural walls remain eligible");
+        }
+
+        return evidence;
+    }
 
     private static IReadOnlyList<string> EvidenceForCrossingParallelSurfaceGrid(
         int sourceLineCount,
@@ -3264,6 +3313,37 @@ internal sealed class WallDetectionStage : IPipelineStage
 
         var tolerance = Math.Max(1.5, medianSpacing * 0.35);
         return spacings.Count(spacing => Math.Abs(spacing - medianSpacing) <= tolerance) / (double)spacings.Count;
+    }
+
+    private static double PairedBandSpacingRegularity(IReadOnlyList<double> sortedSpacings)
+    {
+        if (sortedSpacings.Count < 7)
+        {
+            return 0;
+        }
+
+        var lowerHalf = sortedSpacings.Take(sortedSpacings.Count / 2).ToArray();
+        var upperHalf = sortedSpacings.Skip((sortedSpacings.Count + 1) / 2).ToArray();
+        if (lowerHalf.Length < 3 || upperHalf.Length < 3)
+        {
+            return 0;
+        }
+
+        var lowerMode = Median(lowerHalf);
+        var upperMode = Median(upperHalf);
+        if (lowerMode <= 0
+            || upperMode <= lowerMode
+            || upperMode / lowerMode is < 1.35 or > 3.2)
+        {
+            return 0;
+        }
+
+        var lowerTolerance = Math.Max(1.0, lowerMode * 0.28);
+        var upperTolerance = Math.Max(1.0, upperMode * 0.28);
+        var matched = sortedSpacings.Count(spacing =>
+            Math.Abs(spacing - lowerMode) <= lowerTolerance
+            || Math.Abs(spacing - upperMode) <= upperTolerance);
+        return matched / (double)sortedSpacings.Count;
     }
 
     private static int CountAxisIntersections(
@@ -4890,7 +4970,8 @@ internal sealed class WallDetectionStage : IPipelineStage
         IReadOnlyList<AxisRun> Runs,
         WallOrientation Orientation,
         int LineCount,
-        double MedianSpacing);
+        double MedianSpacing,
+        bool IsPlanScale);
 
     private sealed record DenseCrossingParallelPatternGridCluster(
         PlanRect Bounds,

@@ -8,7 +8,7 @@
     <Title>OpenPlanTrace export tools</Title>
     <Description>JSON and SVG exporters for OpenPlanTrace scan results.</Description>
     <Authors>OpenPlanTrace contributors</Authors>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenPlanTrace\OpenPlanTrace.csproj" />

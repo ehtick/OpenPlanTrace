@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-OpenPlanTrace is licensed under the MIT License. See [LICENSE](LICENSE).
+OpenPlanTrace is licensed under the BSD 2-Clause License. See [LICENSE](LICENSE).
 
 This file summarizes the third-party packages currently referenced by the repository. It is not legal advice; review the upstream licenses before redistribution.
 

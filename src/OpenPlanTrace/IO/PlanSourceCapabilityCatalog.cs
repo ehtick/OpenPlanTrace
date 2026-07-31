@@ -39,7 +39,7 @@ public static class PlanSourceCapabilityCatalog
                 loaderArray,
                 PlanSourceSupportStatus.OptionalAdapterRequired,
                 "Register an optional native DWG adapter, or use OpenPlanTrace.Dxf.DwgToDxfPlanDocumentLoader with a real converter implementation such as a host-configured ExternalDwgToDxfConverter.",
-                "Native DWG access usually requires a licensed commercial SDK, or a carefully isolated GPL-compatible bridge such as LibreDWG. The MIT core does not include DWG parsing.",
+                "Native DWG access usually requires a licensed commercial SDK, or a carefully isolated GPL-compatible bridge such as LibreDWG. OpenPlanTrace core does not include DWG parsing.",
                 "Native DWG is not parsed unless a real DWG loader is registered."),
 
             DescribeKnown(

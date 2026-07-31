@@ -58,7 +58,7 @@ public sealed class SourceRoutingTests
         Assert.Contains("source kind 'Dwg'", exception.Message);
         Assert.Contains("optional", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("licensed", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("MIT core does not include DWG parsing", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("OpenPlanTrace core does not include DWG parsing", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -625,6 +625,67 @@ public sealed class WallLayerFilteringTests
     }
 
     [Fact]
+    public async Task ScanAsync_FiltersPlanScaleParallelFloorFinishWithoutRemovingCrossingWalls()
+    {
+        var primitives = new List<PlanPrimitive>
+        {
+            UnlayeredLine("wall-top", new PlanPoint(80, 80), new PlanPoint(620, 80)),
+            UnlayeredLine("wall-right", new PlanPoint(620, 80), new PlanPoint(620, 620)),
+            UnlayeredLine("wall-bottom", new PlanPoint(620, 620), new PlanPoint(80, 620)),
+            UnlayeredLine("wall-left", new PlanPoint(80, 620), new PlanPoint(80, 80)),
+            UnlayeredLine("wall-crossing-vertical", new PlanPoint(360, 80), new PlanPoint(360, 620)),
+            UnlayeredLine("wall-crossing-horizontal", new PlanPoint(80, 520), new PlanPoint(620, 520))
+        };
+
+        for (var index = 0; index < 15; index++)
+        {
+            primitives.Add(UnlayeredLine(
+                $"floor-finish-h-{index}-a",
+                new PlanPoint(100, 120 + (index * 18)),
+                new PlanPoint(600, 120 + (index * 18))));
+            primitives.Add(UnlayeredLine(
+                $"floor-finish-h-{index}-b",
+                new PlanPoint(100, 126 + (index * 18)),
+                new PlanPoint(600, 126 + (index * 18))));
+        }
+
+        var document = new PlanDocument(
+            "plan-scale-parallel-floor-finish",
+            new[]
+            {
+                new PlanPage(
+                    1,
+                    new PlanSize(700, 700),
+                    primitives)
+            });
+
+        var result = await new OpenPlanTraceScanner().ScanAsync(
+            document,
+            new ScannerOptions
+            {
+                FilterCompactObjectLineworkFromWalls = false
+            });
+
+        Assert.All(result.Walls, wall => Assert.DoesNotContain(
+            wall.SourcePrimitiveIds,
+            sourceId => sourceId.StartsWith("floor-finish-", StringComparison.Ordinal)));
+        Assert.Contains(result.Walls, wall => wall.SourcePrimitiveIds.Contains("wall-crossing-vertical"));
+        Assert.Contains(result.Walls, wall => wall.SourcePrimitiveIds.Contains("wall-crossing-horizontal"));
+
+        var pattern = Assert.Single(
+            result.SurfacePatterns,
+            item => item.SourcePrimitiveIds.Any(sourceId => sourceId.StartsWith("floor-finish-", StringComparison.Ordinal)));
+        Assert.Equal(SurfacePatternKind.DenseParallelBand, pattern.Kind);
+        Assert.Equal(SurfacePatternOrientation.Horizontal, pattern.Orientation);
+        Assert.DoesNotContain("wall-crossing-vertical", pattern.SourcePrimitiveIds);
+        Assert.Contains(pattern.Evidence, item => item.Contains("plan-scale repeated band", StringComparison.Ordinal));
+
+        var diagnostic = Assert.Single(result.Diagnostics.Messages.Where(message => message.Code == "walls.dense_orthogonal_pattern_filtered"));
+        Assert.Equal("1", diagnostic.Properties["planScaleParallelClusterCount"]);
+        Assert.Contains("plan-scale", diagnostic.Properties["patterns"]);
+    }
+
+    [Fact]
     public async Task ScanAsync_FiltersTightSurfaceGridTailsFromWalls()
     {
         var primitives = new List<PlanPrimitive>

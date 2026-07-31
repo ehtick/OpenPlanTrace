@@ -5610,7 +5610,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     line.DistanceToPoint(wall.CenterLine.Midpoint),
                     wall.CenterLine.DistanceToPoint(line.Midpoint))
                     <= Math.Max(options.WallSnapTolerance * 4.0, options.DefaultWallThickness * 2.5)
-                && AxisAlignedCoverageRatioOfFirst(line, wall.CenterLine) >= 0.72);
+                && AxisAlignedCoverageRatioOfFirst(line, wall.CenterLine) >= 0.90);
 
     private static bool TryFindSourceBackedExteriorShellClosureAnchors(
         PlanLineSegment line,
