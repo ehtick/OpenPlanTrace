@@ -2952,7 +2952,7 @@
       ],
       "properties": {
         "solverVersion": {
-          "const": "openplantrace.global-wall-solver.v20"
+          "const": "openplantrace.global-wall-solver.v21"
         },
         "selectedHypothesisId": {
           "type": "string",

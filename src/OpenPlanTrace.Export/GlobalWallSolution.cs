@@ -253,7 +253,7 @@ public sealed record PlacementSolvedWallSolidIntervalExport(
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string SolverVersion = "openplantrace.global-wall-solver.v20";
+    public const string SolverVersion = "openplantrace.global-wall-solver.v21";
 
     private const double EndpointSnapDistance = 2.0;
     private const double EndpointAxisEqualityTolerance = 0.000001;
@@ -3352,49 +3352,89 @@ public static partial class GlobalWallSolutionBuilder
                 source.CenterLine,
                 endpoint,
                 intersection)
-            || !CompatibleWallTypes(source.WallType, target.WallType)
+            || !BodyContactWallTypesAreCompatible(
+                source.WallType,
+                target.WallType)
             || !RunSupportsSourceBackedBodyContact(source)
             || !RunSupportsSourceBackedBodyContact(target)
-            || source.Contributors.Any(candidate =>
-                candidate.OpeningSupportCount > 0)
+            || !OpeningAllowsBodyContactAt(
+                source,
+                endpoint,
+                openings)
             || !SharesMainStructuralComponent(source, target)
             || EndpointSupported(source, endpoint, runs))
         {
             return false;
         }
 
-        var targetOpenings = BuildOpeningIntervals(
-            "wall-solution:body-contact-probe",
+        return OpeningAllowsBodyContactAt(
             target,
-            target.CenterLine,
-            target.MillimetersPerDrawingUnit,
+            intersection,
             openings);
-        if (targetOpenings.Count == 0)
-        {
-            return true;
-        }
+    }
 
-        var targetLength = Math.Max(0.001, RunLength(target));
-        var intersectionOffset =
-            Math.Clamp(ProjectParameter(target.CenterLine, intersection), 0, 1)
-            * targetLength;
-        foreach (var opening in targetOpenings)
+    private static bool OpeningAllowsBodyContactAt(
+        CompactedWallRun run,
+        PointExport contact,
+        IReadOnlyList<PlacementOpeningExport> openings)
+    {
+        var runLength = Math.Max(0.001, RunLength(run));
+        var contactParameter = ProjectParameter(run.CenterLine, contact);
+        var runSourceWallIds = SourceWallIds(run);
+        foreach (var opening in openings
+                     .Where(opening => opening.PageNumber == run.PageNumber)
+                     .Where(OpeningCanAnchorCanonicalWall))
         {
-            if (intersectionOffset < opening.StartOffsetDrawingUnits
-                    - MinimumReconciliationMovement
-                || intersectionOffset > opening.EndOffsetDrawingUnits
-                    + MinimumReconciliationMovement)
+            var placement = opening.Placement;
+            if (placement is null
+                || !DirectionsAreParallel(run.CenterLine, placement.ReferenceLine))
+            {
+                continue;
+            }
+
+            var sourceLinked = OpeningSourceHostWallIds(opening)
+                .Any(runSourceWallIds.Contains);
+            var crossWallOffset = (
+                    PointToInfiniteLineDistance(
+                        placement.StartPoint,
+                        run.CenterLine)
+                    + PointToInfiniteLineDistance(
+                        placement.EndPoint,
+                        run.CenterLine))
+                / 2.0;
+            var distanceTolerance = Math.Max(
+                2.0,
+                Math.Max(
+                    run.ThicknessDrawingUnits * 1.5,
+                    placement.DepthDrawingUnits * 1.25));
+            if (crossWallOffset > distanceTolerance
+                || (!sourceLinked && opening.Confidence < 0.70))
+            {
+                continue;
+            }
+
+            var rawStart = ProjectParameter(
+                run.CenterLine,
+                placement.StartPoint);
+            var rawEnd = ProjectParameter(
+                run.CenterLine,
+                placement.EndPoint);
+            var openingStart = Math.Min(rawStart, rawEnd);
+            var openingEnd = Math.Max(rawStart, rawEnd);
+            var parameterTolerance = Math.Min(
+                0.25,
+                distanceTolerance / runLength);
+            if (contactParameter < openingStart - parameterTolerance
+                || contactParameter > openingEnd + parameterTolerance)
             {
                 continue;
             }
 
             var jambDistance = Math.Min(
                 Math.Abs(
-                    intersectionOffset
-                    - opening.StartOffsetDrawingUnits),
+                    (contactParameter - openingStart) * runLength),
                 Math.Abs(
-                    intersectionOffset
-                    - opening.EndOffsetDrawingUnits));
+                    (contactParameter - openingEnd) * runLength));
             if (jambDistance > OpeningJambJunctionTolerance)
             {
                 return false;
@@ -3403,6 +3443,27 @@ public static partial class GlobalWallSolutionBuilder
 
         return true;
     }
+
+    private static bool BodyContactWallTypesAreCompatible(
+        string first,
+        string second) =>
+        CompatibleWallTypes(first, second)
+        || (string.Equals(
+                first,
+                "Interior",
+                StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                second,
+                "Exterior",
+                StringComparison.OrdinalIgnoreCase))
+        || (string.Equals(
+                first,
+                "Exterior",
+                StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                second,
+                "Interior",
+                StringComparison.OrdinalIgnoreCase));
 
     private static bool EndpointExtensionIsOutward(
         LineExport line,

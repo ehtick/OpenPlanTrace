@@ -8,6 +8,13 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.11.028] - 2026-07-31
+
+- Improved interior-to-exterior wall junction connectivity.
+- Preserved opening interiors during endpoint normalization.
+- Improved source-backed wall-body contact placement.
+- Updated wall solver schema contracts.
+
 ## [0.11.027] - 2026-07-30
 
 - Improved source-backed structural wall bridge recovery.

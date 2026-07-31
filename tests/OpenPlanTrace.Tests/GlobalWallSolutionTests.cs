@@ -3402,6 +3402,136 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task Reconciler_NormalizesCrossTypeBodyContactWhenSourceOpeningIsRemote()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var host = HostWallFragment(
+            templateWall,
+            "cross-type-body-contact-host",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(100, 400))) with
+        {
+            WallType = "Exterior",
+            ThicknessDrawingUnits = 16,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural"
+        };
+        var branch = HostWallFragment(
+            templateWall,
+            "cross-type-body-contact-branch",
+            new LineExport(
+                new PointExport(109, 120),
+                new PointExport(400, 120))) with
+        {
+            WallType = "Interior",
+            ThicknessDrawingUnits = 2,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural"
+        };
+        var opening = AnchoredOpening(
+            "remote-source-opening",
+            branch.Id,
+            host.Id);
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [host, branch]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [host, branch],
+            Array.Empty<PlacementRoomExport>(),
+            [opening],
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var reconciledBranch = Assert.Single(
+            solutions.SelectedWallRuns.Where(run =>
+                run.SourceWallIds.Contains(branch.Id, StringComparer.Ordinal)));
+        Assert.Equal(
+            100,
+            Math.Min(
+                reconciledBranch.CenterLine.Start.X,
+                reconciledBranch.CenterLine.End.X),
+            6);
+        Assert.Contains(
+            reconciledBranch.OpeningIntervals,
+            interval => interval.OpeningId == opening.Id);
+        Assert.Contains(
+            reconciledBranch.Reconciliation.Evidence,
+            evidence => evidence.Contains(
+                "source-backed wall-body contact",
+                StringComparison.Ordinal));
+        Assert.Equal(1, reconciledBranch.Reconciliation.JunctionSnapCount);
+        Assert.Equal(1, solutions.Topology.TJunctionNodeCount);
+    }
+
+    [Fact]
+    public async Task Reconciler_DoesNotNormalizeSourceEndpointThroughOpeningInterior()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var host = HostWallFragment(
+            templateWall,
+            "opening-endpoint-host",
+            new LineExport(
+                new PointExport(230, 100),
+                new PointExport(230, 400))) with
+        {
+            WallType = "Exterior",
+            ThicknessDrawingUnits = 16,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural"
+        };
+        var branch = HostWallFragment(
+            templateWall,
+            "opening-endpoint-branch",
+            new LineExport(
+                new PointExport(239, 120),
+                new PointExport(400, 120))) with
+        {
+            WallType = "Interior",
+            ThicknessDrawingUnits = 2,
+            WallComponentId = "component:main",
+            WallComponentKind = "MainStructural"
+        };
+        var opening = AnchoredOpening(
+            "endpoint-source-opening",
+            branch.Id,
+            host.Id);
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [host, branch]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [host, branch],
+            Array.Empty<PlacementRoomExport>(),
+            [opening],
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var retainedBranch = Assert.Single(
+            solutions.SelectedWallRuns.Where(run =>
+                run.SourceWallIds.Contains(branch.Id, StringComparer.Ordinal)));
+        Assert.Equal(
+            239,
+            Math.Min(
+                retainedBranch.CenterLine.Start.X,
+                retainedBranch.CenterLine.End.X),
+            6);
+        Assert.Contains(
+            retainedBranch.OpeningIntervals,
+            interval => interval.OpeningId == opening.Id);
+        Assert.Equal(0, retainedBranch.Reconciliation.JunctionSnapCount);
+    }
+
+    [Fact]
     public async Task Reconciler_DoesNotNormalizeWallBodyContactAcrossComponents()
     {
         var result = await CreateScanResultAsync();
