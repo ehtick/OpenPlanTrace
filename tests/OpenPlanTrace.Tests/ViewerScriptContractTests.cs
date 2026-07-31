@@ -266,7 +266,7 @@ public sealed class ViewerScriptContractTests
         Assert.Contains("function placementGraphWallEdges", normalized);
         Assert.Contains("function placementGraphWallEdgeClassName", normalized);
         Assert.Contains("return placementGraphWallEdges(scan).filter(wallIsPlacementReady).length\n        || wallTopologySpanCount(scan, null, shouldDrawWallAsPlacementWall);", normalized);
-        Assert.Contains("return placementGraphWallEdges(scan).filter(onCurrentPage).filter(wallIsPlacementReady).length\n        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);", normalized);
+        Assert.Contains("return (placementGraphWallEdges(scan).filter(onCurrentPage).filter(wallIsPlacementReady).length\n        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall))\n        + currentPageOnly(scan.curvedWalls);", normalized);
         Assert.Contains("function wallReviewTopologySpans", normalized);
         Assert.Contains("const solvedReviewRuns = placementGraphWallEdges(state.scan)", normalized);
         Assert.Contains(".filter((edge) => edge.solverRun && !wallIsPlacementReady(edge));", normalized);

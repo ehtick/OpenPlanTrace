@@ -22,6 +22,9 @@ public sealed record PlanScanResult(
     IReadOnlyList<ObjectAggregate> ObjectAggregates,
     PipelineDiagnostics Diagnostics)
 {
+    public IReadOnlyList<CurvedWallCandidate> CurvedWalls { get; init; } =
+        Array.Empty<CurvedWallCandidate>();
+
     public WallEvidenceMap WallEvidenceMap { get; init; } = WallEvidenceMap.Empty;
 
     public WallTopologyPreparation WallTopologyPreparation { get; init; } = WallTopologyPreparation.Empty;

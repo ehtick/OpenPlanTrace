@@ -3257,6 +3257,27 @@ function drawOverlay() {
         addWallHitTarget(wall, title, inspection);
       });
     }
+
+    state.scan.curvedWalls.filter(onCurrentPage).forEach((curve) => {
+      if (!visibleBySourceLayer(curve)) {
+        return;
+      }
+
+      const title = [
+        `${curve.id} - curved wall candidate`,
+        Number.isFinite(Number(curve.centerlineRadius))
+          ? `radius ${formatNumber(curve.centerlineRadius)}`
+          : "",
+        Number.isFinite(Number(curve.thickness))
+          ? `thickness ${formatNumber(curve.thickness)}`
+          : "",
+        "review required",
+        "excluded from linear topology"
+      ].filter(Boolean).join(" - ");
+      const inspection = describeItem("curved wall candidate", curve);
+      addArc(curve, "curved-wall-review-halo", "", 1);
+      addArc(curve, "curved-wall-review", title, confidence(curve.confidence), inspection);
+    });
   }
 
   if (state.enabledLayers.has("nodes")) {
@@ -3587,6 +3608,42 @@ function addLine(line, className, title, opacity, item = null) {
   element.setAttribute("y1", line.start.y);
   element.setAttribute("x2", line.end.x);
   element.setAttribute("y2", line.end.y);
+  element.setAttribute("class", className);
+  element.setAttribute("opacity", opacity);
+  addTitle(element, title);
+  attachInspection(element, item);
+  elements.overlay.appendChild(element);
+}
+
+function addArc(arc, className, title, opacity, item = null) {
+  const center = arc?.center;
+  const radius = Number(arc?.centerlineRadius);
+  const startAngle = Number(arc?.startAngleRadians);
+  const sweepAngle = Number(arc?.sweepAngleRadians);
+  if (!center
+    || !Number.isFinite(radius)
+    || radius <= 0
+    || !Number.isFinite(startAngle)
+    || !Number.isFinite(sweepAngle)
+    || Math.abs(sweepAngle) <= 0.0001) {
+    return;
+  }
+
+  const start = arc.startPoint ?? {
+    x: center.x + (Math.cos(startAngle) * radius),
+    y: center.y + (Math.sin(startAngle) * radius)
+  };
+  const endAngle = startAngle + sweepAngle;
+  const end = arc.endPoint ?? {
+    x: center.x + (Math.cos(endAngle) * radius),
+    y: center.y + (Math.sin(endAngle) * radius)
+  };
+  const element = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const largeArc = Math.abs(sweepAngle) > Math.PI ? 1 : 0;
+  const sweep = sweepAngle >= 0 ? 1 : 0;
+  element.setAttribute(
+    "d",
+    `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} ${sweep} ${end.x} ${end.y}`);
   element.setAttribute("class", className);
   element.setAttribute("opacity", opacity);
   addTitle(element, title);
@@ -7069,6 +7126,7 @@ function setCounts(scan = null) {
         ["Surface patterns", scan.surfacePatterns?.length ?? 0],
         ["Wall components", scan.wallComponents?.length ?? 0],
         ["Walls", scan.walls.length],
+        ["Curved wall candidates", scan.curvedWalls?.length ?? 0],
         ["Nodes", scan.nodes.length],
         ["Rooms", scan.rooms.length],
         ["Room links", scan.roomAdjacencyEdges?.length ?? 0],
@@ -7332,7 +7390,8 @@ function appendWallReliabilityLegend(container, scan = state.scan) {
 
 function appendWallTopologyLegend(container, scan = state.scan) {
   const walls = (scan?.walls ?? []).filter(onCurrentPage);
-  if (!walls.length) {
+  const curvedWalls = (scan?.curvedWalls ?? []).filter(onCurrentPage);
+  if (!walls.length && !curvedWalls.length) {
     return;
   }
 
@@ -7348,6 +7407,7 @@ function appendWallTopologyLegend(container, scan = state.scan) {
     ["wall-exterior", "Exterior placement walls", exteriorWalls.length],
     ["wall-interior", "Interior placement walls", interiorWalls.length],
     ["wall-unknown", "Unclassified placement walls", unknownWalls.length],
+    ["curved-wall-review", "Curved wall candidates", curvedWalls.length],
     ["wall-excluded", "Hidden wall/detail candidates", hiddenWalls.length]
   ];
 
@@ -9443,6 +9503,7 @@ function generalCountRows(scan) {
     return [
       ["Regions", 0],
       ["Walls", 0],
+      ["Curved wall candidates", 0],
       ["Surface patterns", 0],
       ["Rooms", 0],
       ["Openings", 0],
@@ -9454,6 +9515,7 @@ function generalCountRows(scan) {
   return [
     ["Regions", scan.regions?.length ?? 0],
     ["Walls", scan.walls?.length ?? 0],
+    ["Curved wall candidates", scan.curvedWalls?.length ?? 0],
     ["Surface patterns", scan.surfacePatterns?.length ?? 0],
     ["Rooms", scan.rooms?.length ?? 0],
     ["Room clusters", scan.roomClusters?.length ?? 0],
@@ -10817,6 +10879,7 @@ function totalDetectionCount(scan) {
     scan.surfacePatterns,
     scan.wallComponents,
     scan.walls,
+    scan.curvedWalls,
     scan.nodes,
     scan.rooms,
     scan.roomAdjacencyEdges,
@@ -10987,8 +11050,9 @@ function layerCountForKey(scan, key) {
     case "rawWalls":
       return rawWallAuditLineCount(scan, state.currentPage);
     case "walls":
-      return placementGraphWallEdges(scan).filter(onCurrentPage).filter(wallIsPlacementReady).length
-        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall);
+      return (placementGraphWallEdges(scan).filter(onCurrentPage).filter(wallIsPlacementReady).length
+        || wallTopologySpanCount(scan, state.currentPage, shouldDrawWallAsPlacementWall))
+        + currentPageOnly(scan.curvedWalls);
     case "wallTruth":
       return currentPageOnly(state.wallTruth?.entries);
     case "wallBodyFootprints":
@@ -16328,6 +16392,7 @@ function normalizeScanPayload(payload) {
     regions: payload.regions ?? [],
     surfacePatterns: payload.surfacePatterns ?? [],
     walls: normalizeWallItems(payload.walls ?? []),
+    curvedWalls: payload.curvedWalls ?? [],
     wallComponents: payload.wallComponents ?? payload.wallGraph?.components ?? [],
     nodes: payload.nodes ?? payload.wallGraph?.nodes ?? [],
     edges: payload.edges ?? payload.wallGraph?.edges ?? [],
@@ -16388,6 +16453,7 @@ function normalizePlacementPayload(payload) {
     regions: [],
     surfacePatterns: (payload.surfacePatterns ?? []).map(normalizePlacementItem),
     walls: normalizeWallItems(payload.walls ?? []),
+    curvedWalls: [],
     wallComponents: (payload.wallGraph?.components ?? []).map(normalizePlacementItem),
     nodes: payload.wallGraph?.nodes ?? [],
     edges: solvedWallRuns.length

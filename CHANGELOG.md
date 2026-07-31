@@ -8,6 +8,15 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.12.002] - 2026-07-31
+
+- Improved filled-wall median and thickness anchoring.
+- Added reviewable circular wall-pair evidence without invented tangent geometry.
+- Improved 45-degree filled-wall recovery and diagonal cross-hatch rejection.
+- Fixed compact circular symbols being reported as curved walls.
+- Added public curved, angled, and filled-wall stress coverage.
+- Updated scan and structural schema contracts.
+
 ## [0.12.001] - 2026-07-31
 
 - Improved plan-scale floor-finish and hatch rejection.

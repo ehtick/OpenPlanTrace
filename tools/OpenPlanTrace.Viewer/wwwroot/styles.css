@@ -2292,6 +2292,30 @@ h1 {
   stroke-width: 4.2;
 }
 
+.curved-wall-review {
+  fill: none;
+  stroke: #d31f6b;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-dasharray: 5 2.5;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+
+.curved-wall-review-halo {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 4.8;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.legend-row.curved-wall-review .legend-swatch {
+  border-color: #d31f6b;
+  background: repeating-linear-gradient(90deg, rgba(211, 31, 107, 0.24) 0 5px, transparent 5px 9px);
+}
+
 .wall-truth {
   fill: rgba(211, 31, 107, 0.06);
   stroke: #d31f6b;

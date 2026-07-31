@@ -35,6 +35,8 @@ public sealed record PlanTraceExport(
     QualityExport Quality,
     DiagnosticsExport Diagnostics)
 {
+    public IReadOnlyList<CurvedWallExport> CurvedWalls { get; init; } = Array.Empty<CurvedWallExport>();
+
     public const string CurrentSchemaVersion = "openplantrace.scan.v71";
 
     public static PlanTraceExport From(PlanScanResult result) =>
@@ -97,7 +99,12 @@ public sealed record PlanTraceExport(
             PlanImportReadiness.FromScanResult(result),
             ScanReviewQueueItemExport.From(result, sourceLookup),
             QualityExport.From(result.Quality),
-            DiagnosticsExport.From(result.Diagnostics));
+            DiagnosticsExport.From(result.Diagnostics))
+        {
+            CurvedWalls = result.CurvedWalls
+                .Select(curve => CurvedWallExport.From(curve, sourceLookup))
+                .ToArray()
+        };
     }
 
     private static IReadOnlyDictionary<string, WallGraphComponent> BuildWallComponentLookup(
@@ -1010,6 +1017,70 @@ public sealed record SurfacePatternExport(
             pattern.SourcePrimitiveIds,
             ExportSourceHelpers.SourceLayers(pattern.SourcePrimitiveIds, sourceLookup),
             pattern.Evidence);
+}
+
+public sealed record CurvedWallExport(
+    string Id,
+    int PageNumber,
+    PointExport Center,
+    PointExport StartPoint,
+    PointExport EndPoint,
+    double CenterlineRadius,
+    double InnerRadius,
+    double OuterRadius,
+    double StartAngleRadians,
+    double SweepAngleRadians,
+    double Thickness,
+    double DrawingArcLength,
+    double? RadiusMillimeters,
+    double? ThicknessMillimeters,
+    double? ArcLengthMeters,
+    string? MeasurementScaleGroupId,
+    RectExport Bounds,
+    string? SourceRegionId,
+    string SourceKind,
+    double AngularOverlapRatio,
+    double RadialFitError,
+    bool ReadyForCoordinatePlacement,
+    bool ExcludedFromLinearTopology,
+    double Confidence,
+    bool RequiresReview,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> Evidence)
+{
+    public static CurvedWallExport From(
+        CurvedWallCandidate curve,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        new(
+            curve.Id,
+            curve.PageNumber,
+            PointExport.From(curve.Center),
+            PointExport.From(curve.StartPoint),
+            PointExport.From(curve.EndPoint),
+            curve.CenterlineRadius,
+            curve.InnerRadius,
+            curve.OuterRadius,
+            curve.StartAngleRadians,
+            curve.SweepAngleRadians,
+            curve.Thickness,
+            curve.ArcLength,
+            curve.RadiusMillimeters,
+            curve.ThicknessMillimeters,
+            curve.ArcLengthMeters,
+            curve.MeasurementScaleGroupId,
+            RectExport.From(curve.Bounds),
+            curve.SourceRegionId,
+            curve.SourceKind.ToString(),
+            curve.AngularOverlapRatio,
+            curve.RadialFitError,
+            curve.ReadyForCoordinatePlacement,
+            curve.ExcludedFromLinearTopology,
+            curve.Confidence.Value,
+            curve.RequiresReview,
+            curve.SourcePrimitiveIds,
+            ExportSourceHelpers.SourceLayers(curve.SourcePrimitiveIds, sourceLookup),
+            curve.Evidence);
 }
 
 public sealed record WallExport(

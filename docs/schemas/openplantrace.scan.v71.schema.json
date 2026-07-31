@@ -23,6 +23,7 @@
     "gridBaySpacings",
     "regions",
     "surfacePatterns",
+    "curvedWalls",
     "walls",
     "wallEvidence",
     "wallTopologyPreparation",
@@ -114,6 +115,12 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/surfacePattern"
+      }
+    },
+    "curvedWalls": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/curvedWall"
       }
     },
     "walls": {
@@ -3625,7 +3632,8 @@
           "type": "string",
           "enum": [
             "DenseOrthogonalGrid",
-            "DenseParallelBand"
+            "DenseParallelBand",
+            "DenseDiagonalCrossHatch"
           ]
         },
         "orientation": {
@@ -3634,7 +3642,8 @@
             "Unknown",
             "Orthogonal",
             "Horizontal",
-            "Vertical"
+            "Vertical",
+            "Diagonal"
           ]
         },
         "bounds": {
@@ -4923,6 +4932,136 @@
         },
         "confidence": {
           "$ref": "#/$defs/confidence"
+        },
+        "sourcePrimitiveIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourceLayers": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "curvedWall": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "pageNumber",
+        "center",
+        "startPoint",
+        "endPoint",
+        "centerlineRadius",
+        "innerRadius",
+        "outerRadius",
+        "startAngleRadians",
+        "sweepAngleRadians",
+        "thickness",
+        "drawingArcLength",
+        "radiusMillimeters",
+        "thicknessMillimeters",
+        "arcLengthMeters",
+        "measurementScaleGroupId",
+        "bounds",
+        "sourceRegionId",
+        "sourceKind",
+        "angularOverlapRatio",
+        "radialFitError",
+        "readyForCoordinatePlacement",
+        "excludedFromLinearTopology",
+        "confidence",
+        "requiresReview",
+        "sourcePrimitiveIds",
+        "sourceLayers",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "pageNumber": {
+          "$ref": "#/$defs/pageNumber"
+        },
+        "center": {
+          "$ref": "#/$defs/point"
+        },
+        "startPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "endPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "centerlineRadius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "innerRadius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "outerRadius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "startAngleRadians": {
+          "type": "number"
+        },
+        "sweepAngleRadians": {
+          "type": "number"
+        },
+        "thickness": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "drawingArcLength": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "radiusMillimeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "thicknessMillimeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "arcLengthMeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "measurementScaleGroupId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "sourceRegionId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "sourceKind": {
+          "type": "string",
+          "enum": [
+            "NativeArcPair",
+            "PolylineArcPair",
+            "MixedArcPair"
+          ]
+        },
+        "angularOverlapRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "radialFitError": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "readyForCoordinatePlacement": {
+          "type": "boolean",
+          "const": false
+        },
+        "excludedFromLinearTopology": {
+          "type": "boolean",
+          "const": true
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "requiresReview": {
+          "type": "boolean",
+          "const": true
         },
         "sourcePrimitiveIds": {
           "$ref": "#/$defs/stringArray"

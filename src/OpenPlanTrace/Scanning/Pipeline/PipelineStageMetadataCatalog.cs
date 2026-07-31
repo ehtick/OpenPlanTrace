@@ -95,7 +95,7 @@ public static class PipelineStageMetadataCatalog
             PipelineStageKind.Geometry,
             Reads(PlanArtifactKind.Primitives, PlanArtifactKind.Layers, PlanArtifactKind.SheetRegions, PlanArtifactKind.GridAxes, PlanArtifactKind.Calibration),
             Writes(PlanArtifactKind.WallCandidates, PlanArtifactKind.SurfacePatterns, PlanArtifactKind.Diagnostics),
-            Capabilities("wall-candidates", "wall-pair-reconstruction", "dense-pattern-filtering"),
+            Capabilities("wall-candidates", "wall-pair-reconstruction", "curved-wall-pair-evidence", "dense-pattern-filtering"),
             OptionalReads(PlanArtifactKind.Dimensions)),
         Create(
             "wall-evidence",

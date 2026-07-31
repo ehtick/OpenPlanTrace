@@ -45,6 +45,36 @@ public sealed class WallSolidRecoveryTests
                 && candidate.Evidence.Any(item => item.Contains("filled wall-solid primitive", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Fact]
+    public async Task WallDetection_UsesParallelPolygonFacesForRotatedFilledWallSolid()
+    {
+        var primitive = FilledPolyline(
+            "rotated-filled-wall-solid",
+            new[]
+            {
+                new PlanPoint(53.5355, 46.4645),
+                new PlanPoint(194.9569, 187.8859),
+                new PlanPoint(187.8859, 194.9569),
+                new PlanPoint(46.4645, 53.5355)
+            },
+            "RGB: (0, 0, 0)");
+        var context = ContextFor(primitive);
+
+        await new WallDetectionStage().ExecuteAsync(context, CancellationToken.None);
+
+        var wall = Assert.Single(
+            context.WallCandidates,
+            candidate => candidate.SourcePrimitiveIds.Contains("rotated-filled-wall-solid", StringComparer.Ordinal)
+                && candidate.Evidence.Any(item => item.Contains("filled wall-solid primitive", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(WallDetectionKind.ParallelLinePair, wall.DetectionKind);
+        Assert.Equal(10, wall.Thickness, precision: 2);
+        Assert.Equal(200, wall.DrawingLength, precision: 2);
+        Assert.Equal(45, wall.CenterLine.AngleRadians * 180.0 / Math.PI, precision: 2);
+        Assert.Contains(
+            wall.Evidence,
+            item => item.Contains("rotated filled wall-solid centerline", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static ScanContext ContextFor(params PlanPrimitive[] primitives)
     {
         var document = new PlanDocument(
@@ -74,6 +104,27 @@ public sealed class WallSolidRecoveryTests
             {
                 SourceId = sourceId,
                 EntityType = "rectangle",
+                Color = color,
+                LineType = "solid",
+                Properties = new Dictionary<string, string>
+                {
+                    ["isFilled"] = "True",
+                    ["isClipping"] = "False"
+                }
+            }
+        };
+
+    private static PolylinePrimitive FilledPolyline(
+        string sourceId,
+        IReadOnlyList<PlanPoint> points,
+        string color) =>
+        new(points, Closed: true)
+        {
+            SourceId = sourceId,
+            Source = new PrimitiveSourceMetadata
+            {
+                SourceId = sourceId,
+                EntityType = "polyline",
                 Color = color,
                 LineType = "solid",
                 Properties = new Dictionary<string, string>

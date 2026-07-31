@@ -55,6 +55,7 @@ public static class PlanTraceGeoJsonExporter
         features.AddRange(result.Annotations.Select(annotation => AnnotationFeature(annotation, sourceLookup)));
         features.AddRange(result.Annotations.SelectMany(annotation => AnnotationReferenceFeatures(annotation, sourceLookup)));
         features.AddRange(result.SurfacePatterns.Select(pattern => SurfacePatternFeature(pattern, sourceLookup)));
+        features.AddRange(result.CurvedWalls.Select(curve => CurvedWallFeature(curve, sourceLookup)));
         features.AddRange(result.Walls.Select(wall => WallFeature(
             wall,
             sourceLookup,
@@ -278,6 +279,38 @@ public static class PlanTraceGeoJsonExporter
                 .AddValue("evidence", wall.Evidence)
                 .AddSource(wall.SourcePrimitiveIds, sourceLookup));
     }
+
+    private static Dictionary<string, object?> CurvedWallFeature(
+        CurvedWallCandidate curve,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        Feature(
+            $"curved-wall:{curve.Id}",
+            ArcLineGeometry(curve),
+            Properties("curvedWall", curve.PageNumber, curve.Confidence)
+                .AddValue("openPlanTraceId", curve.Id)
+                .AddValue("canonicalGeometry", "CircularArc")
+                .AddValue("geoJsonApproximation", "SampledLineString")
+                .AddValue("center", Coordinate(curve.Center))
+                .AddValue("centerlineRadius", curve.CenterlineRadius)
+                .AddValue("innerRadius", curve.InnerRadius)
+                .AddValue("outerRadius", curve.OuterRadius)
+                .AddValue("startAngleRadians", curve.StartAngleRadians)
+                .AddValue("sweepAngleRadians", curve.SweepAngleRadians)
+                .AddValue("thickness", curve.Thickness)
+                .AddValue("drawingArcLength", curve.ArcLength)
+                .AddValue("radiusMillimeters", curve.RadiusMillimeters)
+                .AddValue("thicknessMillimeters", curve.ThicknessMillimeters)
+                .AddValue("arcLengthMeters", curve.ArcLengthMeters)
+                .AddValue("measurementScaleGroupId", curve.MeasurementScaleGroupId)
+                .AddValue("sourceKind", curve.SourceKind.ToString())
+                .AddValue("sourceRegionId", curve.SourceRegionId)
+                .AddValue("angularOverlapRatio", curve.AngularOverlapRatio)
+                .AddValue("radialFitError", curve.RadialFitError)
+                .AddValue("readyForCoordinatePlacement", curve.ReadyForCoordinatePlacement)
+                .AddValue("excludedFromLinearTopology", curve.ExcludedFromLinearTopology)
+                .AddValue("requiresReview", curve.RequiresReview)
+                .AddValue("evidence", curve.Evidence)
+                .AddSource(curve.SourcePrimitiveIds, sourceLookup));
 
     private static Dictionary<string, object?> SurfacePatternFeature(
         SurfacePatternCandidate pattern,
@@ -763,6 +796,32 @@ public static class PlanTraceGeoJsonExporter
             ["type"] = "LineString",
             ["coordinates"] = new[] { Coordinate(line.Start), Coordinate(line.End) }
         };
+
+    private static Dictionary<string, object?> ArcLineGeometry(CurvedWallCandidate curve)
+    {
+        const int minimumSamples = 12;
+        const int maximumSamples = 96;
+        var samples = Math.Clamp(
+            (int)Math.Ceiling(Math.Abs(curve.SweepAngleRadians) / (Math.PI / 24.0)) + 1,
+            minimumSamples,
+            maximumSamples);
+        var coordinates = Enumerable.Range(0, samples)
+            .Select(index =>
+            {
+                var parameter = index / (double)(samples - 1);
+                var angle = curve.StartAngleRadians + (curve.SweepAngleRadians * parameter);
+                return Coordinate(new PlanPoint(
+                    curve.Center.X + (Math.Cos(angle) * curve.CenterlineRadius),
+                    curve.Center.Y + (Math.Sin(angle) * curve.CenterlineRadius)));
+            })
+            .ToArray();
+
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "LineString",
+            ["coordinates"] = coordinates
+        };
+    }
 
     private static Dictionary<string, object?> RectGeometry(PlanRect rect) =>
         PolygonGeometry(RectPoints(rect), rect);

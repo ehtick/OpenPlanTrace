@@ -2,10 +2,11 @@ namespace OpenPlanTrace.Export;
 
 public static partial class GlobalWallSolutionBuilder
 {
-    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v11";
+    public const string ReconcilerVersion = "openplantrace.wall-evidence-reconciler.v12";
 
     private const double MinimumReconciliationMovement = 0.05;
     private const double MaximumReconciliationAxisShift = 8.0;
+    private const double MaximumPhysicalWallBodyAnchorShift = 16.0;
     private const double MaximumReconciliationEndpointAdjustment = 24.0;
 
     private static IReadOnlyList<CompactedWallRun> ReconcileWallEvidence(
@@ -98,26 +99,40 @@ public static partial class GlobalWallSolutionBuilder
             rooms,
             openings);
         var currentAxis = AxisCoordinate(run.CenterLine);
+        var physicalBodyAnchor = ResolvePhysicalWallBodyAnchor(
+            run,
+            allCandidates,
+            orientation);
+        var reconciledThickness = physicalBodyAnchor?.ThicknessDrawingUnits
+            ?? run.ThicknessDrawingUnits;
         var allowedAxisShift = Math.Max(
             1.5,
             Math.Min(
                 MaximumReconciliationAxisShift,
-                run.ThicknessDrawingUnits * 0.65));
-        var faceContinuation = ResolveWallFaceContinuation(
-            run,
-            runs,
-            orientation);
-        var consensus = faceContinuation is null
-            ? BuildAxisConsensus(
-                votes,
-                currentAxis,
-                run.ThicknessDrawingUnits,
-                allowedAxisShift)
-            : new AxisConsensus(
+                reconciledThickness * 0.65));
+        var faceContinuation = physicalBodyAnchor is null
+            ? ResolveWallFaceContinuation(
+                run,
+                runs,
+                orientation)
+            : null;
+        var consensus = physicalBodyAnchor is not null
+            ? new AxisConsensus(
+                physicalBodyAnchor.Axis,
+                true,
+                physicalBodyAnchor.Confidence,
+                physicalBodyAnchor.Evidence)
+            : faceContinuation is not null
+                ? new AxisConsensus(
                 faceContinuation.Axis,
                 true,
                 faceContinuation.Confidence,
-                faceContinuation.Evidence);
+                faceContinuation.Evidence)
+                : BuildAxisConsensus(
+                    votes,
+                    currentAxis,
+                    reconciledThickness,
+                    allowedAxisShift);
         var reconciledAxis = consensus.Accepted
             ? consensus.Axis
             : currentAxis;
@@ -129,7 +144,7 @@ public static partial class GlobalWallSolutionBuilder
             orientation,
             votes,
             reconciledAxis,
-            run.ThicknessDrawingUnits);
+            reconciledThickness);
         line = WithInterval(line, orientation, extent.Start, extent.End);
 
         var candidateVotes = votes.Count(vote => vote.Kind == ReconciliationVoteKind.Candidate);
@@ -160,6 +175,7 @@ public static partial class GlobalWallSolutionBuilder
         return run with
         {
             CenterLine = line,
+            ThicknessDrawingUnits = reconciledThickness,
             Reconciliation = new WallReconciliationState(
                 run.CenterLine,
                 candidateVotes,
@@ -542,23 +558,211 @@ public static partial class GlobalWallSolutionBuilder
         var evidence = run.Contributors
             .SelectMany(candidate => candidate.Evidence)
             .ToArray();
-        var hasPairedFaces = evidence.Any(item => item.Contains(
-            "parallel wall-face pair",
-            StringComparison.OrdinalIgnoreCase));
-        var hasPhysicalBody = evidence.Any(item =>
+        return HasStrongPhysicalWallBodyEvidence(evidence);
+    }
+
+    private static bool HasStrongPhysicalWallBodyEvidence(
+        GlobalWallCandidate candidate) =>
+        HasStrongPhysicalWallBodyEvidence(candidate.Evidence);
+
+    private static bool HasStrongPhysicalWallBodyEvidence(
+        IReadOnlyList<string> evidence)
+    {
+        return HasPairedWallFaceEvidence(evidence)
+            && HasPhysicalWallBodyMarker(evidence);
+    }
+
+    private static bool HasPairedWallFaceEvidence(IReadOnlyList<string> evidence) =>
+        evidence.Any(item => item.Contains(
+            "parallel wall-face",
+            StringComparison.OrdinalIgnoreCase))
+        || (evidence.Any(item => item.Contains("pair score", StringComparison.OrdinalIgnoreCase))
+            && evidence.Any(item => item.Contains("overlap ratio", StringComparison.OrdinalIgnoreCase)));
+
+    private static bool HasPhysicalWallBodyMarker(IReadOnlyList<string> evidence) =>
+        HasFilledWallBodyMarker(evidence)
+        || evidence.Any(item =>
             item.Contains(
-                "filled wall-solid",
-                StringComparison.OrdinalIgnoreCase)
-            || item.Contains(
-                "filled closed vector wall body",
-                StringComparison.OrdinalIgnoreCase)
-            || item.Contains(
                 "strong double-edge wall body",
                 StringComparison.OrdinalIgnoreCase)
             || item.Contains(
                 "main structural wall body",
                 StringComparison.OrdinalIgnoreCase));
-        return hasPairedFaces && hasPhysicalBody;
+
+    private static bool HasFilledWallBodyMarker(IReadOnlyList<string> evidence) =>
+        evidence.Any(item =>
+            item.Contains(
+                "filled wall-solid",
+                StringComparison.OrdinalIgnoreCase)
+            || item.Contains(
+                "filled closed vector wall body",
+                StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsCorroboratedRecoveredPhysicalWallBody(
+        GlobalWallCandidate candidate,
+        CompactedWallRun run,
+        IReadOnlyList<GlobalWallCandidate> allCandidates,
+        WallOrientation orientation)
+    {
+        if (candidate.ThicknessDrawingUnits < run.ThicknessDrawingUnits * 1.25
+            || !HasPairedWallFaceEvidence(candidate.Evidence)
+            || !candidate.Evidence.Any(item => item.Contains(
+                "recovered by wall evidence map",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return allCandidates.Any(support =>
+            !ReferenceEquals(support, candidate)
+            && support.PageNumber == candidate.PageNumber
+            && Orientation(support.CenterLine) == orientation
+            && !support.StrongNegativeEvidence
+            && HasFilledWallBodyMarker(support.Evidence)
+            && ProjectedOverlapLength(support.CenterLine, candidate.CenterLine)
+                / Math.Max(1.0, Math.Min(support.DrawingLength, candidate.DrawingLength)) >= 0.55
+            && LineDistance(support.CenterLine, candidate.CenterLine)
+                <= Math.Max(2.0, candidate.ThicknessDrawingUnits * 0.65));
+    }
+
+    private static PhysicalWallBodyAnchor? ResolvePhysicalWallBodyAnchor(
+        CompactedWallRun run,
+        IReadOnlyList<GlobalWallCandidate> allCandidates,
+        WallOrientation orientation)
+    {
+        if (orientation == WallOrientation.Diagonal)
+        {
+            return null;
+        }
+
+        var currentAxis = AxisCoordinate(run.CenterLine);
+        var runLength = Math.Max(1.0, RunLength(run));
+        var candidates = allCandidates
+            .Where(candidate =>
+                candidate.PageNumber == run.PageNumber
+                && Orientation(candidate.CenterLine) == orientation
+                && (!candidate.StrongNegativeEvidence
+                    || IsCorroboratedRecoveredPhysicalWallBody(
+                        candidate,
+                        run,
+                        allCandidates,
+                        orientation))
+                && ((HasPairedWallFaceEvidence(candidate.Evidence)
+                        && HasFilledWallBodyMarker(candidate.Evidence))
+                    || IsCorroboratedRecoveredPhysicalWallBody(
+                        candidate,
+                        run,
+                        allCandidates,
+                        orientation))
+                && ReconciliationWallTypesCompatible(
+                    candidate.WallType,
+                    run.WallType,
+                    authoritativeSourceLinked: false))
+            .Select(candidate =>
+            {
+                var axis = AxisCoordinate(candidate.CenterLine);
+                var axisDistance = Math.Abs(axis - currentAxis);
+                var thickness = Math.Max(0.5, candidate.ThicknessDrawingUnits);
+                var overlap = ProjectedOverlapLength(
+                    candidate.CenterLine,
+                    run.CenterLine);
+                var overlapRatio = overlap
+                    / Math.Max(1.0, Math.Min(candidate.DrawingLength, runLength));
+                var expectedFaceOffset = thickness / 2.0;
+                var faceResidual = Math.Abs(axisDistance - expectedFaceOffset);
+                var faceTolerance = Math.Max(1.25, Math.Min(4.5, thickness * 0.20));
+                var allowedShift = Math.Max(
+                    MaximumReconciliationAxisShift,
+                    Math.Min(
+                        MaximumPhysicalWallBodyAnchorShift,
+                        thickness * 0.72));
+                var isSameAxisBody = axisDistance <= Math.Max(0.75, thickness * 0.08);
+                var isBodyFaceRelationship = faceResidual <= faceTolerance
+                    && run.ThicknessDrawingUnits <= thickness * 0.82;
+                if (candidate.DrawingLength < Math.Max(18.0, runLength * 0.08)
+                    || overlapRatio < 0.58
+                    || axisDistance > allowedShift
+                    || (!isSameAxisBody && !isBodyFaceRelationship))
+                {
+                    return null;
+                }
+
+                var score = Math.Max(0.2, candidate.LocalScore)
+                    * Math.Max(0.45, candidate.Confidence)
+                    * Math.Max(0.58, overlapRatio)
+                    * Math.Min(1.0, candidate.DrawingLength / Math.Max(40.0, runLength * 0.20));
+                return new PhysicalWallBodyAnchorObservation(
+                    candidate,
+                    axis,
+                    thickness,
+                    axisDistance,
+                    faceResidual,
+                    overlapRatio,
+                    isBodyFaceRelationship,
+                    score);
+            })
+            .Where(observation => observation is not null)
+            .Cast<PhysicalWallBodyAnchorObservation>()
+            .OrderByDescending(observation => observation.Score)
+            .ThenBy(observation => observation.Axis)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return null;
+        }
+
+        var shiftedBodyFaceCandidates = candidates
+            .Where(candidate => candidate.IsBodyFaceRelationship)
+            .ToArray();
+        if (shiftedBodyFaceCandidates.Length == 0)
+        {
+            return null;
+        }
+
+        candidates = shiftedBodyFaceCandidates;
+
+        var seed = candidates[0];
+        var clusterTolerance = Math.Max(
+            0.75,
+            Math.Min(2.5, seed.ThicknessDrawingUnits * 0.10));
+        var cluster = candidates
+            .Where(candidate => Math.Abs(candidate.Axis - seed.Axis) <= clusterTolerance)
+            .ToArray();
+        var clusterWeight = cluster.Sum(candidate => candidate.Score);
+        if (clusterWeight <= 0)
+        {
+            return null;
+        }
+
+        var competing = candidates
+            .Where(candidate => Math.Abs(candidate.Axis - seed.Axis) > clusterTolerance)
+            .GroupBy(candidate => Math.Round(candidate.Axis / clusterTolerance))
+            .Select(group => group.Sum(candidate => candidate.Score))
+            .DefaultIfEmpty(0)
+            .Max();
+        if (competing >= clusterWeight * 0.82)
+        {
+            return null;
+        }
+
+        var axis = cluster.Sum(candidate => candidate.Axis * candidate.Score) / clusterWeight;
+        var thickness = cluster.Sum(candidate => candidate.ThicknessDrawingUnits * candidate.Score) / clusterWeight;
+        var confidence = Math.Clamp(
+            cluster.Max(candidate => candidate.Candidate.Confidence) * 0.70
+            + Math.Min(0.18, cluster.Length * 0.06)
+            + Math.Min(0.10, cluster.Max(candidate => candidate.OverlapRatio) * 0.10),
+            0.60,
+            0.96);
+        var sourceIds = cluster
+            .Select(candidate => candidate.Candidate.Id)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var shift = axis - currentAxis;
+        return new PhysicalWallBodyAnchor(
+            axis,
+            thickness,
+            confidence,
+            $"reconciler anchored canonical wall to source-backed filled wall-body median by {shift:0.###} drawing units; thickness {thickness:0.###}; supporting candidate(s) {string.Join(",", sourceIds)}");
     }
 
     private static AxisConsensus BuildAxisConsensus(
@@ -1366,6 +1570,22 @@ public static partial class GlobalWallSolutionBuilder
         double Axis,
         double Confidence,
         double Score,
+        string Evidence);
+
+    private sealed record PhysicalWallBodyAnchorObservation(
+        GlobalWallCandidate Candidate,
+        double Axis,
+        double ThicknessDrawingUnits,
+        double AxisDistance,
+        double FaceResidual,
+        double OverlapRatio,
+        bool IsBodyFaceRelationship,
+        double Score);
+
+    private sealed record PhysicalWallBodyAnchor(
+        double Axis,
+        double ThicknessDrawingUnits,
+        double Confidence,
         string Evidence);
 
     private sealed record WallReconciliationState(

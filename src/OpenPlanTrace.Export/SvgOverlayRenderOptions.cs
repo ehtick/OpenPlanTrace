@@ -33,6 +33,8 @@ public sealed record SvgOverlayRenderOptions
 
     public bool IncludeWalls { get; init; } = true;
 
+    public bool IncludeCurvedWalls { get; init; } = true;
+
     public bool IncludeWallComponents { get; init; } = true;
 
     public bool IncludeWallNodes { get; init; } = true;
@@ -114,6 +116,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeGridAxes = false,
                 IncludeGridBaySpacings = false,
                 IncludeWalls = false,
+                IncludeCurvedWalls = false,
                 IncludeWallComponents = false,
                 IncludeWallNodes = false,
                 IncludeRooms = false,
@@ -270,6 +273,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeGridAxes = false,
                 IncludeGridBaySpacings = false,
                 IncludeWalls = false,
+                IncludeCurvedWalls = false,
                 IncludeWallComponents = false,
                 IncludeWallNodes = false,
                 IncludeRooms = false,
@@ -300,6 +304,7 @@ public sealed record SvgOverlayRenderOptions
                 IncludeGridAxes = false,
                 IncludeGridBaySpacings = false,
                 IncludeWalls = false,
+                IncludeCurvedWalls = false,
                 IncludeWallComponents = false,
                 IncludeWallNodes = false,
                 IncludeRooms = false,

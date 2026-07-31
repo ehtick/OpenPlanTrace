@@ -36,6 +36,8 @@ internal sealed class ScanContext
 
     public List<SurfacePatternCandidate> SurfacePatterns { get; } = new();
 
+    public List<CurvedWallCandidate> CurvedWallCandidates { get; } = new();
+
     public List<WallSegment> WallCandidates { get; } = new();
 
     public List<WallSegment> Walls { get; } = new();
@@ -80,6 +82,7 @@ internal sealed class ScanContext
         + GridBaySpacings.Count
         + SheetRegions.Count
         + SurfacePatterns.Count
+        + CurvedWallCandidates.Count
         + WallCandidates.Count
         + Walls.Count
         + WallEvidenceMap.Segments.Count
@@ -142,7 +145,7 @@ internal sealed class ScanContext
             [PlanArtifactKind.DimensionChains] = Diagnostics.MessagesSince(0)
                 .Count(message => string.Equals(message.Stage, "dimension-chains", StringComparison.Ordinal)),
             [PlanArtifactKind.SurfacePatterns] = SurfacePatterns.Count,
-            [PlanArtifactKind.WallCandidates] = WallCandidates.Count,
+            [PlanArtifactKind.WallCandidates] = WallCandidates.Count + CurvedWallCandidates.Count,
             [PlanArtifactKind.Walls] = Walls.Count,
             [PlanArtifactKind.WallEvidence] =
                 WallEvidenceMap.Segments.Count
@@ -264,6 +267,7 @@ internal sealed class ScanContext
 
         result = result with
         {
+            CurvedWalls = CurvedWallCandidates.ToArray(),
             WallEvidenceMap = WallEvidenceMap,
             WallTopologyPreparation = WallTopologyPreparation,
             StructuralEvidenceGraph = StructuralEvidenceGraph,
@@ -304,6 +308,7 @@ internal sealed class ScanContext
 
         return result with
         {
+            CurvedWalls = CurvedWallCandidates.ToArray(),
             WallEvidenceMap = WallEvidenceMap,
             WallTopologyPreparation = WallTopologyPreparation,
             StructuralEvidenceGraph = StructuralEvidenceGraph,

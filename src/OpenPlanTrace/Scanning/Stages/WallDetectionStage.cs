@@ -29,11 +29,18 @@ internal sealed class WallDetectionStage : IPipelineStage
                 continue;
             }
 
+            var curvedWalls = CurvedWallDetection.Detect(page, mainRegion, context);
+            context.CurvedWallCandidates.AddRange(curvedWalls);
+            var curvedWallSourceIds = curvedWalls
+                .SelectMany(wall => wall.SourcePrimitiveIds)
+                .ToHashSet(StringComparer.Ordinal);
+
             var minFragmentLength = Math.Min(context.Options.MinWallLength, Math.Max(0.1, context.Options.MinWallFragmentLength));
             var candidates = PrimitiveGeometry
                 .EnumerateLines(page, context)
                 .Where(line => line.Segment.Length >= minFragmentLength)
                 .Where(line => mainRegion.Bounds.Intersects(line.Segment.Bounds.Inflate(context.Options.WallSnapTolerance)))
+                .Where(line => !curvedWallSourceIds.Contains(line.PrimitiveId))
                 .ToArray();
             var gridAxisSourceIds = context.GridAxes
                 .Where(axis => axis.PageNumber == page.Number)
@@ -61,6 +68,13 @@ internal sealed class WallDetectionStage : IPipelineStage
             var densePatternSourceIds = densePatternClusters
                 .SelectMany(cluster => cluster.SourcePrimitiveIds)
                 .ToHashSet(StringComparer.Ordinal);
+            var diagonalCrossHatchClusters = DetectDenseDiagonalCrossHatchWallNoise(
+                classifiedCandidates,
+                mainRegion.Bounds,
+                context.Options);
+            var diagonalCrossHatchSourceIds = diagonalCrossHatchClusters
+                .SelectMany(cluster => cluster.SourcePrimitiveIds)
+                .ToHashSet(StringComparer.Ordinal);
             var wallCandidates = classifiedCandidates
                 .Select(candidate => compactLineworkSourceIds.Contains(candidate.PrimitiveId)
                     ? candidate with
@@ -86,6 +100,14 @@ internal sealed class WallDetectionStage : IPipelineStage
                                 .Append("suppressed from wall detection as dense repeated orthogonal pattern")
                                 .ToArray()
                         }
+                    : diagonalCrossHatchSourceIds.Contains(candidate.PrimitiveId)
+                        ? candidate with
+                        {
+                            UseForWallDetection = false,
+                            LayerEvidence = candidate.LayerEvidence
+                                .Append("suppressed from wall detection as dense diagonal cross-hatch pattern")
+                                .ToArray()
+                        }
                     : candidate)
                 .ToArray();
             var filteredCandidates = wallCandidates
@@ -98,6 +120,27 @@ internal sealed class WallDetectionStage : IPipelineStage
             var seeds = LimitWallSeeds(uncappedSeeds, context, page.Number, mainRegion.Bounds, mainRegion.Id);
 
             var wallStartCount = context.WallCandidates.Count;
+
+            if (curvedWalls.Count > 0)
+            {
+                context.AddDiagnostic(
+                    "walls.curved_pairs.preserved",
+                    DiagnosticSeverity.Info,
+                    Name,
+                    $"{curvedWalls.Count} paired curved wall candidate(s) were preserved without converting them into straight wall segments.",
+                    page.Number,
+                    PlanRect.Union(curvedWalls.Select(wall => wall.Bounds)).ClampTo(page.Bounds),
+                    new Confidence(curvedWalls.Average(wall => wall.Confidence.Value)),
+                    scope: DiagnosticScope.Detection,
+                    sourcePrimitiveIds: curvedWalls.SelectMany(wall => wall.SourcePrimitiveIds),
+                    properties: new Dictionary<string, string>
+                    {
+                        ["curvedWallCount"] = curvedWalls.Count.ToString(),
+                        ["excludedStraightSegmentSourceCount"] = curvedWallSourceIds.Count.ToString(),
+                        ["readyForCoordinatePlacementCount"] = curvedWalls.Count(wall => wall.ReadyForCoordinatePlacement).ToString(),
+                        ["sourceRegionId"] = mainRegion.Id
+                    });
+            }
 
             var horizontalRuns = MergeAxisRuns(seeds.Where(seed => seed.Orientation == WallOrientation.Horizontal), context.Options).ToArray();
             var verticalRuns = MergeAxisRuns(seeds.Where(seed => seed.Orientation == WallOrientation.Vertical), context.Options).ToArray();
@@ -133,6 +176,12 @@ internal sealed class WallDetectionStage : IPipelineStage
                 context.Options,
                 context.SurfacePatterns.Count);
             context.SurfacePatterns.AddRange(surfacePatternCandidates);
+            var diagonalSurfacePatterns = CreateDiagonalCrossHatchSurfacePatternCandidates(
+                page.Number,
+                mainRegion.Id,
+                diagonalCrossHatchClusters,
+                context.SurfacePatterns.Count);
+            context.SurfacePatterns.AddRange(diagonalSurfacePatterns);
 
             var axisDimensionLikeFragmentNoiseRuns = context.Options.FilterDimensionLikeFragmentLineworkFromWalls
                 ? DetectDimensionLikeFragmentNoiseRuns(
@@ -311,6 +360,29 @@ internal sealed class WallDetectionStage : IPipelineStage
                                 .Select(cluster => $"{cluster.HorizontalLineCount}h/{cluster.VerticalLineCount}v/{cluster.IntersectionCount}x"))
                             .Concat(denseParallelRunClusters
                                 .Select(cluster => $"{cluster.Orientation}:{cluster.LineCount} lines/{cluster.MedianSpacing:0.###} spacing{(cluster.IsPlanScale ? "/plan-scale" : string.Empty)}")))
+                    });
+            }
+
+            if (diagonalCrossHatchClusters.Count > 0)
+            {
+                context.AddDiagnostic(
+                    "walls.dense_diagonal_cross_hatch_filtered",
+                    DiagnosticSeverity.Info,
+                    Name,
+                    $"{diagonalCrossHatchSourceIds.Count} densely crossing diagonal surface/detail line primitive(s) were kept out of wall detection.",
+                    page.Number,
+                    PlanRect.Union(diagonalCrossHatchClusters.Select(cluster => cluster.Bounds)).ClampTo(page.Bounds),
+                    Confidence.High,
+                    scope: DiagnosticScope.Detection,
+                    sourcePrimitiveIds: diagonalCrossHatchSourceIds,
+                    properties: new Dictionary<string, string>
+                    {
+                        ["clusterCount"] = diagonalCrossHatchClusters.Count.ToString(),
+                        ["filteredLineCount"] = diagonalCrossHatchSourceIds.Count.ToString(),
+                        ["intersectionCount"] = diagonalCrossHatchClusters.Sum(cluster => cluster.IntersectionCount).ToString(),
+                        ["eligibleLineCount"] = seeds.Length.ToString(),
+                        ["eligibleLineCountBeforeLimit"] = uncappedSeeds.Length.ToString(),
+                        ["sourceRegionId"] = mainRegion.Id
                     });
             }
 
@@ -2035,6 +2107,327 @@ internal sealed class WallDetectionStage : IPipelineStage
         return contacts.Count;
     }
 
+    private static IReadOnlyList<DenseDiagonalCrossHatchWallNoiseCluster> DetectDenseDiagonalCrossHatchWallNoise(
+        IReadOnlyList<WallLineCandidate> candidates,
+        PlanRect mainRegionBounds,
+        ScannerOptions options)
+    {
+        const int maximumCandidates = 6000;
+        const int maximumPairChecks = 2_000_000;
+        var minimumLength = Math.Max(8.0, options.MinWallLength * 0.80);
+        var maximumLength = Math.Sqrt(
+            (mainRegionBounds.Width * mainRegionBounds.Width)
+            + (mainRegionBounds.Height * mainRegionBounds.Height)) * 0.65;
+        var axisExclusion = Math.PI / 30.0;
+        var items = candidates
+            .Where(candidate =>
+                candidate.UseForWallDetection
+                && candidate.LayerCategory is not LayerCategory.Wall
+                    and not LayerCategory.Structural
+                && candidate.Line.Segment.Length >= minimumLength
+                && candidate.Line.Segment.Length <= maximumLength)
+            .Select(candidate => DiagonalCrossHatchWallNoiseItem.From(candidate))
+            .Where(item =>
+                item.AngleRadians > axisExclusion
+                && item.AngleRadians < Math.PI - axisExclusion
+                && Math.Abs(item.AngleRadians - (Math.PI / 2.0)) > axisExclusion)
+            .OrderByDescending(item => item.Segment.Length)
+            .ThenBy(item => item.PrimitiveId, StringComparer.Ordinal)
+            .Take(maximumCandidates)
+            .ToArray();
+        if (items.Length < 6)
+        {
+            return Array.Empty<DenseDiagonalCrossHatchWallNoiseCluster>();
+        }
+
+        var cellSize = Math.Max(
+            18.0,
+            Math.Max(options.MaxWallPairSeparation * 1.5, options.MinWallLength * 2.0));
+        var cells = new Dictionary<(int X, int Y), List<int>>();
+        for (var index = 0; index < items.Length; index++)
+        {
+            var bounds = items[index].Segment.Bounds.Inflate(0.5);
+            var minX = (int)Math.Floor(bounds.Left / cellSize);
+            var maxX = (int)Math.Floor(bounds.Right / cellSize);
+            var minY = (int)Math.Floor(bounds.Top / cellSize);
+            var maxY = (int)Math.Floor(bounds.Bottom / cellSize);
+            for (var x = minX; x <= maxX; x++)
+            {
+                for (var y = minY; y <= maxY; y++)
+                {
+                    if (!cells.TryGetValue((x, y), out var members))
+                    {
+                        members = new List<int>();
+                        cells[(x, y)] = members;
+                    }
+
+                    members.Add(index);
+                }
+            }
+        }
+
+        var adjacency = Enumerable.Range(0, items.Length)
+            .Select(_ => new HashSet<int>())
+            .ToArray();
+        var visitedPairs = new HashSet<long>();
+        var pairChecks = 0;
+        foreach (var members in cells.Values)
+        {
+            for (var firstPosition = 0; firstPosition < members.Count; firstPosition++)
+            {
+                var firstIndex = members[firstPosition];
+                for (var secondPosition = firstPosition + 1; secondPosition < members.Count; secondPosition++)
+                {
+                    var secondIndex = members[secondPosition];
+                    var low = Math.Min(firstIndex, secondIndex);
+                    var high = Math.Max(firstIndex, secondIndex);
+                    var pairKey = ((long)low << 32) | (uint)high;
+                    if (!visitedPairs.Add(pairKey))
+                    {
+                        continue;
+                    }
+
+                    pairChecks++;
+                    if (pairChecks > maximumPairChecks)
+                    {
+                        return Array.Empty<DenseDiagonalCrossHatchWallNoiseCluster>();
+                    }
+
+                    var angleDelta = Math.Abs(items[firstIndex].AngleRadians - items[secondIndex].AngleRadians);
+                    angleDelta = Math.Min(angleDelta, Math.PI - angleDelta);
+                    if (angleDelta < Math.PI * 0.28
+                        || angleDelta > Math.PI * 0.72
+                        || !TryGetInteriorLineIntersection(
+                            items[firstIndex].Segment,
+                            items[secondIndex].Segment,
+                            options.GeometryTolerance.Distance,
+                            out _))
+                    {
+                        continue;
+                    }
+
+                    adjacency[firstIndex].Add(secondIndex);
+                    adjacency[secondIndex].Add(firstIndex);
+                }
+            }
+        }
+
+        var active = Enumerable.Range(0, items.Length)
+            .Where(index => adjacency[index].Count >= 2)
+            .ToHashSet();
+        var visited = new HashSet<int>();
+        var result = new List<DenseDiagonalCrossHatchWallNoiseCluster>();
+        foreach (var seed in active.Order())
+        {
+            if (!visited.Add(seed))
+            {
+                continue;
+            }
+
+            var queue = new Queue<int>();
+            var component = new List<int>();
+            queue.Enqueue(seed);
+            while (queue.Count > 0)
+            {
+                var current = queue.Dequeue();
+                component.Add(current);
+                foreach (var neighbor in adjacency[current])
+                {
+                    if (active.Contains(neighbor) && visited.Add(neighbor))
+                    {
+                        queue.Enqueue(neighbor);
+                    }
+                }
+            }
+
+            var cluster = TryCreateDenseDiagonalCrossHatchCluster(
+                component.Select(index => items[index]).ToArray(),
+                adjacency,
+                component,
+                options);
+            if (cluster is not null)
+            {
+                result.Add(cluster);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryGetInteriorLineIntersection(
+        PlanLineSegment first,
+        PlanLineSegment second,
+        double tolerance,
+        out PlanPoint intersection)
+    {
+        if (!GeometryOperations.TryIntersect(first, second, tolerance, out intersection))
+        {
+            return false;
+        }
+
+        var firstMargin = Math.Max(0.75, Math.Min(4.0, first.Length * 0.06));
+        var secondMargin = Math.Max(0.75, Math.Min(4.0, second.Length * 0.06));
+        return intersection.DistanceTo(first.Start) > firstMargin
+            && intersection.DistanceTo(first.End) > firstMargin
+            && intersection.DistanceTo(second.Start) > secondMargin
+            && intersection.DistanceTo(second.End) > secondMargin;
+    }
+
+    private static DenseDiagonalCrossHatchWallNoiseCluster? TryCreateDenseDiagonalCrossHatchCluster(
+        IReadOnlyList<DiagonalCrossHatchWallNoiseItem> items,
+        IReadOnlyList<HashSet<int>> adjacency,
+        IReadOnlyList<int> sourceIndices,
+        ScannerOptions options)
+    {
+        if (items.Count < 6)
+        {
+            return null;
+        }
+
+        var angleBucketSize = Math.PI / 36.0;
+        var families = items
+            .GroupBy(item => (int)Math.Round(item.AngleRadians / angleBucketSize))
+            .OrderByDescending(group => group.Count())
+            .Take(2)
+            .Select(group => group.ToArray())
+            .ToArray();
+        if (families.Length < 2 || families.Any(family => family.Length < 3))
+        {
+            return null;
+        }
+
+        var firstAngle = families[0].Average(item => item.AngleRadians);
+        var secondAngle = families[1].Average(item => item.AngleRadians);
+        var angleDelta = Math.Abs(firstAngle - secondAngle);
+        angleDelta = Math.Min(angleDelta, Math.PI - angleDelta);
+        if (angleDelta < Math.PI * 0.28 || angleDelta > Math.PI * 0.72)
+        {
+            return null;
+        }
+
+        var firstSpacing = RegularDiagonalFamilySpacing(families[0], options);
+        var secondSpacing = RegularDiagonalFamilySpacing(families[1], options);
+        if (firstSpacing is null || secondSpacing is null)
+        {
+            return null;
+        }
+
+        var bounds = PlanRect.Union(items.Select(item => item.Segment.Bounds));
+        if (Math.Min(bounds.Width, bounds.Height) < Math.Max(24.0, options.MinWallLength * 2.5))
+        {
+            return null;
+        }
+
+        var sourceIndexSet = sourceIndices.ToHashSet();
+        var intersectionCount = sourceIndices.Sum(index =>
+            adjacency[index].Count(sourceIndexSet.Contains)) / 2;
+        if (intersectionCount < 6)
+        {
+            return null;
+        }
+
+        return new DenseDiagonalCrossHatchWallNoiseCluster(
+            bounds,
+            items.Select(item => item.PrimitiveId)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray(),
+            families[0].Length,
+            families[1].Length,
+            intersectionCount,
+            firstSpacing.Value,
+            secondSpacing.Value);
+    }
+
+    private static double? RegularDiagonalFamilySpacing(
+        IReadOnlyList<DiagonalCrossHatchWallNoiseItem> family,
+        ScannerOptions options)
+    {
+        if (family.Count < 3)
+        {
+            return null;
+        }
+
+        var direction = new PlanVector(
+            Math.Cos(family.Average(item => item.AngleRadians)),
+            Math.Sin(family.Average(item => item.AngleRadians)));
+        var normal = new PlanVector(-direction.Y, direction.X);
+        var coordinates = family
+            .Select(item => Dot(item.Segment.Midpoint, normal))
+            .Order()
+            .ToArray();
+        var unique = new List<double>();
+        foreach (var coordinate in coordinates)
+        {
+            if (unique.Count == 0 || Math.Abs(unique[^1] - coordinate) > 0.5)
+            {
+                unique.Add(coordinate);
+            }
+        }
+
+        if (unique.Count < 3)
+        {
+            return null;
+        }
+
+        var spacing = Enumerable.Range(1, unique.Count - 1)
+            .Select(index => unique[index] - unique[index - 1])
+            .Where(value => value > 0.25)
+            .ToArray();
+        if (spacing.Length < 2)
+        {
+            return null;
+        }
+
+        var median = Median(spacing);
+        var maximumSpacing = Math.Max(
+            36.0,
+            Math.Max(options.MaxWallPairSeparation * 2.2, options.DefaultWallThickness * 10.0));
+        var regularCount = spacing.Count(value =>
+            value >= median * 0.35 && value <= median * 1.85);
+        return median > 0
+            && median <= maximumSpacing
+            && regularCount >= Math.Max(2, (int)Math.Ceiling(spacing.Length * 0.60))
+                ? median
+                : null;
+    }
+
+    private static IReadOnlyList<SurfacePatternCandidate> CreateDiagonalCrossHatchSurfacePatternCandidates(
+        int pageNumber,
+        string sourceRegionId,
+        IReadOnlyList<DenseDiagonalCrossHatchWallNoiseCluster> clusters,
+        int startingIndex) =>
+        clusters
+            .Select((cluster, index) => new SurfacePatternCandidate(
+                $"page:{pageNumber}:surface-pattern:{startingIndex + index + 1}",
+                pageNumber,
+                SurfacePatternKind.DenseDiagonalCrossHatch,
+                SurfacePatternOrientation.Diagonal,
+                cluster.Bounds,
+                sourceRegionId,
+                cluster.FirstFamilyLineCount + cluster.SecondFamilyLineCount,
+                HorizontalLineCount: 0,
+                VerticalLineCount: 0,
+                cluster.IntersectionCount,
+                HorizontalMedianSpacing: null,
+                VerticalMedianSpacing: null,
+                MedianSpacing: (cluster.FirstFamilyMedianSpacing + cluster.SecondFamilyMedianSpacing) / 2.0,
+                ExcludedFromWallDetection: true,
+                ExcludedFromStructuralTopology: true,
+                cluster.SourcePrimitiveIds,
+                new Confidence(0.91),
+                RequiresReview: false,
+                new[]
+                {
+                    "dense diagonal cross-hatch surface/detail pattern",
+                    $"two regular diagonal families with {cluster.FirstFamilyLineCount} and {cluster.SecondFamilyLineCount} lines",
+                    $"{cluster.IntersectionCount} interior line crossings",
+                    $"median family spacings {cluster.FirstFamilyMedianSpacing:0.###} and {cluster.SecondFamilyMedianSpacing:0.###} drawing units",
+                    "interior crossings distinguish the pattern from wall faces meeting only at boundaries",
+                    "excluded from wall detection and structural topology"
+                }))
+            .ToArray();
+
     private static IReadOnlyList<DenseOrthogonalPatternWallNoiseCluster> DetectDenseOrthogonalPatternWallNoise(
         IReadOnlyList<WallLineCandidate> candidates,
         PlanRect mainRegionBounds,
@@ -3668,8 +4061,8 @@ internal sealed class WallDetectionStage : IPipelineStage
         for (var index = 0; index < primitives.Count; index++)
         {
             var primitive = primitives[index];
-            if (!TryGetFilledWallSolidBounds(primitive, context.Options, out var bounds)
-                || !mainRegionBounds.Intersects(bounds.Inflate(context.Options.WallSnapTolerance)))
+            if (!TryGetFilledWallSolidGeometry(primitive, context.Options, out var geometry)
+                || !mainRegionBounds.Intersects(geometry.Bounds.Inflate(context.Options.WallSnapTolerance)))
             {
                 continue;
             }
@@ -3679,7 +4072,7 @@ internal sealed class WallDetectionStage : IPipelineStage
                     context,
                     pageNumber,
                     sourceId,
-                    bounds))
+                    geometry))
             {
                 added++;
                 continue;
@@ -3689,7 +4082,7 @@ internal sealed class WallDetectionStage : IPipelineStage
                 pageNumber,
                 sourceRegionId,
                 sourceId,
-                bounds,
+                geometry,
                 context.WallCandidates.Count + 1,
                 context.Options,
                 context.Calibration));
@@ -3703,14 +4096,11 @@ internal sealed class WallDetectionStage : IPipelineStage
         ScanContext context,
         int pageNumber,
         string sourceId,
-        PlanRect bounds)
+        FilledWallSolidGeometry geometry)
     {
-        var horizontal = bounds.Width >= bounds.Height;
-        var longSide = Math.Max(bounds.Width, bounds.Height);
-        var centerCoordinate = horizontal
-            ? bounds.Top + (bounds.Height / 2.0)
-            : bounds.Left + (bounds.Width / 2.0);
-        var tolerance = Math.Max(context.Options.WallSnapTolerance * 2.0, Math.Min(bounds.Width, bounds.Height));
+        var longSide = geometry.CenterLine.Length;
+        var targetDirection = geometry.CenterLine.Vector.Normalize();
+        var tolerance = Math.Max(context.Options.WallSnapTolerance * 2.0, geometry.Thickness);
 
         var bestIndex = -1;
         var bestLength = 0.0;
@@ -3726,14 +4116,15 @@ internal sealed class WallDetectionStage : IPipelineStage
                 continue;
             }
 
-            var wallHorizontal = wall.CenterLine.IsHorizontal(context.Options.GeometryTolerance.Distance);
-            var wallVertical = wall.CenterLine.IsVertical(context.Options.GeometryTolerance.Distance);
-            var wallCoordinate = horizontal
-                ? (wall.CenterLine.Start.Y + wall.CenterLine.End.Y) / 2.0
-                : (wall.CenterLine.Start.X + wall.CenterLine.End.X) / 2.0;
-            if ((horizontal && !wallHorizontal)
-                || (!horizontal && !wallVertical)
-                || Math.Abs(wallCoordinate - centerCoordinate) > tolerance)
+            var wallDirection = wall.CenterLine.Vector.Normalize();
+            var angleDelta = Math.Min(
+                DirectionAngleDelta(targetDirection, wallDirection),
+                DirectionAngleDelta(targetDirection, new PlanVector(-wallDirection.X, -wallDirection.Y)));
+            var centerlineDistance = Math.Min(
+                wall.CenterLine.DistanceToPoint(geometry.CenterLine.Midpoint),
+                geometry.CenterLine.DistanceToPoint(wall.CenterLine.Midpoint));
+            if (angleDelta > context.Options.GeometryTolerance.AngleRadians * 1.75
+                || centerlineDistance > tolerance)
             {
                 continue;
             }
@@ -3748,11 +4139,16 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         var existing = context.WallCandidates[bestIndex];
+        var geometryEvidence = geometry.CenterLine.IsHorizontal(context.Options.GeometryTolerance.Distance)
+            || geometry.CenterLine.IsVertical(context.Options.GeometryTolerance.Distance)
+            ? "axis-aligned filled wall-solid centerline"
+            : "rotated filled wall-solid centerline derived from parallel polygon faces";
         var evidence = AppendUniqueEvidence(
             existing.Evidence,
             "filled wall-solid primitive",
             "wall evidence: filled closed vector wall body",
-            $"filled wall-solid bounds {Math.Round(bounds.Width, 3)} x {Math.Round(bounds.Height, 3)} drawing units");
+            geometryEvidence,
+            $"filled wall-solid body {Math.Round(geometry.CenterLine.Length, 3)} long x {Math.Round(geometry.Thickness, 3)} thick drawing units");
         if (evidence.Count == existing.Evidence.Count)
         {
             return false;
@@ -3762,28 +4158,30 @@ internal sealed class WallDetectionStage : IPipelineStage
         return true;
     }
 
-    private static bool TryGetFilledWallSolidBounds(
+    private static bool TryGetFilledWallSolidGeometry(
         PlanPrimitive primitive,
         ScannerOptions options,
-        out PlanRect bounds)
+        out FilledWallSolidGeometry geometry)
     {
-        bounds = primitive switch
-        {
-            RectanglePrimitive rectangle => rectangle.Rectangle,
-            PolylinePrimitive { Closed: true } polyline => polyline.Bounds,
-            _ => PlanRect.Empty
-        };
-
-        if (bounds.IsEmpty
-            || !IsFilledNonWhiteClosedPrimitive(primitive)
-            || bounds.Width <= 0
-            || bounds.Height <= 0)
+        geometry = default!;
+        if (!IsFilledNonWhiteClosedPrimitive(primitive))
         {
             return false;
         }
 
-        var longSide = Math.Max(bounds.Width, bounds.Height);
-        var shortSide = Math.Min(bounds.Width, bounds.Height);
+        var resolved = primitive switch
+        {
+            RectanglePrimitive rectangle => FilledWallSolidGeometry.FromAxisAlignedBounds(rectangle.Rectangle),
+            PolylinePrimitive { Closed: true } polyline => TryGetClosedPolylineWallGeometry(polyline, options),
+            _ => null
+        };
+        if (resolved is null || resolved.Bounds.IsEmpty)
+        {
+            return false;
+        }
+
+        var longSide = resolved.CenterLine.Length;
+        var shortSide = resolved.Thickness;
         var minimumLength = Math.Max(options.MinWallLength * 1.15, 30.0);
         var minimumThickness = Math.Max(1.2, options.MinWallPairSeparation * 0.6);
         var maximumThickness = Math.Max(options.MaxWallPairSeparation, options.DefaultWallThickness * 6.0);
@@ -3795,7 +4193,154 @@ internal sealed class WallDetectionStage : IPipelineStage
         }
 
         var aspectRatio = longSide / Math.Max(shortSide, 0.001);
-        return aspectRatio >= 3.0;
+        if (aspectRatio < 3.0)
+        {
+            return false;
+        }
+
+        geometry = resolved;
+        return true;
+    }
+
+    private static FilledWallSolidGeometry? TryGetClosedPolylineWallGeometry(
+        PolylinePrimitive polyline,
+        ScannerOptions options)
+    {
+        var points = new List<PlanPoint>(polyline.Points.Count);
+        foreach (var point in polyline.Points)
+        {
+            if (points.Count == 0 || points[^1].DistanceTo(point) > 0.02)
+            {
+                points.Add(point);
+            }
+        }
+
+        if (points.Count > 1 && points[0].DistanceTo(points[^1]) <= 0.02)
+        {
+            points.RemoveAt(points.Count - 1);
+        }
+
+        if (points.Count < 4)
+        {
+            return null;
+        }
+
+        var edges = Enumerable.Range(0, points.Count)
+            .Select(index => new PlanLineSegment(points[index], points[(index + 1) % points.Count]))
+            .Where(edge => edge.Length > Math.Max(0.25, options.GeometryTolerance.Distance * 0.2))
+            .ToArray();
+        if (edges.Length < 4)
+        {
+            return null;
+        }
+
+        var minimumThickness = Math.Max(1.0, options.MinWallPairSeparation * 0.5);
+        var maximumThickness = Math.Max(options.MaxWallPairSeparation, options.DefaultWallThickness * 6.0);
+        var parallelTolerance = Math.Max(options.GeometryTolerance.AngleRadians * 1.75, Math.PI / 90.0);
+        FilledWallSolidGeometry? best = null;
+        var bestScore = double.NegativeInfinity;
+
+        for (var firstIndex = 0; firstIndex < edges.Length; firstIndex++)
+        {
+            var first = edges[firstIndex];
+            var direction = first.Vector.Normalize();
+            if (direction.Length <= double.Epsilon)
+            {
+                continue;
+            }
+
+            if (direction.X < -0.0001 || (Math.Abs(direction.X) <= 0.0001 && direction.Y < 0))
+            {
+                direction = new PlanVector(-direction.X, -direction.Y);
+            }
+
+            var normal = new PlanVector(-direction.Y, direction.X);
+            for (var secondIndex = firstIndex + 1; secondIndex < edges.Length; secondIndex++)
+            {
+                var second = edges[secondIndex];
+                var secondDirection = second.Vector.Normalize();
+                var angleDelta = Math.Min(
+                    DirectionAngleDelta(direction, secondDirection),
+                    DirectionAngleDelta(direction, new PlanVector(-secondDirection.X, -secondDirection.Y)));
+                if (angleDelta > parallelTolerance)
+                {
+                    continue;
+                }
+
+                var firstStart = Dot(first.Start, direction);
+                var firstEnd = Dot(first.End, direction);
+                var secondStart = Dot(second.Start, direction);
+                var secondEnd = Dot(second.End, direction);
+                var overlapStart = Math.Max(Math.Min(firstStart, firstEnd), Math.Min(secondStart, secondEnd));
+                var overlapEnd = Math.Min(Math.Max(firstStart, firstEnd), Math.Max(secondStart, secondEnd));
+                var overlapLength = overlapEnd - overlapStart;
+                var shorterLength = Math.Min(first.Length, second.Length);
+                var longerLength = Math.Max(first.Length, second.Length);
+                if (overlapLength <= 0
+                    || overlapLength / Math.Max(shorterLength, 0.001) < 0.72
+                    || shorterLength / Math.Max(longerLength, 0.001) < 0.72)
+                {
+                    continue;
+                }
+
+                var firstNormal = (Dot(first.Start, normal) + Dot(first.End, normal)) / 2.0;
+                var secondNormal = (Dot(second.Start, normal) + Dot(second.End, normal)) / 2.0;
+                var thickness = Math.Abs(firstNormal - secondNormal);
+                if (thickness < minimumThickness || thickness > maximumThickness)
+                {
+                    continue;
+                }
+
+                var centerNormal = (firstNormal + secondNormal) / 2.0;
+                var centerLine = new PlanLineSegment(
+                    FromBasis(direction, normal, overlapStart, centerNormal),
+                    FromBasis(direction, normal, overlapEnd, centerNormal));
+                var firstFace = new PlanLineSegment(
+                    FromBasis(direction, normal, overlapStart, firstNormal),
+                    FromBasis(direction, normal, overlapEnd, firstNormal));
+                var secondFace = new PlanLineSegment(
+                    FromBasis(direction, normal, overlapStart, secondNormal),
+                    FromBasis(direction, normal, overlapEnd, secondNormal));
+                var representedArea = centerLine.Length * thickness;
+                var polygonArea = PolygonArea(points);
+                var areaRatio = polygonArea / Math.Max(representedArea, 0.001);
+                if (areaRatio < 0.55 || areaRatio > 1.75)
+                {
+                    continue;
+                }
+
+                var score = overlapLength
+                    * (shorterLength / Math.Max(longerLength, 0.001))
+                    * (1.0 - Math.Min(0.35, Math.Abs(1.0 - areaRatio)));
+                if (score <= bestScore)
+                {
+                    continue;
+                }
+
+                bestScore = score;
+                best = new FilledWallSolidGeometry(
+                    centerLine,
+                    firstFace,
+                    secondFace,
+                    thickness,
+                    polyline.Bounds);
+            }
+        }
+
+        return best;
+    }
+
+    private static double PolygonArea(IReadOnlyList<PlanPoint> points)
+    {
+        var twiceArea = 0.0;
+        for (var index = 0; index < points.Count; index++)
+        {
+            var current = points[index];
+            var next = points[(index + 1) % points.Count];
+            twiceArea += (current.X * next.Y) - (next.X * current.Y);
+        }
+
+        return Math.Abs(twiceArea) / 2.0;
     }
 
     private static bool IsFilledNonWhiteClosedPrimitive(PlanPrimitive primitive)
@@ -3842,26 +4387,15 @@ internal sealed class WallDetectionStage : IPipelineStage
         int pageNumber,
         string sourceRegionId,
         string sourceId,
-        PlanRect bounds,
+        FilledWallSolidGeometry geometry,
         int wallNumber,
         ScannerOptions options,
         PlanCalibration calibration)
     {
-        var horizontal = bounds.Width >= bounds.Height;
-        var thickness = horizontal ? bounds.Height : bounds.Width;
-        var centerLine = horizontal
-            ? new PlanLineSegment(
-                new PlanPoint(bounds.Left, bounds.Top + (bounds.Height / 2.0)),
-                new PlanPoint(bounds.Right, bounds.Top + (bounds.Height / 2.0)))
-            : new PlanLineSegment(
-                new PlanPoint(bounds.Left + (bounds.Width / 2.0), bounds.Top),
-                new PlanPoint(bounds.Left + (bounds.Width / 2.0), bounds.Bottom));
-        var firstFace = horizontal
-            ? new PlanLineSegment(new PlanPoint(bounds.Left, bounds.Top), new PlanPoint(bounds.Right, bounds.Top))
-            : new PlanLineSegment(new PlanPoint(bounds.Left, bounds.Top), new PlanPoint(bounds.Left, bounds.Bottom));
-        var secondFace = horizontal
-            ? new PlanLineSegment(new PlanPoint(bounds.Left, bounds.Bottom), new PlanPoint(bounds.Right, bounds.Bottom))
-            : new PlanLineSegment(new PlanPoint(bounds.Right, bounds.Top), new PlanPoint(bounds.Right, bounds.Bottom));
+        var centerLine = geometry.CenterLine;
+        var firstFace = geometry.FirstFace;
+        var secondFace = geometry.SecondFace;
+        var thickness = geometry.Thickness;
         var scaleGroup = calibration.SelectMeasurementScaleGroup(
             pageNumber,
             centerLine.Bounds.Inflate(Math.Max(thickness / 2.0, 0.5)),
@@ -3893,7 +4427,11 @@ internal sealed class WallDetectionStage : IPipelineStage
                 $"face separation {Math.Round(thickness, 3)} drawing units",
                 $"pair score {Math.Round(pairScore, 3)}",
                 "overlap ratio 1",
-                $"filled wall-solid bounds {Math.Round(bounds.Width, 3)} x {Math.Round(bounds.Height, 3)} drawing units",
+                $"filled wall-solid body {Math.Round(centerLine.Length, 3)} long x {Math.Round(thickness, 3)} thick drawing units",
+                centerLine.IsHorizontal(options.GeometryTolerance.Distance)
+                    || centerLine.IsVertical(options.GeometryTolerance.Distance)
+                    ? "axis-aligned filled wall-solid centerline"
+                    : "rotated filled wall-solid centerline derived from parallel polygon faces",
                 "wall evidence: filled closed vector wall body"
             },
             PairEvidence = new WallPairEvidence(
@@ -4954,6 +5492,15 @@ internal sealed class WallDetectionStage : IPipelineStage
         double HorizontalMedianSpacing,
         double VerticalMedianSpacing);
 
+    private sealed record DenseDiagonalCrossHatchWallNoiseCluster(
+        PlanRect Bounds,
+        string[] SourcePrimitiveIds,
+        int FirstFamilyLineCount,
+        int SecondFamilyLineCount,
+        int IntersectionCount,
+        double FirstFamilyMedianSpacing,
+        double SecondFamilyMedianSpacing);
+
     private sealed record DenseOrthogonalPatternWallRunNoiseCluster(
         PlanRect Bounds,
         string[] SourcePrimitiveIds,
@@ -4988,6 +5535,18 @@ internal sealed class WallDetectionStage : IPipelineStage
         PlanRect Bounds,
         double Length,
         WallOrientation Orientation);
+
+    private sealed record DiagonalCrossHatchWallNoiseItem(
+        string PrimitiveId,
+        PlanLineSegment Segment,
+        double AngleRadians)
+    {
+        public static DiagonalCrossHatchWallNoiseItem From(WallLineCandidate candidate) =>
+            new(
+                candidate.PrimitiveId,
+                candidate.Line.Segment,
+                GeometryOperations.NormalizeAngleRadians(candidate.Line.Segment.AngleRadians));
+    }
 
     private sealed record DenseOrthogonalPatternWallNoiseItem(
         string PrimitiveId,
@@ -5798,6 +6357,34 @@ internal sealed class WallDetectionStage : IPipelineStage
             return overlapRatio >= options.MinWallPairOverlapRatio
                 ? separation
                 : null;
+        }
+    }
+
+    private sealed record FilledWallSolidGeometry(
+        PlanLineSegment CenterLine,
+        PlanLineSegment FirstFace,
+        PlanLineSegment SecondFace,
+        double Thickness,
+        PlanRect Bounds)
+    {
+        public static FilledWallSolidGeometry FromAxisAlignedBounds(PlanRect bounds)
+        {
+            var horizontal = bounds.Width >= bounds.Height;
+            var thickness = horizontal ? bounds.Height : bounds.Width;
+            var centerLine = horizontal
+                ? new PlanLineSegment(
+                    new PlanPoint(bounds.Left, bounds.Top + (bounds.Height / 2.0)),
+                    new PlanPoint(bounds.Right, bounds.Top + (bounds.Height / 2.0)))
+                : new PlanLineSegment(
+                    new PlanPoint(bounds.Left + (bounds.Width / 2.0), bounds.Top),
+                    new PlanPoint(bounds.Left + (bounds.Width / 2.0), bounds.Bottom));
+            var firstFace = horizontal
+                ? new PlanLineSegment(new PlanPoint(bounds.Left, bounds.Top), new PlanPoint(bounds.Right, bounds.Top))
+                : new PlanLineSegment(new PlanPoint(bounds.Left, bounds.Top), new PlanPoint(bounds.Left, bounds.Bottom));
+            var secondFace = horizontal
+                ? new PlanLineSegment(new PlanPoint(bounds.Left, bounds.Bottom), new PlanPoint(bounds.Right, bounds.Bottom))
+                : new PlanLineSegment(new PlanPoint(bounds.Right, bounds.Top), new PlanPoint(bounds.Right, bounds.Bottom));
+            return new FilledWallSolidGeometry(centerLine, firstFace, secondFace, thickness, bounds);
         }
     }
 

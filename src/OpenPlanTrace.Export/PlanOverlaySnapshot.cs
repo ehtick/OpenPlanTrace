@@ -199,6 +199,7 @@ public sealed record PlanOverlayPageSnapshot(
         Add(options.IncludeCanonicalWallSolutions, "canonicalWallSolutions");
         Add(options.IncludeOmittedWallRiskHighlights, "wallOmittedRiskHighlights");
         Add(options.IncludeWalls, "walls");
+        Add(options.IncludeCurvedWalls, "curvedWalls");
         Add(options.IncludeWallNodes, "wallNodes");
         Add(options.IncludeRooms, "rooms");
         Add(options.IncludeRoomClusters, "roomClusters");
@@ -339,6 +340,16 @@ public sealed record PlanOverlayPageSnapshot(
             result.Walls.Where(item => item.PageNumber == pageNumber),
             item => item.Bounds,
             item => item.Confidence);
+
+        yield return Layer(
+            "curvedWalls",
+            result.CurvedWalls.Where(item => item.PageNumber == pageNumber),
+            item => item.Bounds,
+            item => item.Confidence,
+            result.CurvedWalls
+                .Where(item => item.PageNumber == pageNumber)
+                .GroupBy(item => item.SourceKind.ToString())
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
 
         if (placementExport is not null)
         {

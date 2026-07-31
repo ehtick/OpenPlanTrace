@@ -3,7 +3,8 @@ namespace OpenPlanTrace;
 public enum SurfacePatternKind
 {
     DenseOrthogonalGrid,
-    DenseParallelBand
+    DenseParallelBand,
+    DenseDiagonalCrossHatch
 }
 
 public enum SurfacePatternOrientation
@@ -11,7 +12,8 @@ public enum SurfacePatternOrientation
     Unknown,
     Orthogonal,
     Horizontal,
-    Vertical
+    Vertical,
+    Diagonal
 }
 
 public sealed record SurfacePatternCandidate(

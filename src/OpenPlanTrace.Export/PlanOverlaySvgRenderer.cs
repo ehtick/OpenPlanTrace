@@ -75,6 +75,8 @@ public static class PlanOverlaySvgRenderer
             .wall-object-like { stroke: #c97c18; stroke-width: 0.58; stroke-dasharray: 5 4; }
             .wall-fragment { stroke: #7854a8; stroke-width: 0.48; stroke-dasharray: 3 5; }
             .wall-excluded { stroke-width: 0.42; stroke-dasharray: 2 6; }
+            .curved-wall-review-halo { stroke: rgba(255,255,255,0.94); stroke-width: 4.6; stroke-linecap: round; fill: none; vector-effect: non-scaling-stroke; }
+            .curved-wall-review { stroke: #d31f6b; stroke-width: 2.25; stroke-linecap: round; stroke-dasharray: 5 2.5; fill: none; vector-effect: non-scaling-stroke; }
             .wall-topology-span { stroke: #7a5f18; stroke-width: 1.35; stroke-linecap: round; fill: none; vector-effect: non-scaling-stroke; }
             .wall-topology-span-exterior { stroke: #0f4fb8; stroke-width: 1.85; }
             .wall-topology-span-interior { stroke: #0f7a48; stroke-width: 1.45; }
@@ -568,6 +570,17 @@ public static class PlanOverlaySvgRenderer
                 var title = WallTitle(wall, component, assessment);
                 builder.AppendLine($"""<line class="{WallCssClass(wall, component, assessment)}" x1="{N(wall.CenterLine.Start.X)}" y1="{N(wall.CenterLine.Start.Y)}" x2="{N(wall.CenterLine.End.X)}" y2="{N(wall.CenterLine.End.Y)}" opacity="{N(WallOpacity(wall, wall.Confidence, component, assessment))}"><title>{Esc(title)}</title></line>""");
             }
+
+            builder.AppendLine("</g>");
+        }
+
+        if (options.IncludeCurvedWalls)
+        {
+            builder.AppendLine("""<g id="curved-walls" aria-label="Reviewable curved wall candidates">""");
+            foreach (var curve in result.CurvedWalls.Where(curve => curve.PageNumber == page.Number))
+            {
+                AppendCurvedWallCandidate(builder, curve);
+            }
             builder.AppendLine("</g>");
         }
 
@@ -667,6 +680,23 @@ public static class PlanOverlaySvgRenderer
         builder.AppendLine($"""<path class="source-context" d="M {N(start.X)} {N(start.Y)} A {N(arc.Radius)} {N(arc.Radius)} 0 {largeArc} {sweep} {N(end.X)} {N(end.Y)}" />""");
     }
 
+    private static void AppendCurvedWallCandidate(
+        StringBuilder builder,
+        CurvedWallCandidate curve)
+    {
+        if (curve.CenterlineRadius <= 0 || Math.Abs(curve.SweepAngleRadians) <= 0.0001)
+        {
+            return;
+        }
+
+        var largeArc = Math.Abs(curve.SweepAngleRadians) > Math.PI ? 1 : 0;
+        var sweep = curve.SweepAngleRadians >= 0 ? 1 : 0;
+        var path = $"M {N(curve.StartPoint.X)} {N(curve.StartPoint.Y)} A {N(curve.CenterlineRadius)} {N(curve.CenterlineRadius)} 0 {largeArc} {sweep} {N(curve.EndPoint.X)} {N(curve.EndPoint.Y)}";
+        var title = $"Curved wall candidate {curve.Id}; radius {N(curve.CenterlineRadius)}; thickness {N(curve.Thickness)}; sweep {N(curve.SweepAngleRadians * 180.0 / Math.PI)} degrees; review required; excluded from linear topology";
+        builder.AppendLine($"""<path class="curved-wall-review-halo" d="{path}" />""");
+        builder.AppendLine($"""<path class="curved-wall-review" d="{path}" opacity="{N(Math.Clamp(curve.Confidence.Value, 0.62, 0.94))}"><title>{Esc(title)}</title></path>""");
+    }
+
     private static string Points(IReadOnlyList<PlanPoint> points) =>
         string.Join(" ", points.Select(point => $"{N(point.X)},{N(point.Y)}"));
 
@@ -697,7 +727,19 @@ public static class PlanOverlaySvgRenderer
         var omittedRiskBounds = PlanRect.Union(
             OmittedWallRiskHighlights(result, page.Number, options)
                 .Select(OmittedWallRiskBounds));
-        var wallQaBounds = PlanRect.Union(new[] { cleanTopologyBounds, canonicalWallBounds, omittedRiskBounds }
+        var curvedWallBounds = options.IncludeCurvedWalls
+            ? PlanRect.Union(
+                result.CurvedWalls
+                    .Where(curve => curve.PageNumber == page.Number)
+                    .Select(curve => curve.Bounds))
+            : PlanRect.Empty;
+        var wallQaBounds = PlanRect.Union(new[]
+            {
+                cleanTopologyBounds,
+                canonicalWallBounds,
+                omittedRiskBounds,
+                curvedWallBounds
+            }
             .Where(bounds => !bounds.IsEmpty));
         if (!wallQaBounds.IsEmpty)
         {
@@ -855,6 +897,12 @@ public static class PlanOverlaySvgRenderer
             if (options.IncludeCanonicalWallSolutions)
             {
                 rows.Add("Blue/green = canonical solved wall runs");
+            }
+
+            if (options.IncludeCurvedWalls
+                && result.CurvedWalls.Any(curve => curve.PageNumber == page.Number))
+            {
+                rows.Add("Magenta dashed = curved wall review candidates");
             }
 
             if (options.IncludePlacementWallGraph)

@@ -68,6 +68,12 @@ internal static class PlanOverlaySourceContextSelector
                     options.IncludeReviewOnlyWallTopologySpans
                         ? WallTopologySpanVisibility.BuildHiddenNonPlacementTopologySpans(result, page.Number, options)
                             .Select(span => span.Bounds)
+                        : Array.Empty<PlanRect>())
+                .Concat(
+                    options.IncludeCurvedWalls
+                        ? result.CurvedWalls
+                            .Where(curve => curve.PageNumber == page.Number)
+                            .Select(curve => curve.Bounds)
                         : Array.Empty<PlanRect>()));
 
         if (!topologyBounds.IsEmpty)

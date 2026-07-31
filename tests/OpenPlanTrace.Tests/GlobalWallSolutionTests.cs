@@ -2684,6 +2684,143 @@ public sealed class GlobalWallSolutionTests
     }
 
     [Fact]
+    public async Task Reconciler_AnchorsThinWallFaceToFilledWallBodyMedian()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var thinFace = HostWallFragment(
+            templateWall,
+            "thin-wall-face",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(600, 100))) with
+        {
+            ThicknessDrawingUnits = 4,
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "room boundary"
+            ]
+        };
+        var filledBody = HostWallFragment(
+            templateWall,
+            "filled-wall-body",
+            new LineExport(
+                new PointExport(240, 110),
+                new PointExport(420, 110))) with
+        {
+            ThicknessDrawingUnits = 20,
+            Confidence = 0.88,
+            Reliability = new PlacementReliabilityExport(
+                ReadyForCoordinatePlacement: false,
+                ReadyForMetricPlacement: false,
+                RequiresReview: true,
+                Confidence: 0.88,
+                Reasons: ["local wall-body fragment requires canonical reconciliation"]),
+            SourceLayers = ["(unlayered)"],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "filled closed vector wall body"
+            ]
+        };
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [thinFace]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [thinFace, filledBody],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var run = Assert.Single(solutions.SelectedWallRuns.Where(candidate =>
+            candidate.SourceWallIds.Contains(thinFace.Id, StringComparer.Ordinal)));
+        Assert.Equal(110, run.CenterLine.Start.Y, 3);
+        Assert.Equal(110, run.CenterLine.End.Y, 3);
+        Assert.Equal(20, run.ThicknessDrawingUnits, 3);
+        Assert.Contains("AxisAligned", run.Reconciliation.Actions);
+        Assert.Contains(
+            run.Reconciliation.Evidence,
+            evidence => evidence.Contains(
+                "filled wall-body median",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Reconciler_JoinsRecoveredFacePairToOverlappingFilledBodyEvidence()
+    {
+        var result = await CreateScanResultAsync();
+        var placement = PlanPlacementExport.From(result);
+        var templateWall = placement.Walls.First(wall =>
+            wall.Reliability.ReadyForCoordinatePlacement);
+        var misleadingFilledFace = HostWallFragment(
+            templateWall,
+            "filled-face-fragment",
+            new LineExport(
+                new PointExport(100, 100),
+                new PointExport(600, 100))) with
+        {
+            ThicknessDrawingUnits = 8,
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "filled wall-solid primitive",
+                "filled closed vector wall body"
+            ]
+        };
+        var recoveredBody = HostWallFragment(
+            templateWall,
+            "recovered-physical-body",
+            new LineExport(
+                new PointExport(240, 110),
+                new PointExport(420, 110))) with
+        {
+            ThicknessDrawingUnits = 20,
+            Confidence = 0.86,
+            Reliability = new PlacementReliabilityExport(
+                ReadyForCoordinatePlacement: false,
+                ReadyForMetricPlacement: false,
+                RequiresReview: true,
+                Confidence: 0.86,
+                Reasons: ["recovered wall body requires canonical reconciliation"]),
+            Evidence =
+            [
+                "recovered by wall evidence map from unclaimed parallel wall-face evidence",
+                "pair score 0.86",
+                "overlap ratio 1"
+            ]
+        };
+        var structural = StructuralSolutionForWalls(
+            result.StructuralPlanSolution,
+            [misleadingFilledFace]);
+
+        var solutions = GlobalWallSolutionBuilder.From(
+            placement.Pages,
+            [misleadingFilledFace, recoveredBody],
+            Array.Empty<PlacementRoomExport>(),
+            Array.Empty<PlacementOpeningExport>(),
+            EmptyGraph(placement.WallGraph),
+            structural);
+
+        var run = Assert.Single(solutions.SelectedWallRuns.Where(candidate =>
+            candidate.SourceWallIds.Contains(misleadingFilledFace.Id, StringComparer.Ordinal)));
+        Assert.Equal(110, run.CenterLine.Start.Y, 3);
+        Assert.Equal(110, run.CenterLine.End.Y, 3);
+        Assert.Equal(20, run.ThicknessDrawingUnits, 3);
+        Assert.Contains(
+            run.Reconciliation.Evidence,
+            evidence => evidence.Contains(
+                "filled wall-body median",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Reconciler_DoesNotTreatCandidateAndNeighborVariantsAsIndependentLargeShift()
     {
         var placement = PlanPlacementExport.From(await CreateScanResultAsync());
