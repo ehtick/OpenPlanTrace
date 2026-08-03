@@ -3753,6 +3753,173 @@ public sealed class WallTypeRefinementTests
     }
 
     [Fact]
+    public async Task WallTypeRefinement_DemotesLongDimensionLikeSingleLineWithEndpointOnlySupport()
+    {
+        var wall = LongDimensionLikeInteriorWall("wall-long-endpoint-only-dimension", 80, 180, 340, 180);
+        var context = CreateContext("long-endpoint-only-dimension-like-placement-demotion");
+        context.Walls.Add(wall);
+        context.WallGraph = SupportedEndpointGraphFor(wall, WallGraphComponentKind.SecondaryStructural);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var demoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(demoted.PlacementReady);
+        Assert.True(demoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, demoted.Decision);
+        Assert.Contains(
+            demoted.Evidence,
+            item => item.Contains(
+                "endpoint contact is the only structural support",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["endpointOnlyDimensionLikePlacementDemotedWallCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_KeepsLongDimensionLikeSingleLineWithExplicitRoomBoundarySupport()
+    {
+        var wall = LongDimensionLikeInteriorWall("wall-long-room-backed-dimension", 80, 180, 340, 180);
+        var context = CreateContext("long-dimension-like-room-boundary-protection");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room("room-supported", RoomUseKind.Office, wall.Id));
+        context.WallGraph = SupportedEndpointGraphFor(wall, WallGraphComponentKind.SecondaryStructural);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: true,
+            requiresReview: false,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(retained.PlacementReady);
+        Assert.False(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains(
+                "endpoint contact is the only structural support",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["endpointOnlyDimensionLikePlacementDemotedWallCount"] == "0");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_DoesNotPromoteFragmentedDimensionPerimeterFromAdjacencyAlone()
+    {
+        var wall = DimensionLikeFragmentedPerimeterInteriorWall(
+            "wall-fragmented-dimension-adjacency-only",
+            firstFaceFragmentCount: 123,
+            secondFaceFragmentCount: 124);
+        var context = CreateContext("fragmented-dimension-perimeter-adjacency-only");
+        context.Walls.Add(wall);
+        context.Rooms.Add(Room("room-a", RoomUseKind.Office, wall.Id));
+        context.Rooms.Add(Room("room-b", RoomUseKind.Office, wall.Id));
+        context.WallGraph = OneSupportedEndpointGraphFor(wall, WallGraphComponentKind.SecondaryStructural);
+        context.RoomAdjacencyGraph = SharedAdjacencyFor(wall, "room-a", "room-b");
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var retained = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.False(retained.PlacementReady);
+        Assert.True(retained.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Review, retained.Decision);
+        Assert.DoesNotContain(
+            retained.Evidence,
+            item => item.Contains("room-confirmed wall body promoted", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            retained.Evidence,
+            item => item.Contains("post-room promotion withheld", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            context.Diagnostics.Build().Messages,
+            diagnostic => diagnostic.Code == "walls.architectural_type_refined"
+                && diagnostic.Properties["dimensionLikeFragmentedPairPromotionBlockedWallCount"] == "1");
+    }
+
+    [Fact]
+    public async Task WallTypeRefinement_PromotesFragmentedDimensionPerimeterWithGeometricTwoSidedSupport()
+    {
+        var wall = DimensionLikeFragmentedPerimeterInteriorWall(
+            "wall-fragmented-dimension-geometric-boundary",
+            firstFaceFragmentCount: 80,
+            secondFaceFragmentCount: 80);
+        var upperRoom = Room(
+            "room-upper",
+            RoomUseKind.Office,
+            new PlanRect(80, 80, 280, 100),
+            [
+                new PlanPoint(80, 80),
+                new PlanPoint(360, 80),
+                new PlanPoint(360, 180),
+                new PlanPoint(80, 180)
+            ]) with
+        {
+            Evidence = ["semantic room boundary inferred from nearby walls synthetic-upper"]
+        };
+        var lowerRoom = Room(
+            "room-lower",
+            RoomUseKind.Office,
+            new PlanRect(80, 180, 280, 100),
+            [
+                new PlanPoint(80, 180),
+                new PlanPoint(360, 180),
+                new PlanPoint(360, 280),
+                new PlanPoint(80, 280)
+            ]) with
+        {
+            Evidence = ["semantic room boundary inferred from nearby walls synthetic-lower"]
+        };
+        var context = CreateContext("fragmented-dimension-perimeter-geometric-boundary");
+        context.Walls.Add(wall);
+        context.Rooms.Add(upperRoom);
+        context.Rooms.Add(lowerRoom);
+        context.WallGraph = SupportedEndpointGraphFor(wall, WallGraphComponentKind.SecondaryStructural);
+        context.WallEvidenceMap = EvidenceMapFor(
+            wall,
+            WallEvidenceCategory.MediumWallBody,
+            placementReady: false,
+            requiresReview: true,
+            rejectedAsNoise: false,
+            wall.Evidence);
+
+        await new WallTypeRefinementStage().ExecuteAsync(context, CancellationToken.None);
+
+        var promoted = Assert.Single(context.WallEvidenceMap.WallAssessments);
+        Assert.True(promoted.PlacementReady);
+        Assert.False(promoted.RequiresReview);
+        Assert.Equal(WallEvidenceDecision.Accept, promoted.Decision);
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("geometric room boundary support", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            promoted.Evidence,
+            item => item.Contains("room-confirmed wall body promoted", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            promoted.Evidence,
+            item => item.Contains("post-room promotion withheld", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task WallTypeRefinement_DemotesUnsupportedHighScoreFragmentedUnlayeredPair()
     {
         var wall = new WallSegment(
@@ -6165,6 +6332,90 @@ public sealed class WallTypeRefinementTests
                 "wall evidence: medium wall body from wall-like layer, length, or structural context"
             ]
         };
+
+    private static WallSegment LongDimensionLikeInteriorWall(string id, double x1, double y1, double x2, double y2) =>
+        new(
+            id,
+            1,
+            new PlanLineSegment(new PlanPoint(x1, y1), new PlanPoint(x2, y2)),
+            4,
+            Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.SingleLine,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = [$"{id}:source"],
+            Evidence =
+            [
+                "single wall-length vector run",
+                "layer (unlayered) classified Dimension (0,36)",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                "wall evidence: medium wall body from wall-like layer, length, or structural context",
+                "both endpoints supported by structural context"
+            ]
+        };
+
+    private static WallSegment DimensionLikeFragmentedPerimeterInteriorWall(
+        string id,
+        int firstFaceFragmentCount,
+        int secondFaceFragmentCount)
+    {
+        var centerLine = new PlanLineSegment(new PlanPoint(80, 180), new PlanPoint(360, 180));
+        var firstFace = new PlanLineSegment(new PlanPoint(80, 177), new PlanPoint(360, 177));
+        var secondFace = new PlanLineSegment(new PlanPoint(80, 183), new PlanPoint(360, 183));
+        return new WallSegment(id, 1, centerLine, 6, Confidence.High)
+        {
+            DetectionKind = WallDetectionKind.ParallelLinePair,
+            WallType = WallType.Interior,
+            SourcePrimitiveIds = [$"{id}:face-a", $"{id}:face-b"],
+            PairEvidence = new WallPairEvidence(
+                firstFace,
+                secondFace,
+                FaceSeparation: 6,
+                OverlapRatio: 1,
+                Score: 0.94,
+                FirstFaceFragmentCount: firstFaceFragmentCount,
+                SecondFaceFragmentCount: secondFaceFragmentCount,
+                FirstFaceSourcePrimitiveIds: [$"{id}:face-a"],
+                SecondFaceSourcePrimitiveIds: [$"{id}:face-b"]),
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "pair score 0,94",
+                $"first face merged {firstFaceFragmentCount} fragments",
+                $"second face merged {secondFaceFragmentCount} fragments",
+                "layer (unlayered) classified Dimension (0,36)",
+                "layer evidence: contains dimension-like text",
+                "wall type interior: supported wall evidence inside exterior envelope",
+                $"wall evidence: dimension-like fragmented perimeter parallel-face candidate needs review before exact placement (pair score 0.94, max face fragments {Math.Max(firstFaceFragmentCount, secondFaceFragmentCount)}, total face fragments {firstFaceFragmentCount + secondFaceFragmentCount})"
+            ]
+        };
+    }
+
+    private static RoomAdjacencyGraph SharedAdjacencyFor(
+        WallSegment wall,
+        string firstRoomId,
+        string secondRoomId) =>
+        new(
+            [
+                new RoomAdjacencyEdge(
+                    $"adjacency:{firstRoomId}:{secondRoomId}",
+                    wall.PageNumber,
+                    firstRoomId,
+                    firstRoomId,
+                    secondRoomId,
+                    secondRoomId,
+                    RoomAdjacencyKind.BoundaryAdjacent,
+                    RoomAdjacencyDirection.South,
+                    RoomAdjacencyDirection.North,
+                    wall.DrawingLength,
+                    wall.CenterLine,
+                    Confidence.High,
+                    [wall.Id],
+                    Array.Empty<string>(),
+                    ["synthetic shared wall adjacency"])
+            ],
+            Array.Empty<RoomCluster>());
 
     private static IEnumerable<WallSegment> DenseDetailNeighborWalls()
     {

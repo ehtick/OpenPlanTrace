@@ -147,6 +147,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         var anchoredOpeningHostDenseWallRetained = 0;
         var nonOrthogonalDimensionLikePlacementDemoted = 0;
         var shortDimensionLikePlacementDemoted = 0;
+        var endpointOnlyDimensionLikePlacementDemoted = 0;
+        var dimensionLikeFragmentedPairPromotionBlocked = 0;
         var fragmentedExteriorShellContinuityRetained = 0;
         var geometricRoomBoundaryEvidenceAdded = 0;
         var explicitRoomBoundaryEvidenceAdded = 0;
@@ -368,6 +370,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     sideEvidence,
                     hasGeometricRoomBoundarySupport,
                     hasExteriorShellContinuitySupport,
+                    hasTrustedAnchoredOpeningRoomSupport,
                     out var nonOrthogonalDemotedAssessment,
                     out var nonOrthogonalDemotionEvidence))
             {
@@ -391,6 +394,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     sideEvidence,
                     hasGeometricRoomBoundarySupport,
                     hasExteriorShellContinuitySupport,
+                    hasTrustedAnchoredOpeningRoomSupport,
                     out var shortDimensionDemotedAssessment,
                     out var shortDimensionDemotionEvidence))
             {
@@ -402,6 +406,31 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 shortDimensionLikePlacementDemoted++;
                 evidenceUpdated++;
                 assessment = shortDimensionDemotedAssessment;
+            }
+            else if (assessment is not null
+                && TryDemoteEndpointOnlyDimensionLikePlacementReadyWallEvidence(
+                    updatedWall,
+                    assessment,
+                    context.Options,
+                    component,
+                    wallRoomIds.Length,
+                    sharedWallIds.Contains(wall.Id),
+                    sideEvidence,
+                    supportedTopologyEndpointCount,
+                    hasGeometricRoomBoundarySupport,
+                    hasExteriorShellContinuitySupport,
+                    hasTrustedAnchoredOpeningRoomSupport,
+                    out var endpointOnlyDemotedAssessment,
+                    out var endpointOnlyDemotionEvidence))
+            {
+                updatedAssessmentsByWallId[wall.Id] = endpointOnlyDemotedAssessment;
+                updatedWall = updatedWall with
+                {
+                    Evidence = AppendEvidence(updatedWall.Evidence, endpointOnlyDemotionEvidence)
+                };
+                endpointOnlyDimensionLikePlacementDemoted++;
+                evidenceUpdated++;
+                assessment = endpointOnlyDemotedAssessment;
             }
             else if (assessment is not null
                 && hasExteriorShellContinuitySupport
@@ -443,6 +472,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 assessment = longShellPromotedAssessment;
             }
 
+            var fragmentedPerimeterPromotionBlocked = false;
             if (assessment is not null
                 && TryPromoteRoomConfirmedWallEvidence(
                     updatedWall,
@@ -458,7 +488,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     hasGeometricRoomBoundarySupport,
                     context.Options,
                     out var promotedAssessment,
-                    out var promotionEvidence))
+                    out var promotionEvidence,
+                    out fragmentedPerimeterPromotionBlocked))
             {
                 updatedAssessmentsByWallId[wall.Id] = promotedAssessment;
                 updatedWall = updatedWall with
@@ -468,6 +499,25 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 roomConfirmedPlacementPromoted++;
                 evidenceUpdated++;
                 assessment = promotedAssessment;
+            }
+            else if (assessment is not null && fragmentedPerimeterPromotionBlocked)
+            {
+                var blockedPromotionEvidence = new[]
+                {
+                    "wall evidence: post-room promotion withheld because fragmented dimension-like perimeter evidence lacks an independent geometric or two-sided structural boundary"
+                };
+                var retainedAssessment = assessment with
+                {
+                    Evidence = AppendEvidence(assessment.Evidence, blockedPromotionEvidence)
+                };
+                updatedAssessmentsByWallId[wall.Id] = retainedAssessment;
+                updatedWall = updatedWall with
+                {
+                    Evidence = AppendEvidence(updatedWall.Evidence, blockedPromotionEvidence)
+                };
+                dimensionLikeFragmentedPairPromotionBlocked++;
+                evidenceUpdated++;
+                assessment = retainedAssessment;
             }
 
             if (assessment is not null
@@ -554,6 +604,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                     supportedTopologyEndpointCountsByWallId.TryGetValue(wall.Id, out var promotionSupportedEndpointCount)
                         ? promotionSupportedEndpointCount
                         : 0,
+                    sharedWallIds.Contains(wall.Id),
                     hasOutdoorRoomReference,
                     sideEvidence,
                     context.Options,
@@ -778,6 +829,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             anchoredOpeningHostDenseWallRetained,
             nonOrthogonalDimensionLikePlacementDemoted,
             shortDimensionLikePlacementDemoted,
+            endpointOnlyDimensionLikePlacementDemoted,
+            dimensionLikeFragmentedPairPromotionBlocked,
             fragmentedExteriorShellContinuityRetained,
             geometricRoomBoundaryEvidenceAdded,
             explicitRoomBoundaryEvidenceAdded,
@@ -1539,10 +1592,12 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         bool hasGeometricRoomBoundarySupport,
         ScannerOptions options,
         out WallEvidenceWallAssessment promotedAssessment,
-        out IReadOnlyList<string> promotionEvidence)
+        out IReadOnlyList<string> promotionEvidence,
+        out bool dimensionLikeFragmentedPerimeterBlocked)
     {
         promotedAssessment = assessment;
         promotionEvidence = Array.Empty<string>();
+        dimensionLikeFragmentedPerimeterBlocked = false;
 
         if (assessment.PlacementReady
             || assessment.RejectedAsNoise
@@ -1603,6 +1658,18 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 && !hasGeometricRoomBoundaryPairConfirmation
                 && !hasIsolatedExteriorRoomBoundaryConfirmation))
         {
+            return false;
+        }
+
+        if (HasDimensionLikeFragmentedPerimeterReviewEvidence(wall, assessment)
+            && !HasReliableDimensionLikeFragmentedPerimeterPromotionSupport(
+                isSharedByRoomAdjacency,
+                supportedTopologyEndpointCount,
+                sideEvidence,
+                hasGeometricRoomBoundaryPairConfirmation,
+                hasIsolatedExteriorRoomBoundaryConfirmation))
+        {
+            dimensionLikeFragmentedPerimeterBlocked = true;
             return false;
         }
 
@@ -2246,14 +2313,27 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
     private static bool HasRoomBoundaryRepairPromotionBlocker(
         WallSegment wall,
         WallEvidenceWallAssessment assessment,
-        bool allowGraphObjectLikeReclassification = false) =>
-        wall.Evidence
+        bool allowGraphObjectLikeReclassification = false)
+    {
+        var evidence = wall.Evidence
             .Concat(assessment.Evidence)
             .Concat(assessment.ScoreBreakdown.PositiveEvidence)
             .Concat(assessment.ScoreBreakdown.NegativeEvidence)
-            .Any(item => IsRoomBoundaryRepairPromotionBlockerEvidence(
+            .ToArray();
+        if (evidence.Any(item => item.Contains(
+                "dimension-like fragmented perimeter parallel-face candidate",
+                StringComparison.OrdinalIgnoreCase))
+            && !evidence.Any(item => item.Contains(
+                "geometric room boundary support",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return evidence.Any(item => IsRoomBoundaryRepairPromotionBlockerEvidence(
                 item,
                 allowGraphObjectLikeReclassification));
+    }
 
     private static bool IsRoomBoundaryRepairPromotionBlockerEvidence(
         string evidence,
@@ -2295,6 +2375,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         WallEvidenceWallAssessment assessment,
         WallGraphComponent? component,
         int supportedTopologyEndpointCount,
+        bool isSharedByRoomAdjacency,
         bool hasOutdoorRoomReference,
         RoomSideEvidence sideEvidence,
         ScannerOptions options,
@@ -2331,6 +2412,19 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .Concat(assessment.ScoreBreakdown.PositiveEvidence)
             .Concat(assessment.ScoreBreakdown.NegativeEvidence)
             .ToArray();
+        if (HasDimensionLikeFragmentedPerimeterReviewEvidence(wall, assessment)
+            && !HasReliableDimensionLikeFragmentedPerimeterPromotionSupport(
+                isSharedByRoomAdjacency,
+                supportedTopologyEndpointCount,
+                sideEvidence,
+                hasGeometricRoomBoundaryPairConfirmation: evidence.Any(item => item.Contains(
+                    "geometric room boundary support",
+                    StringComparison.OrdinalIgnoreCase)),
+                hasIsolatedExteriorRoomBoundaryConfirmation: false))
+        {
+            return false;
+        }
+
         if (!evidence.Any(item => item.Contains("noisy fragmented face evidence", StringComparison.OrdinalIgnoreCase))
             || evidence.Any(item => item.Contains("only one structurally supported endpoint", StringComparison.OrdinalIgnoreCase))
             || !HasWallBodyEvidence(wall, assessment)
@@ -3125,6 +3219,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         RoomSideEvidence sideEvidence,
         bool hasGeometricRoomBoundarySupport,
         bool hasExteriorShellContinuitySupport,
+        bool hasTrustedAnchoredOpeningRoomSupport,
         out WallEvidenceWallAssessment demotedAssessment,
         out IReadOnlyList<string> demotionEvidence)
     {
@@ -3138,12 +3233,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             || assessment.Category != WallEvidenceCategory.MediumWallBody
             || wall.WallType == WallType.Exterior
             || wall.DetectionKind != WallDetectionKind.SingleLine
-            || wall.PairEvidence is not null
-            || hasGeometricRoomBoundarySupport
-            || hasExteriorShellContinuitySupport
-            || roomReferenceCount > 0
-            || isSharedByRoomAdjacency
-            || sideEvidence.HasRoomsOnBothSides)
+            || wall.PairEvidence is not null)
         {
             return false;
         }
@@ -3156,7 +3246,14 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .ToArray();
         if (!IsStronglyOffAxisWallLine(wall.CenterLine)
             || !IsDimensionLikeWeakLayerEvidence(evidence)
-            || HasExplicitWallBodyEvidence(evidence))
+            || HasIndependentDimensionLikePlacementSupport(
+                evidence,
+                roomReferenceCount,
+                isSharedByRoomAdjacency,
+                sideEvidence,
+                hasGeometricRoomBoundarySupport,
+                hasExteriorShellContinuitySupport,
+                hasTrustedAnchoredOpeningRoomSupport))
         {
             return false;
         }
@@ -3186,6 +3283,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         RoomSideEvidence sideEvidence,
         bool hasGeometricRoomBoundarySupport,
         bool hasExteriorShellContinuitySupport,
+        bool hasTrustedAnchoredOpeningRoomSupport,
         out WallEvidenceWallAssessment demotedAssessment,
         out IReadOnlyList<string> demotionEvidence)
     {
@@ -3199,12 +3297,7 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             || assessment.Category != WallEvidenceCategory.MediumWallBody
             || wall.WallType == WallType.Exterior
             || wall.DetectionKind is not (WallDetectionKind.SingleLine or WallDetectionKind.FragmentMerged)
-            || wall.PairEvidence is not null
-            || hasGeometricRoomBoundarySupport
-            || hasExteriorShellContinuitySupport
-            || roomReferenceCount > 0
-            || isSharedByRoomAdjacency
-            || sideEvidence.HasRoomsOnBothSides)
+            || wall.PairEvidence is not null)
         {
             return false;
         }
@@ -3216,7 +3309,14 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
             .Concat(component?.Evidence ?? Array.Empty<string>())
             .ToArray();
         if (!IsDimensionLikeWeakLayerEvidence(evidence)
-            || HasExplicitWallBodyEvidence(evidence)
+            || HasIndependentDimensionLikePlacementSupport(
+                evidence,
+                roomReferenceCount,
+                isSharedByRoomAdjacency,
+                sideEvidence,
+                hasGeometricRoomBoundarySupport,
+                hasExteriorShellContinuitySupport,
+                hasTrustedAnchoredOpeningRoomSupport)
             || !IsShortOrFragmentedDimensionLikeLinework(wall, evidence, options))
         {
             return false;
@@ -3235,6 +3335,95 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         };
         return true;
     }
+
+    private static bool TryDemoteEndpointOnlyDimensionLikePlacementReadyWallEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment,
+        ScannerOptions options,
+        WallGraphComponent? component,
+        int roomReferenceCount,
+        bool isSharedByRoomAdjacency,
+        RoomSideEvidence sideEvidence,
+        int supportedTopologyEndpointCount,
+        bool hasGeometricRoomBoundarySupport,
+        bool hasExteriorShellContinuitySupport,
+        bool hasTrustedAnchoredOpeningRoomSupport,
+        out WallEvidenceWallAssessment demotedAssessment,
+        out IReadOnlyList<string> demotionEvidence)
+    {
+        demotedAssessment = assessment;
+        demotionEvidence = Array.Empty<string>();
+
+        if (!assessment.PlacementReady
+            || assessment.RequiresReview
+            || assessment.RejectedAsNoise
+            || assessment.Decision == WallEvidenceDecision.Reject
+            || assessment.Category != WallEvidenceCategory.MediumWallBody
+            || wall.WallType == WallType.Exterior
+            || wall.DetectionKind != WallDetectionKind.SingleLine
+            || wall.PairEvidence is not null
+            || wall.FragmentEvidence is not null
+            || wall.SourcePrimitiveIds.Count > 1)
+        {
+            return false;
+        }
+
+        var evidence = wall.Evidence
+            .Concat(assessment.Evidence)
+            .Concat(assessment.ScoreBreakdown.PositiveEvidence)
+            .Concat(assessment.ScoreBreakdown.NegativeEvidence)
+            .Concat(component?.Evidence ?? Array.Empty<string>())
+            .ToArray();
+        var hasEndpointContext = supportedTopologyEndpointCount > 0
+            || EvidenceContainsAny(
+                evidence,
+                "one endpoint supported by structural context",
+                "both endpoints supported by structural context");
+        if (!hasEndpointContext
+            || !IsDimensionLikeWeakLayerEvidence(evidence)
+            || IsStronglyOffAxisWallLine(wall.CenterLine)
+            || IsShortOrFragmentedDimensionLikeLinework(wall, evidence, options)
+            || HasIndependentDimensionLikePlacementSupport(
+                evidence,
+                roomReferenceCount,
+                isSharedByRoomAdjacency,
+                sideEvidence,
+                hasGeometricRoomBoundarySupport,
+                hasExteriorShellContinuitySupport,
+                hasTrustedAnchoredOpeningRoomSupport))
+        {
+            return false;
+        }
+
+        demotionEvidence =
+        [
+            $"wall evidence: demoted from placement-ready because endpoint contact is the only structural support for a long dimension-like single-line candidate; source primitives {wall.SourcePrimitiveIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)}, topology-supported endpoints {supportedTopologyEndpointCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, room refs {roomReferenceCount.ToString(System.Globalization.CultureInfo.InvariantCulture)}, component {component?.Kind.ToString() ?? "Unknown"}"
+        ];
+        demotedAssessment = assessment with
+        {
+            PlacementReady = false,
+            RequiresReview = true,
+            Decision = WallEvidenceDecision.Review,
+            Evidence = AppendEvidence(assessment.Evidence, demotionEvidence)
+        };
+        return true;
+    }
+
+    private static bool HasIndependentDimensionLikePlacementSupport(
+        IReadOnlyList<string> evidence,
+        int roomReferenceCount,
+        bool isSharedByRoomAdjacency,
+        RoomSideEvidence sideEvidence,
+        bool hasGeometricRoomBoundarySupport,
+        bool hasExteriorShellContinuitySupport,
+        bool hasTrustedAnchoredOpeningRoomSupport) =>
+        HasExplicitWallBodyEvidence(evidence)
+        || roomReferenceCount > 0
+        || isSharedByRoomAdjacency
+        || sideEvidence.HasRoomsOnBothSides
+        || hasGeometricRoomBoundarySupport
+        || hasExteriorShellContinuitySupport
+        || hasTrustedAnchoredOpeningRoomSupport;
 
     private static bool IsShortOrFragmentedDimensionLikeLinework(
         WallSegment wall,
@@ -3879,6 +4068,27 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         assessment.Evidence
             .Concat(wall.Evidence)
             .Any(IsRoomConfirmedPromotionBlockerEvidence);
+
+    private static bool HasDimensionLikeFragmentedPerimeterReviewEvidence(
+        WallSegment wall,
+        WallEvidenceWallAssessment assessment) =>
+        wall.Evidence
+            .Concat(assessment.Evidence)
+            .Any(item => item.Contains(
+                "dimension-like fragmented perimeter parallel-face candidate",
+                StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasReliableDimensionLikeFragmentedPerimeterPromotionSupport(
+        bool isSharedByRoomAdjacency,
+        int supportedTopologyEndpointCount,
+        RoomSideEvidence sideEvidence,
+        bool hasGeometricRoomBoundaryPairConfirmation,
+        bool hasIsolatedExteriorRoomBoundaryConfirmation) =>
+        hasGeometricRoomBoundaryPairConfirmation
+        || hasIsolatedExteriorRoomBoundaryConfirmation
+        || (isSharedByRoomAdjacency
+            && sideEvidence.HasRoomsOnBothSides
+            && supportedTopologyEndpointCount >= 2);
 
     private static bool IsRoomConfirmedPromotionBlockerEvidence(string evidence)
     {
@@ -6673,6 +6883,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
         int anchoredOpeningHostDenseWallRetained,
         int nonOrthogonalDimensionLikePlacementDemoted,
         int shortDimensionLikePlacementDemoted,
+        int endpointOnlyDimensionLikePlacementDemoted,
+        int dimensionLikeFragmentedPairPromotionBlocked,
         int fragmentedExteriorShellContinuityRetained,
         int geometricRoomBoundaryEvidenceAdded,
         int explicitRoomBoundaryEvidenceAdded,
@@ -6725,6 +6937,8 @@ internal sealed class WallTypeRefinementStage : IPipelineStage
                 ["anchoredOpeningHostDenseWallRetainedCount"] = anchoredOpeningHostDenseWallRetained.ToString(),
                 ["nonOrthogonalDimensionLikePlacementDemotedWallCount"] = nonOrthogonalDimensionLikePlacementDemoted.ToString(),
                 ["shortDimensionLikePlacementDemotedWallCount"] = shortDimensionLikePlacementDemoted.ToString(),
+                ["endpointOnlyDimensionLikePlacementDemotedWallCount"] = endpointOnlyDimensionLikePlacementDemoted.ToString(),
+                ["dimensionLikeFragmentedPairPromotionBlockedWallCount"] = dimensionLikeFragmentedPairPromotionBlocked.ToString(),
                 ["fragmentedExteriorShellContinuityRetainedWallCount"] = fragmentedExteriorShellContinuityRetained.ToString(),
                 ["explicitRoomBoundaryEvidenceAddedWallCount"] = explicitRoomBoundaryEvidenceAdded.ToString(),
                 ["unsupportedRoomBoundaryEdgeCount"] = unsupportedRoomBoundaryEdgeCount.ToString(),

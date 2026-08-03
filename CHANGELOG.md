@@ -8,6 +8,12 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.12.004] - 2026-08-03
+
+- Fixed endpoint-only dimension lines becoming placement-ready walls.
+- Fixed fragmented perimeter bands being promoted by weak room evidence.
+- Improved independent wall-support diagnostics.
+
 ## [0.12.003] - 2026-08-03
 
 - Added mixed straight and circular structural paths.
