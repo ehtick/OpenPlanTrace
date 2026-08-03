@@ -6,7 +6,7 @@ The project intentionally does not contain downstream application UI code. It ex
 
 **Project links:** [Architecture](docs/ARCHITECTURE.md) | [Public PDF evaluation](docs/PUBLIC-PDF-EVALUATION.md) | [Curved walls](docs/CURVED-WALL-DESIGN.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md) | [License](LICENSE)
 
-Current alpha version: `0.12.002`.
+Current alpha version: `0.12.005`.
 
 ## Versioning and Changelog
 

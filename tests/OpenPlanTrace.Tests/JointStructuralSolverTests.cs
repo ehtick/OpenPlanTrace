@@ -264,6 +264,218 @@ public sealed class JointStructuralSolverTests
     }
 
     [Fact]
+    public void EvidenceGraph_ReviewOnlyParallelPairDoesNotGainIndependentPlacementAuthority()
+    {
+        var wall = PairedWall(
+            "review-dimension-pair",
+            y: 100,
+            thickness: 4,
+            length: 180) with
+        {
+            SourcePrimitiveIds = ["pdf:p1:path:42:subpath:1:line:4"],
+            Evidence =
+            [
+                "parallel wall-face pair",
+                "layer (unlayered) classified Dimension (0.24)",
+                "layer evidence: contains dimension-like text",
+                "wall evidence: fragmented dimension-like perimeter evidence remains review-only"
+            ]
+        };
+        var dimension = new DimensionAnnotation(
+            "dimension-owning-review-pair",
+            1,
+            DimensionKind.Linear,
+            DimensionOrientation.Horizontal,
+            "1 300",
+            "1300",
+            new PlanRect(80, 180, 80, 20),
+            PlanMeasurementUnit.Millimeter,
+            1300,
+            new PlanLineSegment(new PlanPoint(80, 180), new PlanPoint(160, 180)),
+            80,
+            16.25,
+            Confidence.High,
+            null,
+            ["pdf:p1:word:1", "pdf:p1:path:42:subpath:1:line:2"],
+            ["matched one dimension line and two witness lines"]);
+        var graph = StructuralEvidenceGraphBuilder.Build(
+            Source(
+                wallCandidates: [wall],
+                evidence: new WallEvidenceMap(
+                    Array.Empty<WallEvidenceSegment>(),
+                    Array.Empty<WallEvidenceBand>(),
+                    [ReviewAssessment(wall, WallEvidenceCategory.MediumWallBody)],
+                    SourceCandidateWallCount: 1),
+                dimensions: [dimension]));
+
+        var candidate = Assert.Single(graph.WallCandidates);
+        var authority = StructuralPlacementAuthorityEvaluator.Evaluate(candidate);
+        Assert.False(candidate.HasIndependentWallBodyEvidence);
+        Assert.Equal(StructuralPlacementAuthorityKind.ReviewOnly, authority.Kind);
+        Assert.Contains(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.WallBody
+                && signal.Weight == 0.24
+                && signal.Description.Contains(
+                    "withholds independent placement authority",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            candidate.Signals,
+            signal => signal.Kind == StructuralEvidenceSignalKind.DimensionOrAnnotation
+                && signal.Weight <= -1.0);
+        Assert.DoesNotContain(
+            JointStructuralSolver.Solve(graph).CandidateDecisions,
+            decision => decision.CandidateId == candidate.Id
+                && decision.Decision == StructuralWallDecisionKind.Selected);
+    }
+
+    [Fact]
+    public void JointSolver_ContextCannotPromoteBlockedReviewGeometry()
+    {
+        var candidate = Candidate(
+            "contextually-connected-dimension-detail",
+            new PlanLineSegment(new PlanPoint(0, 40), new PlanPoint(180, 40)),
+            unaryScore: 1.40) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.WallGraph
+                | StructuralCandidateOrigin.RoomBoundary
+                | StructuralCandidateOrigin.OpeningHost,
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.ReviewWall, -0.08),
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.07),
+                Signal(StructuralEvidenceSignalKind.ExistingGraph, 0.20),
+                Signal(StructuralEvidenceSignalKind.RoomBoundary, 0.30),
+                Signal(StructuralEvidenceSignalKind.OpeningHost, 0.10),
+                Signal(StructuralEvidenceSignalKind.DimensionOrAnnotation, -1.10)
+            ]
+        };
+        var solution = JointStructuralSolver.Solve(
+            Graph([candidate], Array.Empty<StructuralEvidenceRelation>()));
+
+        var decision = Assert.Single(solution.CandidateDecisions);
+        Assert.Equal(
+            StructuralPlacementAuthorityKind.ReviewOnly,
+            StructuralPlacementAuthorityEvaluator.Evaluate(candidate).Kind);
+        Assert.NotEqual(StructuralWallDecisionKind.Selected, decision.Decision);
+        Assert.Contains(
+            decision.Reasons,
+            reason => reason.Contains(
+                "placement authority ReviewOnly",
+                StringComparison.Ordinal));
+        Assert.Empty(solution.WallRuns);
+    }
+
+    [Fact]
+    public void JointSolver_ExplicitOpeningHostCorroboratesReviewWallBodyAcrossRoomBoundary()
+    {
+        var candidate = Candidate(
+            "opening-hosted-review-wall",
+            new PlanLineSegment(new PlanPoint(40, 0), new PlanPoint(40, 180)),
+            unaryScore: 1.40) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.WallGraph
+                | StructuralCandidateOrigin.RoomBoundary
+                | StructuralCandidateOrigin.OpeningHost,
+            WasAcceptedByPreliminaryPipeline = false,
+            SourceRoomIds = ["provisional-room-a", "provisional-room-b"],
+            SourceOpeningIds = ["door-1"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.ReviewWall, -0.08),
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.07),
+                Signal(StructuralEvidenceSignalKind.ExistingGraph, 0.20),
+                Signal(StructuralEvidenceSignalKind.OpeningHost, 0.10),
+                Signal(StructuralEvidenceSignalKind.ContextOnlyBoundary, -0.60)
+            ]
+        };
+        var solution = JointStructuralSolver.Solve(
+            Graph([candidate], Array.Empty<StructuralEvidenceRelation>()));
+
+        Assert.True(candidate.HasOpeningHostedReviewWallBodyCorroboration);
+        Assert.False(candidate.HasCrossDomainWallBodyEvidence);
+        var authority = StructuralPlacementAuthorityEvaluator.Evaluate(candidate);
+        Assert.Equal(
+            StructuralPlacementAuthorityKind.Corroborated,
+            authority.Kind);
+        Assert.Contains(
+            "without coordinate-placement readiness",
+            authority.Reason,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            StructuralWallDecisionKind.Selected,
+            Assert.Single(solution.CandidateDecisions).Decision);
+        Assert.Single(solution.WallRuns);
+        Assert.True(Assert.Single(solution.WallRuns).Reliability.RequiresReview);
+    }
+
+    [Fact]
+    public void JointSolver_OpeningHostCannotCorroborateDimensionContaminatedReviewBody()
+    {
+        var candidate = Candidate(
+            "dimension-contaminated-opening-host",
+            new PlanLineSegment(new PlanPoint(40, 0), new PlanPoint(40, 180)),
+            unaryScore: 1.40) with
+        {
+            Origins = StructuralCandidateOrigin.DetectedWall
+                | StructuralCandidateOrigin.WallGraph
+                | StructuralCandidateOrigin.RoomBoundary
+                | StructuralCandidateOrigin.OpeningHost,
+            WasAcceptedByPreliminaryPipeline = false,
+            SourceRoomIds = ["provisional-room-a", "provisional-room-b"],
+            SourceOpeningIds = ["door-1"],
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.ReviewWall, -0.08),
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.24),
+                Signal(StructuralEvidenceSignalKind.ExistingGraph, 0.20),
+                Signal(StructuralEvidenceSignalKind.OpeningHost, 0.10),
+                Signal(StructuralEvidenceSignalKind.ContextOnlyBoundary, -0.60),
+                Signal(StructuralEvidenceSignalKind.DimensionOrAnnotation, -1.10)
+            ]
+        };
+        var solution = JointStructuralSolver.Solve(
+            Graph([candidate], Array.Empty<StructuralEvidenceRelation>()));
+
+        Assert.False(candidate.HasOpeningHostedReviewWallBodyCorroboration);
+        Assert.False(candidate.HasCrossDomainWallBodyEvidence);
+        Assert.Equal(
+            StructuralPlacementAuthorityKind.ReviewOnly,
+            StructuralPlacementAuthorityEvaluator.Evaluate(candidate).Kind);
+        Assert.NotEqual(
+            StructuralWallDecisionKind.Selected,
+            Assert.Single(solution.CandidateDecisions).Decision);
+        Assert.Empty(solution.WallRuns);
+    }
+
+    [Fact]
+    public void JointSolver_IndependentWallBodyCanOutweighOverlappingAnnotationEvidence()
+    {
+        var candidate = Candidate(
+            "filled-wall-crossed-by-dimension",
+            new PlanLineSegment(new PlanPoint(0, 40), new PlanPoint(180, 40)),
+            unaryScore: 0.80) with
+        {
+            Signals =
+            [
+                Signal(StructuralEvidenceSignalKind.WallBody, 0.36),
+                Signal(StructuralEvidenceSignalKind.DimensionOrAnnotation, -1.10)
+            ]
+        };
+        var solution = JointStructuralSolver.Solve(
+            Graph([candidate], Array.Empty<StructuralEvidenceRelation>()));
+
+        var decision = Assert.Single(solution.CandidateDecisions);
+        Assert.Equal(
+            StructuralPlacementAuthorityKind.Independent,
+            StructuralPlacementAuthorityEvaluator.Evaluate(candidate).Kind);
+        Assert.Equal(StructuralWallDecisionKind.Selected, decision.Decision);
+        Assert.Single(solution.WallRuns);
+    }
+
+    [Fact]
     public void EvidenceGraph_TreatsSparseDimensionFamilyOverlapAsContamination()
     {
         var wall = Wall(
@@ -4030,11 +4242,19 @@ public sealed class JointStructuralSolverTests
             signal =>
                 signal.Kind == StructuralEvidenceSignalKind.IsolatedStructuralIsland
                 && signal.Weight <= -1);
-        Assert.Contains(
+        Assert.DoesNotContain(
             detailCandidate.Signals,
             signal =>
                 signal.Kind == StructuralEvidenceSignalKind.WallBody
                 && signal.Weight >= 0.30);
+        Assert.Contains(
+            detailCandidate.Signals,
+            signal =>
+                signal.Kind == StructuralEvidenceSignalKind.WallBody
+                && signal.Weight == 0.24
+                && signal.Description.Contains(
+                    "withholds independent placement authority",
+                    StringComparison.Ordinal));
         Assert.DoesNotContain(
             JointStructuralSolver.Solve(graph).WallRuns,
             run => run.SourceWallIds.Contains(detail.Id, StringComparer.Ordinal));

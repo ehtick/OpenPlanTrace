@@ -5,11 +5,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
     <RepositoryType>git</RepositoryType>
-    <OpenPlanTraceVersion>0.12.004</OpenPlanTraceVersion>
-    <VersionPrefix>0.12.4</VersionPrefix>
+    <OpenPlanTraceVersion>0.12.005</OpenPlanTraceVersion>
+    <VersionPrefix>0.12.5</VersionPrefix>
     <VersionSuffix>alpha</VersionSuffix>
-    <AssemblyVersion>0.12.4.0</AssemblyVersion>
-    <FileVersion>0.12.4.0</FileVersion>
-    <InformationalVersion>0.12.004-alpha</InformationalVersion>
+    <AssemblyVersion>0.12.5.0</AssemblyVersion>
+    <FileVersion>0.12.5.0</FileVersion>
+    <InformationalVersion>0.12.005-alpha</InformationalVersion>
   </PropertyGroup>
 </Project>

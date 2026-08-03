@@ -158,6 +158,29 @@ public sealed record StructuralWallCandidate(
         && HasSharedCrossDomainSupport
         && !HasStrongCrossDomainBlocker;
 
+    public bool HasOpeningHostedReviewWallBodyCorroboration =>
+        Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
+        && Origins.HasFlag(StructuralCandidateOrigin.RoomBoundary)
+        && Origins.HasFlag(StructuralCandidateOrigin.OpeningHost)
+        && SourceRoomIds.Distinct(StringComparer.Ordinal).Count() >= 2
+        && SourceOpeningIds.Count > 0
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.WallBody
+            && signal.Weight >= 0.06)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.ReviewWall
+            && signal.Weight < 0)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.ExistingGraph
+            && signal.Weight > 0)
+        && Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.OpeningHost
+            && signal.Weight >= 0.10)
+        && !Signals.Any(signal =>
+            signal.Kind == StructuralEvidenceSignalKind.ContextOnlyBoundary
+            && signal.Weight <= -1.0)
+        && !HasStrongCrossDomainBlocker;
+
     private bool HasSharedCrossDomainSupport =>
         Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
         && Origins.HasFlag(StructuralCandidateOrigin.RoomBoundary)

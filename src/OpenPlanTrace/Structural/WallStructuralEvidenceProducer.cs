@@ -238,7 +238,16 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
             OverlapRatio: >= 0.60
         }
             && !reviewGatedVeryShortPair;
-        if ((explicitFilledWallBody || strongParallelWallBody)
+        var placementReadyParallelWallBody = strongParallelWallBody
+            && (assessment is null
+                || assessment is
+                {
+                    Decision: WallEvidenceDecision.Accept,
+                    PlacementReady: true,
+                    RequiresReview: false,
+                    RejectedAsNoise: false
+                });
+        if ((explicitFilledWallBody || placementReadyParallelWallBody)
             && !candidate.HasIndependentWallBodyEvidence)
         {
             candidate.AddSignal(Signal(
@@ -248,7 +257,7 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
                 $"{wall.Id}:independent-body",
                 explicitFilledWallBody
                     ? "explicit filled wall-body geometry independently supports structural placement"
-                    : "strong parallel-face geometry independently supports structural placement",
+                    : "accepted strong parallel-face geometry independently supports structural placement",
                 wall.SourcePrimitiveIds));
         }
         else if (reviewGatedVeryShortPair)
@@ -261,11 +270,25 @@ internal sealed class WallStructuralEvidenceProducer : IStructuralEvidenceProduc
                 "very short low-score parallel-face pair remains review-only without independent room, opening, or filled wall-body evidence",
                 wall.SourcePrimitiveIds));
         }
+        else if (strongParallelWallBody
+                 && assessment is
+                 {
+                     Decision: WallEvidenceDecision.Review,
+                     PlacementReady: false,
+                     RequiresReview: true,
+                     RejectedAsNoise: false
+                 })
+        {
+            candidate.AddSignal(Signal(
+                candidate,
+                StructuralEvidenceSignalKind.WallBody,
+                0.24,
+                $"{wall.Id}:review-body",
+                "parallel-face geometry supports a wall hypothesis, but preliminary review withholds independent placement authority",
+                wall.SourcePrimitiveIds));
+        }
 
-        var hasIndependentWallBody =
-            assessment?.Category == WallEvidenceCategory.StrongWallBody
-            || strongParallelWallBody
-            || explicitFilledWallBody;
+        var hasIndependentWallBody = candidate.HasIndependentWallBodyEvidence;
         if (hasIndependentWallBody || IsAxisAligned(wall.CenterLine, options.AngleToleranceDegrees))
         {
             return;

@@ -34,6 +34,8 @@ public static class JointStructuralSolver
         var considered = graph.WallCandidates
             .Where(candidate => candidate.IsEligible)
             .Where(candidate => !dominatedByCandidateId.ContainsKey(candidate.Id))
+            .Where(candidate =>
+                StructuralPlacementAuthorityEvaluator.Evaluate(candidate).CanSelect)
             .Where(candidate => !candidate.HasStrongRepeatedDetailEvidence)
             .Where(candidate => !candidate.HasAbsoluteBlockingEvidence)
             .Where(candidate =>
@@ -180,6 +182,8 @@ public static class JointStructuralSolver
             .Where(candidate => candidate.IsEligible)
             .Where(candidate => !dominated.Contains(candidate.Id))
             .Where(candidate =>
+                StructuralPlacementAuthorityEvaluator.Evaluate(candidate).CanSelect)
+            .Where(candidate =>
                 (!candidate.HasStrongNegativeEvidence
                     && candidate.UnaryScore >= options.InitialSelectionScore)
                 || (candidate.WasAcceptedByPreliminaryPipeline
@@ -243,6 +247,8 @@ public static class JointStructuralSolver
             .Select(candidate =>
             {
                 var isSelected = selected.Contains(candidate.Id);
+                var placementAuthority =
+                    StructuralPlacementAuthorityEvaluator.Evaluate(candidate);
                 var isDominated = dominatedByCandidateId.TryGetValue(
                     candidate.Id,
                     out var dominantCandidateId);
@@ -259,7 +265,8 @@ public static class JointStructuralSolver
                 var reasons = new List<string>
                 {
                     $"unary score {candidate.UnaryScore:0.###}",
-                    $"origins {candidate.Origins}"
+                    $"origins {candidate.Origins}",
+                    $"placement authority {placementAuthority.Kind}: {placementAuthority.Reason}"
                 };
                 if (candidate.HasStrongNegativeEvidence)
                 {
@@ -350,11 +357,23 @@ public static class JointStructuralSolver
 
     private static double SelectionPriority(StructuralWallCandidate candidate)
     {
+        var placementAuthority =
+            StructuralPlacementAuthorityEvaluator.Evaluate(candidate);
+        var authorityPriority = placementAuthority.Kind switch
+        {
+            StructuralPlacementAuthorityKind.Independent => 1.0,
+            StructuralPlacementAuthorityKind.Corroborated => 0.7,
+            StructuralPlacementAuthorityKind.ContextSupported => 0.2,
+            _ => -2.0
+        };
         var originPriority = candidate.Origins.HasFlag(StructuralCandidateOrigin.AcceptedWall) ? 2.0 : 0;
         originPriority += candidate.Origins.HasFlag(StructuralCandidateOrigin.WallGraph) ? 1.0 : 0;
         originPriority += candidate.Origins.HasFlag(StructuralCandidateOrigin.RoomBoundary) ? 0.8 : 0;
         originPriority += candidate.Origins.HasFlag(StructuralCandidateOrigin.ExteriorShell) ? 0.6 : 0;
-        return originPriority + candidate.UnaryScore + Math.Min(0.5, candidate.DrawingLength / 1000.0);
+        return authorityPriority
+            + originPriority
+            + candidate.UnaryScore
+            + Math.Min(0.5, candidate.DrawingLength / 1000.0);
     }
 
     private static double Round(double value) =>

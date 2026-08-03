@@ -130,6 +130,11 @@ internal sealed class StructuralObjective
             return -_options.HardConflictPenalty;
         }
 
+        if (!StructuralPlacementAuthorityEvaluator.Evaluate(candidate).CanSelect)
+        {
+            return -_options.HardConflictPenalty;
+        }
+
         var score = candidate.UnaryScore;
         if (candidate.Origins.HasFlag(StructuralCandidateOrigin.ExteriorShell))
         {

@@ -157,7 +157,7 @@ internal static class StructuralCoherentBundleOptimizer
                     .Select(candidateId => candidatesById[candidateId])
                     .Where(candidate =>
                         IsSafeBundleCandidate(candidate, options)
-                        && HasIndependentStructuralSupport(candidate)
+                        && StructuralPlacementAuthorityEvaluator.CanParticipateInRecoveryBundle(candidate)
                         && !HasHardConflict(
                             new[] { candidate.Id },
                             tentative,
@@ -229,7 +229,7 @@ internal static class StructuralCoherentBundleOptimizer
                 !selected.Contains(item.Key)
                 && candidatesById.TryGetValue(item.Key, out var candidate)
                 && IsSafeBundleCandidate(candidate, options)
-                && HasIndependentStructuralSupport(candidate)
+                && StructuralPlacementAuthorityEvaluator.CanParticipateInRecoveryBundle(candidate)
                 && item.Value.Any(neighbor => selected.Contains(neighbor.CandidateId)))
             .Select(item => item.Key)
             .Order(StringComparer.Ordinal)
@@ -280,7 +280,7 @@ internal static class StructuralCoherentBundleOptimizer
                 || additions.Contains(candidateId)
                 || !candidatesById.TryGetValue(candidateId, out var candidate)
                 || !IsSafeBundleCandidate(candidate, options)
-                || !HasIndependentStructuralSupport(candidate)
+                || !StructuralPlacementAuthorityEvaluator.CanParticipateInRecoveryBundle(candidate)
                 || HasHardConflict(
                     new[] { candidateId },
                     new CombinedSelection(selected, additions),
@@ -315,15 +315,6 @@ internal static class StructuralCoherentBundleOptimizer
         && !candidate.HasStrongNegativeEvidence
         && !candidate.HasStrongRepeatedDetailEvidence
         && !candidate.HasAbsoluteBlockingEvidence;
-
-    private static bool HasIndependentStructuralSupport(
-        StructuralWallCandidate candidate) =>
-        candidate.WasAcceptedByPreliminaryPipeline
-        || candidate.HasIndependentWallBodyEvidence
-        || candidate.HasCrossDomainWallBodyEvidence
-        || candidate.Origins.HasFlag(StructuralCandidateOrigin.WallGraph)
-        || candidate.Origins.HasFlag(StructuralCandidateOrigin.ExteriorShell)
-        || candidate.Origins.HasFlag(StructuralCandidateOrigin.OpeningHost);
 
     private static double BundleCandidatePriority(
         StructuralWallCandidate candidate)

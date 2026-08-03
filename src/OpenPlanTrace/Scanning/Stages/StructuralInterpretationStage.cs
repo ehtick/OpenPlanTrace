@@ -77,6 +77,18 @@ internal sealed class StructuralInterpretationStage : IPipelineStage
         var absoluteBlockedDecisions = solution.CandidateDecisions
             .Where(decision => decision.AbsolutePlacementBlock)
             .ToArray();
+        var placementAuthorities = graph.WallCandidates
+            .Select(candidate => (
+                Candidate: candidate,
+                Authority: StructuralPlacementAuthorityEvaluator.Evaluate(candidate)))
+            .ToArray();
+        var reviewOnlyAuthorityCandidates = placementAuthorities
+            .Where(item =>
+                item.Authority.Kind == StructuralPlacementAuthorityKind.ReviewOnly)
+            .ToArray();
+        var selectedAuthorityViolations = reviewOnlyAuthorityCandidates
+            .Where(item => selectedCandidateIds.Contains(item.Candidate.Id))
+            .ToArray();
         var selectedSourceIds = solution.WallRuns
             .SelectMany(run => run.SourcePrimitiveIds)
             .Distinct(StringComparer.Ordinal)
@@ -112,6 +124,14 @@ internal sealed class StructuralInterpretationStage : IPipelineStage
                 ["strongNegativeCandidateCount"] = strongNegativeCandidates.Length.ToString(CultureInfo.InvariantCulture),
                 ["absoluteBlockedCandidateCount"] = absoluteBlockedCandidates.Length.ToString(CultureInfo.InvariantCulture),
                 ["absoluteBlockedDecisionCount"] = absoluteBlockedDecisions.Length.ToString(CultureInfo.InvariantCulture),
+                ["reviewOnlyPlacementAuthorityCount"] = reviewOnlyAuthorityCandidates.Length.ToString(CultureInfo.InvariantCulture),
+                ["selectedPlacementAuthorityViolationCount"] = selectedAuthorityViolations.Length.ToString(CultureInfo.InvariantCulture),
+                ["placementAuthorityCounts"] = string.Join(
+                    ",",
+                    placementAuthorities
+                        .GroupBy(item => item.Authority.Kind)
+                        .OrderBy(group => group.Key)
+                        .Select(group => $"{group.Key}:{group.Count()}")),
                 ["absoluteBlockedWallIds"] = string.Join(
                     ",",
                     absoluteBlockedCandidates
@@ -161,7 +181,9 @@ internal sealed class StructuralInterpretationStage : IPipelineStage
                                 .Select(item =>
                                     $"{item.Relation.Kind}:{item.Relation.Weight:0.###}:{item.Relation.IsHardConstraint}:{item.OtherId}")
                                 .ToArray();
-                            return $"{candidate.Id}|decision={decision?.Decision}|absolute={candidate.HasAbsoluteBlockingEvidence}|score={candidate.UnaryScore:0.###}|selectionDelta={selectionDelta:0.###}|origins={candidate.Origins}|signals={string.Join(",", candidate.Signals.Where(signal => signal.IsStrongBlockingSemanticNegative).Select(signal => $"{signal.Kind}:{signal.Weight:0.###}"))}|selectedRelations={string.Join(",", selectedRelations)}|reasons={string.Join("/", decision?.Reasons ?? Array.Empty<string>())}";
+                            var authority =
+                                StructuralPlacementAuthorityEvaluator.Evaluate(candidate);
+                            return $"{candidate.Id}|decision={decision?.Decision}|absolute={candidate.HasAbsoluteBlockingEvidence}|authority={authority.Kind}|authorityReason={authority.Reason}|score={candidate.UnaryScore:0.###}|selectionDelta={selectionDelta:0.###}|origins={candidate.Origins}|signals={string.Join(",", candidate.Signals.Where(signal => signal.IsStrongBlockingSemanticNegative).Select(signal => $"{signal.Kind}:{signal.Weight:0.###}"))}|selectedRelations={string.Join(",", selectedRelations)}|reasons={string.Join("/", decision?.Reasons ?? Array.Empty<string>())}";
                         })),
                 ["strongNegativeSelectedDetails"] = string.Join(
                     ";",
