@@ -44,6 +44,7 @@ public static class PlanTraceGeoJsonExporter
             .ToDictionary(source => source.SourceId, StringComparer.Ordinal);
         var wallComponentLookup = BuildWallComponentLookup(result.WallGraph.Components);
         var wallEvidenceAssessments = WallEvidenceExportHelpers.BuildAssessmentLookup(result.WallEvidenceMap);
+        var curvedPathLookup = BuildCurvedPathLookup(result.StructuralPathTopology.Paths);
         var features = new List<Dictionary<string, object?>>();
 
         features.AddRange(result.Document.Pages.Select(PageFeature));
@@ -55,7 +56,12 @@ public static class PlanTraceGeoJsonExporter
         features.AddRange(result.Annotations.Select(annotation => AnnotationFeature(annotation, sourceLookup)));
         features.AddRange(result.Annotations.SelectMany(annotation => AnnotationReferenceFeatures(annotation, sourceLookup)));
         features.AddRange(result.SurfacePatterns.Select(pattern => SurfacePatternFeature(pattern, sourceLookup)));
-        features.AddRange(result.CurvedWalls.Select(curve => CurvedWallFeature(curve, sourceLookup)));
+        features.AddRange(result.CurvedWalls.Select(curve => CurvedWallFeature(
+            curve,
+            sourceLookup,
+            curvedPathLookup.TryGetValue(curve.Id, out var structuralPath) ? structuralPath : null)));
+        features.AddRange(result.StructuralPathTopology.Junctions.Select(
+            junction => StructuralPathJunctionFeature(junction, sourceLookup)));
         features.AddRange(result.Walls.Select(wall => WallFeature(
             wall,
             sourceLookup,
@@ -84,6 +90,7 @@ public static class PlanTraceGeoJsonExporter
             ["schemaVersion"] = CurrentSchemaVersion,
             ["coordinateSpace"] = "OpenPlanTracePageCoordinates",
             ["coordinateNote"] = "Coordinates are OpenPlanTrace page drawing units, not WGS84 longitude/latitude.",
+            ["structuralPathTopologyContractVersion"] = result.StructuralPathTopology.ContractVersion,
             ["document"] = new Dictionary<string, object?>
             {
                 ["id"] = result.Document.Id,
@@ -282,7 +289,8 @@ public static class PlanTraceGeoJsonExporter
 
     private static Dictionary<string, object?> CurvedWallFeature(
         CurvedWallCandidate curve,
-        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup,
+        StructuralPath? structuralPath) =>
         Feature(
             $"curved-wall:{curve.Id}",
             ArcLineGeometry(curve),
@@ -309,8 +317,59 @@ public static class PlanTraceGeoJsonExporter
                 .AddValue("readyForCoordinatePlacement", curve.ReadyForCoordinatePlacement)
                 .AddValue("excludedFromLinearTopology", curve.ExcludedFromLinearTopology)
                 .AddValue("requiresReview", curve.RequiresReview)
+                .AddValue("structuralPathId", structuralPath?.Id)
+                .AddValue("connectedPathIds", structuralPath?.ConnectedPathIds)
+                .AddValue("connectedStraightPathIds", structuralPath?.ConnectedStraightPathIds)
+                .AddValue(
+                    "connectedStraightPathSupportCount",
+                    structuralPath?.ConnectedStraightPathSupportCount)
+                .AddValue(
+                    "structuralPathReadyForCoordinatePlacement",
+                    structuralPath?.ReadyForCoordinatePlacement)
+                .AddValue("structuralPathRequiresReview", structuralPath?.RequiresReview)
                 .AddValue("evidence", curve.Evidence)
                 .AddSource(curve.SourcePrimitiveIds, sourceLookup));
+
+    private static Dictionary<string, object?> StructuralPathJunctionFeature(
+        StructuralPathJunction junction,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        Feature(
+            $"structural-path-junction:{junction.Id}",
+            MultiPointGeometry(new[]
+            {
+                junction.FirstEndpoint.Position,
+                junction.SecondEndpoint.Position
+            }),
+            Properties("structuralPathJunction", junction.PageNumber, junction.Confidence)
+                .AddValue("openPlanTraceId", junction.Id)
+                .AddValue("junctionKind", junction.Kind.ToString())
+                .AddValue("geometryMeaning", "PreservedSourceEndpoints")
+                .AddValue("advisoryConnectionOnly", true)
+                .AddValue("firstPathId", junction.FirstEndpoint.PathId)
+                .AddValue("firstEndpoint", junction.FirstEndpoint.Endpoint.ToString())
+                .AddValue("firstEndpointPosition", Coordinate(junction.FirstEndpoint.Position))
+                .AddValue("firstDirectionIntoPath", new[]
+                {
+                    junction.FirstEndpoint.DirectionIntoPath.X,
+                    junction.FirstEndpoint.DirectionIntoPath.Y
+                })
+                .AddValue("secondPathId", junction.SecondEndpoint.PathId)
+                .AddValue("secondEndpoint", junction.SecondEndpoint.Endpoint.ToString())
+                .AddValue("secondEndpointPosition", Coordinate(junction.SecondEndpoint.Position))
+                .AddValue("secondDirectionIntoPath", new[]
+                {
+                    junction.SecondEndpoint.DirectionIntoPath.X,
+                    junction.SecondEndpoint.DirectionIntoPath.Y
+                })
+                .AddValue("proposedPosition", Coordinate(junction.ProposedPosition))
+                .AddValue("endpointDistance", junction.EndpointDistance)
+                .AddValue("matchTolerance", junction.MatchTolerance)
+                .AddValue("directionAngleDegrees", junction.DirectionAngleDegrees)
+                .AddValue("tangentDeviationDegrees", junction.TangentDeviationDegrees)
+                .AddValue("readyForCoordinatePlacement", false)
+                .AddValue("requiresReview", junction.RequiresReview)
+                .AddValue("evidence", junction.Evidence)
+                .AddSource(junction.SourcePrimitiveIds, sourceLookup));
 
     private static Dictionary<string, object?> SurfacePatternFeature(
         SurfacePatternCandidate pattern,
@@ -403,6 +462,22 @@ public static class PlanTraceGeoJsonExporter
 
         return lookup;
     }
+
+    private static IReadOnlyDictionary<string, StructuralPath> BuildCurvedPathLookup(
+        IReadOnlyList<StructuralPath> paths) =>
+        paths
+            .Where(path => path.Kind == StructuralPathKind.CircularArc)
+            .SelectMany(path => path.SourceCurvedWallCandidateIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => (CandidateId: id, Path: path)))
+            .GroupBy(item => item.CandidateId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderBy(item => item.Path.Id, StringComparer.Ordinal)
+                    .First()
+                    .Path,
+                StringComparer.Ordinal);
 
     private static Dictionary<string, object?> RoomFeature(RoomRegion room) =>
         Feature(
@@ -788,6 +863,14 @@ public static class PlanTraceGeoJsonExporter
         {
             ["type"] = "Point",
             ["coordinates"] = Coordinate(point)
+        };
+
+    private static Dictionary<string, object?> MultiPointGeometry(
+        IReadOnlyList<PlanPoint> points) =>
+        new()
+        {
+            ["type"] = "MultiPoint",
+            ["coordinates"] = points.Select(Coordinate).ToArray()
         };
 
     private static Dictionary<string, object?> LineGeometry(PlanLineSegment line) =>

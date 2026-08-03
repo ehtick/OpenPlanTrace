@@ -349,6 +349,10 @@ public static class PlanStructureValidator
             }
         }
 
+        ValidateStructuralPathTopology(
+            export.StructuralPathTopology,
+            pageNumbers,
+            messages);
         ValidateSummary(export, pages, wallRuns, nodes, rooms, openings, messages);
         if (!IsRatio(export.Quality.IntegrityScore))
         {
@@ -360,6 +364,391 @@ public static class PlanStructureValidator
         }
 
         return messages;
+    }
+
+    private static void ValidateStructuralPathTopology(
+        StructuralPathTopologyExport? topology,
+        IReadOnlySet<int> pageNumbers,
+        ICollection<PlanStructureValidationMessage> messages)
+    {
+        if (topology is null)
+        {
+            AddError(
+                messages,
+                "structure.structural_paths.missing",
+                "$.structuralPathTopology",
+                "Canonical structure requires the mixed structural path topology contract.");
+            return;
+        }
+
+        if (!string.Equals(
+                topology.ContractVersion,
+                StructuralPathTopology.CurrentContractVersion,
+                StringComparison.Ordinal))
+        {
+            AddError(
+                messages,
+                "structure.structural_paths.version_unsupported",
+                "$.structuralPathTopology.contractVersion",
+                $"Expected '{StructuralPathTopology.CurrentContractVersion}', found '{topology.ContractVersion}'.");
+        }
+
+        var paths = topology.Paths ?? Array.Empty<StructuralPathExport>();
+        var junctions = topology.Junctions ?? Array.Empty<StructuralPathJunctionExport>();
+        CheckUnique(
+            paths.Select(path => path.Id),
+            "$.structuralPathTopology.paths",
+            "structure.structural_path.id_duplicate",
+            messages);
+        CheckUnique(
+            junctions.Select(junction => junction.Id),
+            "$.structuralPathTopology.junctions",
+            "structure.structural_path_junction.id_duplicate",
+            messages);
+        var pathsById = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path.Id))
+            .GroupBy(path => path.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
+        for (var index = 0; index < paths.Count; index++)
+        {
+            var item = paths[index];
+            var path = $"$.structuralPathTopology.paths[{index}]";
+            ValidatePageReference(item.PageNumber, pageNumbers, path, messages);
+            var isLine = string.Equals(item.Kind, "Line", StringComparison.Ordinal);
+            var isArc = string.Equals(item.Kind, "CircularArc", StringComparison.Ordinal);
+            if (string.IsNullOrWhiteSpace(item.Id)
+                || isLine == isArc
+                || isLine != (item.Line is not null)
+                || isArc != (item.CircularArc is not null))
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path.discriminator_invalid",
+                    path,
+                    "Structural path kind must select exactly one line or circular-arc geometry.");
+                continue;
+            }
+
+            if (!IsFinite(item.StartPoint.X)
+                || !IsFinite(item.StartPoint.Y)
+                || !IsFinite(item.EndPoint.X)
+                || !IsFinite(item.EndPoint.Y)
+                || !IsPositiveFinite(item.DrawingLength)
+                || !IsRatio(item.Confidence))
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path.geometry_invalid",
+                    path,
+                    "Structural path coordinates, drawing length, and confidence must be finite and valid.");
+            }
+
+            if (isLine && item.Line is { } line)
+            {
+                ValidatePathEndpointGeometry(item, line.Start, line.End, path, messages);
+                var expectedLength = Distance(line.Start, line.End);
+                if (!IsPositiveFinite(expectedLength)
+                    || Math.Abs(expectedLength - item.DrawingLength) > CoordinateTolerance)
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path.line_length_mismatch",
+                        path,
+                        "Line-path drawing length must match its preserved centerline endpoints.");
+                }
+            }
+            else if (isArc && item.CircularArc is { } arc)
+            {
+                ValidatePathEndpointGeometry(item, arc.StartPoint, arc.EndPoint, path, messages);
+                if (!(arc.Radius > 0)
+                    || !IsFinite(arc.Center.X)
+                    || !IsFinite(arc.Center.Y)
+                    || !IsFinite(arc.StartAngleRadians)
+                    || !IsFinite(arc.SweepAngleRadians)
+                    || Math.Abs(arc.SweepAngleRadians) <= double.Epsilon
+                    || item.ReadyForCoordinatePlacement
+                    || !item.RequiresReview)
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path.arc_readiness_invalid",
+                        path,
+                        "Circular-arc paths require valid exact geometry and must remain review-only.");
+                }
+
+                var expectedStart = ArcPointAt(arc, arc.StartAngleRadians);
+                var expectedEnd = ArcPointAt(
+                    arc,
+                    arc.StartAngleRadians + arc.SweepAngleRadians);
+                var expectedLength = Math.Abs(arc.SweepAngleRadians) * arc.Radius;
+                if (Distance(expectedStart, arc.StartPoint) > CoordinateTolerance
+                    || Distance(expectedEnd, arc.EndPoint) > CoordinateTolerance
+                    || !IsPositiveFinite(arc.DrawingLength)
+                    || Math.Abs(expectedLength - arc.DrawingLength) > CoordinateTolerance
+                    || Math.Abs(arc.DrawingLength - item.DrawingLength) > CoordinateTolerance)
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path.arc_geometry_mismatch",
+                        path,
+                        "Circular-arc endpoints and drawing length must agree with center, radius, start angle, and signed sweep.");
+                }
+            }
+
+            var connectedPathIds = item.ConnectedPathIds ?? Array.Empty<string>();
+            if (connectedPathIds.Count != connectedPathIds.Distinct(StringComparer.Ordinal).Count()
+                || connectedPathIds.Contains(item.Id, StringComparer.Ordinal))
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path.connection_list_invalid",
+                    $"{path}.connectedPathIds",
+                    "Connected path IDs must be unique and cannot reference the owning path.");
+            }
+
+            foreach (var connectedId in connectedPathIds)
+            {
+                if (!pathsById.TryGetValue(connectedId, out var connected))
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path.connection_missing",
+                        $"{path}.connectedPathIds",
+                        $"Structural path references missing connected path '{connectedId}'.");
+                    continue;
+                }
+
+                if (!(connected.ConnectedPathIds ?? Array.Empty<string>()).Contains(item.Id, StringComparer.Ordinal))
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path.connection_not_reciprocal",
+                        $"{path}.connectedPathIds",
+                        $"Connection from '{item.Id}' to '{connectedId}' is not reciprocal.");
+                }
+            }
+
+            var connectedStraightPathIds = item.ConnectedStraightPathIds ?? Array.Empty<string>();
+            if (connectedStraightPathIds.Count
+                    != connectedStraightPathIds.Distinct(StringComparer.Ordinal).Count()
+                || (isLine && connectedStraightPathIds.Count > 0))
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path.straight_support_list_invalid",
+                    $"{path}.connectedStraightPathIds",
+                    "Straight-path support IDs must be unique and are valid only on curved paths.");
+            }
+
+            foreach (var connectedId in connectedStraightPathIds)
+            {
+                if (!pathsById.TryGetValue(connectedId, out var connected)
+                    || !string.Equals(connected.Kind, "Line", StringComparison.Ordinal)
+                    || !connectedPathIds.Contains(connectedId, StringComparer.Ordinal))
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path.straight_support_invalid",
+                        $"{path}.connectedStraightPathIds",
+                        $"Straight-path support '{connectedId}' must reference a line path.");
+                }
+            }
+
+            if (item.ConnectedStraightPathSupportCount
+                != connectedStraightPathIds.Distinct(StringComparer.Ordinal).Count())
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path.straight_support_count_mismatch",
+                    $"{path}.connectedStraightPathSupportCount",
+                    "Connected straight-path support count must match its distinct ID list.");
+            }
+        }
+
+        for (var index = 0; index < junctions.Count; index++)
+        {
+            var junction = junctions[index];
+            var path = $"$.structuralPathTopology.junctions[{index}]";
+            ValidatePageReference(junction.PageNumber, pageNumbers, path, messages);
+            if (!junction.RequiresReview
+                || !IsRatio(junction.Confidence)
+                || !IsFinite(junction.EndpointDistance)
+                || junction.EndpointDistance < 0
+                || !IsFinite(junction.MatchTolerance)
+                || junction.MatchTolerance < 0
+                || junction.EndpointDistance > junction.MatchTolerance + CoordinateTolerance
+                || !IsFinite(junction.DirectionAngleDegrees)
+                || junction.DirectionAngleDegrees is < 0 or > 180
+                || !IsFinite(junction.TangentDeviationDegrees)
+                || junction.TangentDeviationDegrees is < 0 or > 180
+                || junction.Kind is not ("Tangent" or "Corner")
+                || !IsFinite(junction.ProposedPosition.X)
+                || !IsFinite(junction.ProposedPosition.Y))
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path_junction.metadata_invalid",
+                    path,
+                    "Mixed path junctions must have finite geometry, normalized confidence, and require review.");
+            }
+
+            ValidateStructuralPathEndpoint(
+                junction.FirstEndpoint,
+                junction.PageNumber,
+                pathsById,
+                $"{path}.firstEndpoint",
+                messages);
+            ValidateStructuralPathEndpoint(
+                junction.SecondEndpoint,
+                junction.PageNumber,
+                pathsById,
+                $"{path}.secondEndpoint",
+                messages);
+            if (pathsById.TryGetValue(junction.FirstEndpoint.PathId, out var firstPath)
+                && pathsById.TryGetValue(junction.SecondEndpoint.PathId, out var secondPath))
+            {
+                var firstIsLine = string.Equals(firstPath.Kind, "Line", StringComparison.Ordinal);
+                var secondIsLine = string.Equals(secondPath.Kind, "Line", StringComparison.Ordinal);
+                var firstIsArc = string.Equals(firstPath.Kind, "CircularArc", StringComparison.Ordinal);
+                var secondIsArc = string.Equals(secondPath.Kind, "CircularArc", StringComparison.Ordinal);
+                if (string.Equals(firstPath.Id, secondPath.Id, StringComparison.Ordinal)
+                    || !((firstIsLine && secondIsArc) || (firstIsArc && secondIsLine)))
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path_junction.path_kinds_invalid",
+                        path,
+                        "A mixed structural junction must connect one line endpoint to one circular-arc endpoint.");
+                }
+
+                if (!(firstPath.ConnectedPathIds ?? Array.Empty<string>())
+                        .Contains(secondPath.Id, StringComparer.Ordinal)
+                    || !(secondPath.ConnectedPathIds ?? Array.Empty<string>())
+                        .Contains(firstPath.Id, StringComparer.Ordinal))
+                {
+                    AddError(
+                        messages,
+                        "structure.structural_path_junction.connection_missing",
+                        path,
+                        "Both paths referenced by a junction must expose the reciprocal connection.");
+                }
+            }
+
+            var actualDistance = Distance(
+                junction.FirstEndpoint.Position,
+                junction.SecondEndpoint.Position);
+            if (Math.Abs(actualDistance - junction.EndpointDistance) > CoordinateTolerance)
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path_junction.distance_mismatch",
+                    $"{path}.endpointDistance",
+                    "Endpoint distance must match the preserved source endpoint coordinates.");
+            }
+
+            var expectedProposedPosition = new PointExport(
+                (junction.FirstEndpoint.Position.X + junction.SecondEndpoint.Position.X) / 2.0,
+                (junction.FirstEndpoint.Position.Y + junction.SecondEndpoint.Position.Y) / 2.0);
+            if (Distance(junction.ProposedPosition, expectedProposedPosition) > CoordinateTolerance)
+            {
+                AddError(
+                    messages,
+                    "structure.structural_path_junction.proposed_position_mismatch",
+                    $"{path}.proposedPosition",
+                    "The advisory junction position must be the midpoint of the two preserved source endpoints.");
+            }
+        }
+
+        var metrics = topology.Metrics;
+        if (metrics is null
+            || new[]
+            {
+                metrics.LinePathCount,
+                metrics.CircularArcPathCount,
+                metrics.JunctionCount,
+                metrics.TangentJunctionCount,
+                metrics.CornerJunctionCount,
+                metrics.ConnectedCurvedPathCount,
+                metrics.UnconnectedCurvedPathCount,
+                metrics.RejectedCurvedCandidateCount,
+                metrics.PlacementReadyPathCount,
+                metrics.ReviewPathCount
+            }.Any(value => value < 0)
+            || metrics.LinePathCount != paths.Count(path => string.Equals(path.Kind, "Line", StringComparison.Ordinal))
+            || metrics.CircularArcPathCount != paths.Count(path => string.Equals(path.Kind, "CircularArc", StringComparison.Ordinal))
+            || metrics.JunctionCount != junctions.Count
+            || metrics.TangentJunctionCount != junctions.Count(junction => string.Equals(junction.Kind, "Tangent", StringComparison.Ordinal))
+            || metrics.CornerJunctionCount != junctions.Count(junction => string.Equals(junction.Kind, "Corner", StringComparison.Ordinal))
+            || metrics.ConnectedCurvedPathCount != paths.Count(path => string.Equals(path.Kind, "CircularArc", StringComparison.Ordinal) && path.ConnectedStraightPathSupportCount > 0)
+            || metrics.UnconnectedCurvedPathCount != paths.Count(path => string.Equals(path.Kind, "CircularArc", StringComparison.Ordinal) && path.ConnectedStraightPathSupportCount == 0)
+            || metrics.PlacementReadyPathCount != paths.Count(path => path.ReadyForCoordinatePlacement)
+            || metrics.ReviewPathCount != paths.Count(path => path.RequiresReview))
+        {
+            AddError(
+                messages,
+                "structure.structural_paths.metrics_mismatch",
+                "$.structuralPathTopology.metrics",
+                "Mixed structural path metrics must match the exported paths and junctions.");
+        }
+    }
+
+    private static void ValidatePathEndpointGeometry(
+        StructuralPathExport path,
+        PointExport expectedStart,
+        PointExport expectedEnd,
+        string jsonPath,
+        ICollection<PlanStructureValidationMessage> messages)
+    {
+        if (Distance(path.StartPoint, expectedStart) > CoordinateTolerance
+            || Distance(path.EndPoint, expectedEnd) > CoordinateTolerance)
+        {
+            AddError(
+                messages,
+                "structure.structural_path.endpoint_mismatch",
+                jsonPath,
+                "Structural path endpoint fields must preserve the selected geometry endpoints exactly.");
+        }
+    }
+
+    private static void ValidateStructuralPathEndpoint(
+        StructuralPathEndpointExport endpoint,
+        int pageNumber,
+        IReadOnlyDictionary<string, StructuralPathExport> pathsById,
+        string jsonPath,
+        ICollection<PlanStructureValidationMessage> messages)
+    {
+        if (!pathsById.TryGetValue(endpoint.PathId, out var path))
+        {
+            AddError(
+                messages,
+                "structure.structural_path_junction.path_reference_missing",
+                jsonPath,
+                $"Junction endpoint references missing path '{endpoint.PathId}'.");
+            return;
+        }
+
+        var expected = string.Equals(endpoint.Endpoint, "Start", StringComparison.Ordinal)
+            ? path.StartPoint
+            : string.Equals(endpoint.Endpoint, "End", StringComparison.Ordinal)
+                ? path.EndPoint
+                : (PointExport?)null;
+        if (path.PageNumber != pageNumber
+            || expected is null
+            || Distance(endpoint.Position, expected) > CoordinateTolerance
+            || !IsFinite(endpoint.DirectionIntoPath.X)
+            || !IsFinite(endpoint.DirectionIntoPath.Y)
+            || Math.Abs(
+                Math.Sqrt(
+                    (endpoint.DirectionIntoPath.X * endpoint.DirectionIntoPath.X)
+                    + (endpoint.DirectionIntoPath.Y * endpoint.DirectionIntoPath.Y)) - 1.0) > CoordinateTolerance)
+        {
+            AddError(
+                messages,
+                "structure.structural_path_junction.endpoint_invalid",
+                jsonPath,
+                "Junction endpoint must reference an exact endpoint on a path from the same page.");
+        }
     }
 
     private static void ValidateWallSolver(
@@ -1322,6 +1711,13 @@ public static class PlanStructureValidator
         var dy = left.Y - right.Y;
         return Math.Sqrt((dx * dx) + (dy * dy));
     }
+
+    private static PointExport ArcPointAt(
+        StructuralCircularArcPathExport arc,
+        double angle) =>
+        new(
+            arc.Center.X + (Math.Cos(angle) * arc.Radius),
+            arc.Center.Y + (Math.Sin(angle) * arc.Radius));
 
     private static PointExport PointAt(LineExport line, double parameter) =>
         new(

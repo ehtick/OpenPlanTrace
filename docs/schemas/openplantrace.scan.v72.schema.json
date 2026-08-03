@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:openplantrace:schema:scan:v70",
+  "$id": "urn:openplantrace:schema:scan:v72",
   "title": "OpenPlanTrace Scan Result",
   "description": "Schema for the schema-versioned JSON emitted by OpenPlanTrace scan exports. The contract is strict about stable top-level fields and core evidence shapes, while allowing additional detector-specific fields for forward-compatible evolution.",
   "type": "object",
   "additionalProperties": true,
-  "x-openplantrace-schemaVersion": "openplantrace.scan.v70",
+  "x-openplantrace-schemaVersion": "openplantrace.scan.v72",
   "required": [
     "schemaVersion",
     "generatedAt",
@@ -23,6 +23,8 @@
     "gridBaySpacings",
     "regions",
     "surfacePatterns",
+    "curvedWalls",
+    "structuralPathTopology",
     "walls",
     "wallEvidence",
     "wallTopologyPreparation",
@@ -41,7 +43,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "openplantrace.scan.v70"
+      "const": "openplantrace.scan.v72"
     },
     "generatedAt": {
       "type": "string",
@@ -115,6 +117,15 @@
       "items": {
         "$ref": "#/$defs/surfacePattern"
       }
+    },
+    "curvedWalls": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/curvedWall"
+      }
+    },
+    "structuralPathTopology": {
+      "$ref": "#/$defs/structuralPathTopology"
     },
     "walls": {
       "type": "array",
@@ -3625,7 +3636,8 @@
           "type": "string",
           "enum": [
             "DenseOrthogonalGrid",
-            "DenseParallelBand"
+            "DenseParallelBand",
+            "DenseDiagonalCrossHatch"
           ]
         },
         "orientation": {
@@ -3634,7 +3646,8 @@
             "Unknown",
             "Orthogonal",
             "Horizontal",
-            "Vertical"
+            "Vertical",
+            "Diagonal"
           ]
         },
         "bounds": {
@@ -4935,6 +4948,497 @@
         }
       }
     },
+    "curvedWall": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "pageNumber",
+        "center",
+        "startPoint",
+        "endPoint",
+        "centerlineRadius",
+        "innerRadius",
+        "outerRadius",
+        "startAngleRadians",
+        "sweepAngleRadians",
+        "thickness",
+        "drawingArcLength",
+        "radiusMillimeters",
+        "thicknessMillimeters",
+        "arcLengthMeters",
+        "measurementScaleGroupId",
+        "bounds",
+        "sourceRegionId",
+        "sourceKind",
+        "angularOverlapRatio",
+        "radialFitError",
+        "readyForCoordinatePlacement",
+        "excludedFromLinearTopology",
+        "confidence",
+        "requiresReview",
+        "sourcePrimitiveIds",
+        "sourceLayers",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "pageNumber": {
+          "$ref": "#/$defs/pageNumber"
+        },
+        "center": {
+          "$ref": "#/$defs/point"
+        },
+        "startPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "endPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "centerlineRadius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "innerRadius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "outerRadius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "startAngleRadians": {
+          "type": "number"
+        },
+        "sweepAngleRadians": {
+          "type": "number"
+        },
+        "thickness": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "drawingArcLength": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "radiusMillimeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "thicknessMillimeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "arcLengthMeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "measurementScaleGroupId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "sourceRegionId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "sourceKind": {
+          "type": "string",
+          "enum": [
+            "NativeArcPair",
+            "PolylineArcPair",
+            "MixedArcPair"
+          ]
+        },
+        "angularOverlapRatio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "radialFitError": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "readyForCoordinatePlacement": {
+          "type": "boolean",
+          "const": false
+        },
+        "excludedFromLinearTopology": {
+          "type": "boolean",
+          "const": true
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "requiresReview": {
+          "type": "boolean",
+          "const": true
+        },
+        "sourcePrimitiveIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourceLayers": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "structuralPathTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "paths",
+        "junctions",
+        "metrics",
+        "evidence"
+      ],
+      "properties": {
+        "contractVersion": {
+          "const": "openplantrace.structural-path-topology.v1"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/structuralPath"
+          }
+        },
+        "junctions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/structuralPathJunction"
+          }
+        },
+        "metrics": {
+          "$ref": "#/$defs/structuralPathTopologyMetrics"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "structuralPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pageNumber",
+        "kind",
+        "line",
+        "circularArc",
+        "startPoint",
+        "endPoint",
+        "bounds",
+        "drawingLength",
+        "lengthMeters",
+        "thickness",
+        "thicknessMillimeters",
+        "measurementScaleGroupId",
+        "wallType",
+        "confidence",
+        "readyForCoordinatePlacement",
+        "requiresReview",
+        "sourceRegionId",
+        "connectedPathIds",
+        "connectedStraightPathIds",
+        "connectedStraightPathSupportCount",
+        "sourceStructuralWallRunIds",
+        "sourceCurvedWallCandidateIds",
+        "sourceWallIds",
+        "sourceWallGraphEdgeIds",
+        "sourcePrimitiveIds",
+        "sourceLayers",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "pageNumber": {
+          "$ref": "#/$defs/pageNumber"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "Line",
+            "CircularArc"
+          ]
+        },
+        "line": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/line"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "circularArc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/structuralCircularArcPath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "endPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "drawingLength": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "lengthMeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "thickness": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "thicknessMillimeters": {
+          "$ref": "#/$defs/nullableNumber"
+        },
+        "measurementScaleGroupId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "wallType": {
+          "type": "string"
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "readyForCoordinatePlacement": {
+          "type": "boolean"
+        },
+        "requiresReview": {
+          "type": "boolean"
+        },
+        "sourceRegionId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "connectedPathIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "connectedStraightPathIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "connectedStraightPathSupportCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "sourceStructuralWallRunIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourceCurvedWallCandidateIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourceWallIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourceWallGraphEdgeIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourcePrimitiveIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "sourceLayers": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "structuralCircularArcPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "center",
+        "radius",
+        "startAngleRadians",
+        "sweepAngleRadians",
+        "startPoint",
+        "endPoint",
+        "bounds",
+        "drawingLength"
+      ],
+      "properties": {
+        "center": {
+          "$ref": "#/$defs/point"
+        },
+        "radius": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "startAngleRadians": {
+          "type": "number"
+        },
+        "sweepAngleRadians": {
+          "type": "number"
+        },
+        "startPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "endPoint": {
+          "$ref": "#/$defs/point"
+        },
+        "bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "drawingLength": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        }
+      }
+    },
+    "structuralPathEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pathId",
+        "endpoint",
+        "position",
+        "directionIntoPath"
+      ],
+      "properties": {
+        "pathId": {
+          "$ref": "#/$defs/id"
+        },
+        "endpoint": {
+          "type": "string",
+          "enum": [
+            "Start",
+            "End"
+          ]
+        },
+        "position": {
+          "$ref": "#/$defs/point"
+        },
+        "directionIntoPath": {
+          "$ref": "#/$defs/vector"
+        }
+      }
+    },
+    "structuralPathJunction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pageNumber",
+        "kind",
+        "firstEndpoint",
+        "secondEndpoint",
+        "proposedPosition",
+        "endpointDistance",
+        "matchTolerance",
+        "directionAngleDegrees",
+        "tangentDeviationDegrees",
+        "confidence",
+        "requiresReview",
+        "sourcePrimitiveIds",
+        "evidence"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "pageNumber": {
+          "$ref": "#/$defs/pageNumber"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "Tangent",
+            "Corner"
+          ]
+        },
+        "firstEndpoint": {
+          "$ref": "#/$defs/structuralPathEndpoint"
+        },
+        "secondEndpoint": {
+          "$ref": "#/$defs/structuralPathEndpoint"
+        },
+        "proposedPosition": {
+          "$ref": "#/$defs/point"
+        },
+        "endpointDistance": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "matchTolerance": {
+          "$ref": "#/$defs/nonNegativeNumber"
+        },
+        "directionAngleDegrees": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 180
+        },
+        "tangentDeviationDegrees": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 180
+        },
+        "confidence": {
+          "$ref": "#/$defs/confidence"
+        },
+        "requiresReview": {
+          "type": "boolean",
+          "const": true
+        },
+        "sourcePrimitiveIds": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "evidence": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "structuralPathTopologyMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "linePathCount",
+        "circularArcPathCount",
+        "junctionCount",
+        "tangentJunctionCount",
+        "cornerJunctionCount",
+        "connectedCurvedPathCount",
+        "unconnectedCurvedPathCount",
+        "rejectedCurvedCandidateCount",
+        "placementReadyPathCount",
+        "reviewPathCount"
+      ],
+      "properties": {
+        "linePathCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "circularArcPathCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "junctionCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "tangentJunctionCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "cornerJunctionCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "connectedCurvedPathCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "unconnectedCurvedPathCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "rejectedCurvedCandidateCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "placementReadyPathCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        },
+        "reviewPathCount": {
+          "$ref": "#/$defs/nonNegativeInteger"
+        }
+      }
+    },
     "wall": {
       "type": "object",
       "additionalProperties": true,
@@ -4949,6 +5453,8 @@
         "wallComponentId",
         "wallComponentKind",
         "excludedFromStructuralTopology",
+        "placementStatus",
+        "representedByWallIds",
         "readyForCoordinatePlacement",
         "requiresReview",
         "reviewReasons",
@@ -5007,6 +5513,20 @@
         },
         "excludedFromStructuralTopology": {
           "type": "boolean"
+        },
+        "placementStatus": {
+          "type": "string",
+          "enum": [
+            "Ready",
+            "RepresentedByCleanTopology",
+            "ReviewRequired",
+            "NotReady"
+          ],
+          "description": "Placement-readiness classification for this raw wall candidate. RepresentedByCleanTopology means another clean topology span should be used for placement while this wall remains as source/evidence context."
+        },
+        "representedByWallIds": {
+          "$ref": "#/$defs/stringArray",
+          "description": "Clean placement wall IDs whose topology spans already represent this raw wall candidate."
         },
         "readyForCoordinatePlacement": {
           "type": "boolean",

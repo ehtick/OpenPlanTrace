@@ -22,6 +22,11 @@ public sealed class DocumentationExampleTests
         Assert.True(root.GetProperty("walls").GetArrayLength() > 0);
         Assert.True(root.GetProperty("rooms").GetArrayLength() > 0);
         Assert.True(root.GetProperty("openings").GetArrayLength() > 0);
+        var topology = root.GetProperty("structuralPathTopology");
+        Assert.Equal(
+            StructuralPathTopology.CurrentContractVersion,
+            topology.GetProperty("contractVersion").GetString());
+        Assert.True(topology.GetProperty("paths").GetArrayLength() > 0);
     }
 
     [Fact]
@@ -38,6 +43,9 @@ public sealed class DocumentationExampleTests
         Assert.Equal("FeatureCollection", root.GetProperty("type").GetString());
         Assert.Equal(PlanTraceGeoJsonExporter.CurrentSchemaVersion, root.GetProperty("schemaVersion").GetString());
         Assert.Equal("OpenPlanTracePageCoordinates", root.GetProperty("coordinateSpace").GetString());
+        Assert.Equal(
+            StructuralPathTopology.CurrentContractVersion,
+            root.GetProperty("structuralPathTopologyContractVersion").GetString());
         Assert.Equal(
             "samples/golden/semantic-smoke.dxf",
             root.GetProperty("document").GetProperty("sourcePath").GetString());

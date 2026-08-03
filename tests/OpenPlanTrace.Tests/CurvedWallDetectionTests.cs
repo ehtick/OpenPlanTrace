@@ -157,6 +157,13 @@ public sealed class CurvedWallDetectionTests
         Assert.Contains("A-WALL-CURVE", curve.GetProperty("sourceLayers")
             .EnumerateArray()
             .Select(item => item.GetString()));
+
+        var topology = document.RootElement.GetProperty("structuralPathTopology");
+        var path = Assert.Single(topology.GetProperty("paths").EnumerateArray());
+        Assert.Equal("CircularArc", path.GetProperty("kind").GetString());
+        Assert.False(path.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(path.GetProperty("requiresReview").GetBoolean());
+        Assert.Empty(topology.GetProperty("junctions").EnumerateArray());
     }
 
     [Fact]
@@ -183,6 +190,15 @@ public sealed class CurvedWallDetectionTests
         Assert.Equal("SampledLineString", properties.GetProperty("geoJsonApproximation").GetString());
         Assert.Equal(expected.CenterlineRadius, properties.GetProperty("centerlineRadius").GetDouble(), precision: 4);
         Assert.True(properties.GetProperty("excludedFromLinearTopology").GetBoolean());
+        Assert.Equal(
+            result.StructuralPathTopology.Paths.Single().Id,
+            properties.GetProperty("structuralPathId").GetString());
+        Assert.Equal(0, properties.GetProperty("connectedStraightPathSupportCount").GetInt32());
+        Assert.False(properties.GetProperty("structuralPathReadyForCoordinatePlacement").GetBoolean());
+        Assert.True(properties.GetProperty("structuralPathRequiresReview").GetBoolean());
+        Assert.Equal(
+            StructuralPathTopology.CurrentContractVersion,
+            document.RootElement.GetProperty("structuralPathTopologyContractVersion").GetString());
     }
 
     [Fact]
@@ -225,6 +241,7 @@ public sealed class CurvedWallDetectionTests
         var context = Context(document, new PlanRect(0, 0, 340, 300));
 
         await new WallDetectionStage().ExecuteAsync(context, CancellationToken.None);
+        await new StructuralPathTopologyStage().ExecuteAsync(context, CancellationToken.None);
 
         return context.ToResult();
     }

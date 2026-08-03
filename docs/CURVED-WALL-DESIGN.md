@@ -2,10 +2,11 @@
 
 ## Current Status
 
-OpenPlanTrace `0.12.002` implements the first conservative circular-wall step.
+OpenPlanTrace `0.12.003` implements the first conservative mixed-path step.
 It collects native arcs and fitted PDF polyline arcs before line-only wall
 filtering, pairs compatible concentric faces, and exports exact review evidence
-as `curvedWalls`.
+as `curvedWalls`. Scan v72 and structure v2 also expose those candidates beside
+canonical straight runs as discriminated structural paths.
 
 Each candidate includes:
 
@@ -21,8 +22,11 @@ Each candidate includes:
 
 The SVG viewer renders these candidates as magenta dashed review curves with a
 white halo. Native JSON preserves the exact circular parameters. GeoJSON uses a
-sampled `LineString` compatibility view and carries the canonical parameters
-plus an approximation marker in feature properties.
+sampled `LineString` compatibility view and carries the canonical parameters,
+structural path ID, connected straight-path provenance, and an approximation
+marker. Mixed junctions use standards-valid `MultiPoint` geometry containing
+both unchanged source endpoints; their midpoint is an explicit advisory
+property, never substituted into source geometry.
 
 ## Geometric Rule
 
@@ -59,32 +63,43 @@ Overlapping or direction-reversed observations collapse to one physical curve.
 The same source path cannot pair with itself. Every accepted curve remains
 review-only, so a false candidate cannot affect rooms, routing, or placement.
 
-## Target Structural Path Contract
+## Mixed Structural Path Contract
 
-The next architecture step is a discriminated structural path contract:
+The implemented `openplantrace.structural-path-topology.v1` contract supports:
 
 - `Line`: start and end points;
-- `CircularArc`: center, radius, start angle, sweep angle, and direction;
-- `EllipticalArc`: center, axes, rotation, and parameter interval;
-- `Spline`: degree, control points, knots, weights, and parameter interval; and
-- optional derived polyline plus its approximation tolerance.
+- `CircularArc`: center, radius, start angle, signed sweep, exact endpoints,
+  bounds, and arc length; and
+- endpoint-only `Tangent` or `Corner` relations between one line and one arc.
 
 Every structural path carries wall type, thickness, confidence, placement
 readiness, page/millimeter coordinates, source IDs, evidence, and a stable path
-identity. Existing line-only consumers can continue to consume `Line` paths.
+identity. Relations preserve both source endpoint coordinates and expose only an
+advisory midpoint. Existing line-only consumers can continue to consume `Line`
+paths, and placement output remains unchanged.
+
+Contract v1 connects path endpoint to path endpoint only. It deliberately does
+not invent a relation when an arc endpoint meets the interior of an unsplit
+straight run, as seen in the public curved-plan regression. That case needs a
+future parameterized path-location reference carrying the straight-path
+parameter and exact projected/source points.
+
+`EllipticalArc` and `Spline` remain future discriminators. They require exact
+source parameters plus a declared bounded-error compatibility polyline before
+they can enter this contract.
 
 ## Next Detection And Topology Work
 
-1. Add line-to-arc endpoint and tangent/corner relations without smoothing real
-   architectural corners.
-2. Distinguish structural concentric faces from radial floor, exhibit, stair,
+1. Distinguish structural concentric faces from radial floor, exhibit, stair,
    furniture, and symbol patterns using connected straight-wall context.
-3. Promote only globally supported curves into mixed wall graph paths.
-4. Host curved openings by arc-length intervals, normalized parameters, and
+2. Add parameterized arc-endpoint-to-line-interior and arc-to-arc relations,
+   then promote only globally supported curves into placement-capable mixed wall
+   graph paths.
+3. Host curved openings by arc-length intervals, normalized parameters, and
    local tangent/normal vectors.
-5. Solve rooms from mixed line/curve boundaries. Circular area contributions
+4. Solve rooms from mixed line/curve boundaries. Circular area contributions
    can be integrated analytically; general curves need bounded-error geometry.
-6. Add elliptical and spline evidence only after circular topology is stable.
+5. Add elliptical and spline evidence only after circular topology is stable.
 
 ## Accuracy Gates
 

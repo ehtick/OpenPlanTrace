@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "openplantrace.scan.v71",
+  "schemaVersion": "openplantrace.scan.v72",
   "generatedAt": "2026-06-09T12:00:00Z",
   "document": {
     "id": "viewer-routing-review-smoke",
@@ -247,6 +247,27 @@
     }
   ],
   "surfacePatterns": [],
+  "curvedWalls": [],
+  "structuralPathTopology": {
+    "contractVersion": "openplantrace.structural-path-topology.v1",
+    "paths": [],
+    "junctions": [],
+    "metrics": {
+      "linePathCount": 0,
+      "circularArcPathCount": 0,
+      "junctionCount": 0,
+      "tangentJunctionCount": 0,
+      "cornerJunctionCount": 0,
+      "connectedCurvedPathCount": 0,
+      "unconnectedCurvedPathCount": 0,
+      "rejectedCurvedCandidateCount": 0,
+      "placementReadyPathCount": 0,
+      "reviewPathCount": 0
+    },
+    "evidence": [
+      "Viewer routing sample does not include canonical structural paths."
+    ]
+  },
   "walls": [
     {
       "id": "wall-top",

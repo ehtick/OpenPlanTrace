@@ -37,7 +37,9 @@ public sealed record PlanTraceExport(
 {
     public IReadOnlyList<CurvedWallExport> CurvedWalls { get; init; } = Array.Empty<CurvedWallExport>();
 
-    public const string CurrentSchemaVersion = "openplantrace.scan.v71";
+    public StructuralPathTopologyExport StructuralPathTopology { get; init; } = StructuralPathTopologyExport.Empty;
+
+    public const string CurrentSchemaVersion = "openplantrace.scan.v72";
 
     public static PlanTraceExport From(PlanScanResult result) =>
         Create(result);
@@ -103,7 +105,10 @@ public sealed record PlanTraceExport(
         {
             CurvedWalls = result.CurvedWalls
                 .Select(curve => CurvedWallExport.From(curve, sourceLookup))
-                .ToArray()
+                .ToArray(),
+            StructuralPathTopology = StructuralPathTopologyExport.From(
+                result.StructuralPathTopology,
+                sourceLookup)
         };
     }
 
@@ -1081,6 +1086,203 @@ public sealed record CurvedWallExport(
             curve.SourcePrimitiveIds,
             ExportSourceHelpers.SourceLayers(curve.SourcePrimitiveIds, sourceLookup),
             curve.Evidence);
+}
+
+public sealed record StructuralPathTopologyExport(
+    string ContractVersion,
+    IReadOnlyList<StructuralPathExport> Paths,
+    IReadOnlyList<StructuralPathJunctionExport> Junctions,
+    StructuralPathTopologyMetricsExport Metrics,
+    IReadOnlyList<string> Evidence)
+{
+    public static StructuralPathTopologyExport Empty { get; } =
+        new(
+            StructuralPathTopology.CurrentContractVersion,
+            Array.Empty<StructuralPathExport>(),
+            Array.Empty<StructuralPathJunctionExport>(),
+            StructuralPathTopologyMetricsExport.Empty,
+            Array.Empty<string>());
+
+    public static StructuralPathTopologyExport From(
+        StructuralPathTopology topology,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        new(
+            topology.ContractVersion,
+            topology.Paths
+                .Select(path => StructuralPathExport.From(path, sourceLookup))
+                .ToArray(),
+            topology.Junctions
+                .Select(StructuralPathJunctionExport.From)
+                .ToArray(),
+            StructuralPathTopologyMetricsExport.From(topology.Metrics),
+            topology.Evidence);
+}
+
+public sealed record StructuralPathTopologyMetricsExport(
+    int LinePathCount,
+    int CircularArcPathCount,
+    int JunctionCount,
+    int TangentJunctionCount,
+    int CornerJunctionCount,
+    int ConnectedCurvedPathCount,
+    int UnconnectedCurvedPathCount,
+    int RejectedCurvedCandidateCount,
+    int PlacementReadyPathCount,
+    int ReviewPathCount)
+{
+    public static StructuralPathTopologyMetricsExport Empty { get; } =
+        new(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+    public static StructuralPathTopologyMetricsExport From(StructuralPathTopologyMetrics metrics) =>
+        new(
+            metrics.LinePathCount,
+            metrics.CircularArcPathCount,
+            metrics.JunctionCount,
+            metrics.TangentJunctionCount,
+            metrics.CornerJunctionCount,
+            metrics.ConnectedCurvedPathCount,
+            metrics.UnconnectedCurvedPathCount,
+            metrics.RejectedCurvedCandidateCount,
+            metrics.PlacementReadyPathCount,
+            metrics.ReviewPathCount);
+}
+
+public sealed record StructuralPathExport(
+    string Id,
+    int PageNumber,
+    string Kind,
+    LineExport? Line,
+    StructuralCircularArcPathExport? CircularArc,
+    PointExport StartPoint,
+    PointExport EndPoint,
+    RectExport Bounds,
+    double DrawingLength,
+    double? LengthMeters,
+    double Thickness,
+    double? ThicknessMillimeters,
+    string? MeasurementScaleGroupId,
+    string WallType,
+    double Confidence,
+    bool ReadyForCoordinatePlacement,
+    bool RequiresReview,
+    string? SourceRegionId,
+    IReadOnlyList<string> ConnectedPathIds,
+    IReadOnlyList<string> ConnectedStraightPathIds,
+    int ConnectedStraightPathSupportCount,
+    IReadOnlyList<string> SourceStructuralWallRunIds,
+    IReadOnlyList<string> SourceCurvedWallCandidateIds,
+    IReadOnlyList<string> SourceWallIds,
+    IReadOnlyList<string> SourceWallGraphEdgeIds,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> SourceLayers,
+    IReadOnlyList<string> Evidence)
+{
+    public static StructuralPathExport From(
+        StructuralPath path,
+        IReadOnlyDictionary<string, PrimitiveSourceExport> sourceLookup) =>
+        new(
+            path.Id,
+            path.PageNumber,
+            path.Kind.ToString(),
+            path.Geometry is StructuralLinePathGeometry line
+                ? LineExport.From(line.CenterLine)
+                : null,
+            path.Geometry is StructuralCircularArcPathGeometry arc
+                ? StructuralCircularArcPathExport.From(arc)
+                : null,
+            PointExport.From(path.StartPoint),
+            PointExport.From(path.EndPoint),
+            RectExport.From(path.Bounds),
+            path.DrawingLength,
+            path.LengthMeters,
+            path.Thickness,
+            path.ThicknessMillimeters,
+            path.MeasurementScaleGroupId,
+            path.WallType.ToString(),
+            path.Confidence.Value,
+            path.ReadyForCoordinatePlacement,
+            path.RequiresReview,
+            path.SourceRegionId,
+            path.ConnectedPathIds,
+            path.ConnectedStraightPathIds,
+            path.ConnectedStraightPathSupportCount,
+            path.SourceStructuralWallRunIds,
+            path.SourceCurvedWallCandidateIds,
+            path.SourceWallIds,
+            path.SourceWallGraphEdgeIds,
+            path.SourcePrimitiveIds,
+            ExportSourceHelpers.SourceLayers(path.SourcePrimitiveIds, sourceLookup),
+            path.Evidence);
+}
+
+public sealed record StructuralCircularArcPathExport(
+    PointExport Center,
+    double Radius,
+    double StartAngleRadians,
+    double SweepAngleRadians,
+    PointExport StartPoint,
+    PointExport EndPoint,
+    RectExport Bounds,
+    double DrawingLength)
+{
+    public static StructuralCircularArcPathExport From(StructuralCircularArcPathGeometry arc) =>
+        new(
+            PointExport.From(arc.Center),
+            arc.Radius,
+            arc.StartAngleRadians,
+            arc.SweepAngleRadians,
+            PointExport.From(arc.StartPoint),
+            PointExport.From(arc.EndPoint),
+            RectExport.From(arc.Bounds),
+            arc.DrawingLength);
+}
+
+public sealed record StructuralPathEndpointExport(
+    string PathId,
+    string Endpoint,
+    PointExport Position,
+    VectorExport DirectionIntoPath)
+{
+    public static StructuralPathEndpointExport From(StructuralPathEndpointReference endpoint) =>
+        new(
+            endpoint.PathId,
+            endpoint.Endpoint.ToString(),
+            PointExport.From(endpoint.Position),
+            VectorExport.From(endpoint.DirectionIntoPath));
+}
+
+public sealed record StructuralPathJunctionExport(
+    string Id,
+    int PageNumber,
+    string Kind,
+    StructuralPathEndpointExport FirstEndpoint,
+    StructuralPathEndpointExport SecondEndpoint,
+    PointExport ProposedPosition,
+    double EndpointDistance,
+    double MatchTolerance,
+    double DirectionAngleDegrees,
+    double TangentDeviationDegrees,
+    double Confidence,
+    bool RequiresReview,
+    IReadOnlyList<string> SourcePrimitiveIds,
+    IReadOnlyList<string> Evidence)
+{
+    public static StructuralPathJunctionExport From(StructuralPathJunction junction) =>
+        new(
+            junction.Id,
+            junction.PageNumber,
+            junction.Kind.ToString(),
+            StructuralPathEndpointExport.From(junction.FirstEndpoint),
+            StructuralPathEndpointExport.From(junction.SecondEndpoint),
+            PointExport.From(junction.ProposedPosition),
+            junction.EndpointDistance,
+            junction.MatchTolerance,
+            junction.DirectionAngleDegrees,
+            junction.TangentDeviationDegrees,
+            junction.Confidence.Value,
+            junction.RequiresReview,
+            junction.SourcePrimitiveIds,
+            junction.Evidence);
 }
 
 public sealed record WallExport(

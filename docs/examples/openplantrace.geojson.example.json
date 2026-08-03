@@ -3,6 +3,7 @@
   "schemaVersion": "openplantrace.geojson.v1",
   "coordinateSpace": "OpenPlanTracePageCoordinates",
   "coordinateNote": "Coordinates are OpenPlanTrace page drawing units, not WGS84 longitude/latitude.",
+  "structuralPathTopologyContractVersion": "openplantrace.structural-path-topology.v1",
   "document": {
     "id": "semantic-smoke.dxf",
     "sourceName": "semantic-smoke.dxf",
@@ -147,23 +148,23 @@
         "coordinates": [
           [
             [
-              12,
+              12.75,
               12
             ],
             [
-              716,
+              463.25,
               12
             ],
             [
-              716,
+              463.25,
               487.6625
             ],
             [
-              12,
+              12.75,
               487.6625
             ],
             [
-              12,
+              12.75,
               12
             ]
           ]
@@ -176,8 +177,67 @@
         "openPlanTraceId": "page:1:main-floorplan",
         "regionKind": "MainFloorPlan",
         "label": "Main floorplan area",
-        "sourcePrimitiveIds": [],
-        "sourceLayers": []
+        "sourcePrimitiveIds": [
+          "dxf:entity:1:LINE",
+          "dxf:entity:2:LINE",
+          "dxf:entity:3:LINE",
+          "dxf:entity:4:LINE",
+          "dxf:entity:9:LINE",
+          "dxf:entity:14:LINE",
+          "dxf:entity:15:ARC",
+          "dxf:entity:13:LINE"
+        ],
+        "sourceLayers": [
+          "A-WALL",
+          "A-GRID",
+          "A-DOOR"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "region:page:1:notes:1",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              502,
+              132
+            ],
+            [
+              658,
+              132
+            ],
+            [
+              658,
+              176
+            ],
+            [
+              502,
+              176
+            ],
+            [
+              502,
+              132
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "featureType": "region",
+        "pageNumber": 1,
+        "confidence": 0.65,
+        "openPlanTraceId": "page:1:notes:1",
+        "regionKind": "Notes",
+        "label": "Notes",
+        "sourcePrimitiveIds": [
+          "dxf:entity:16:TEXT",
+          "dxf:entity:17:TEXT"
+        ],
+        "sourceLayers": [
+          "A-NOTE"
+        ]
       }
     },
     {
@@ -354,13 +414,15 @@
       "properties": {
         "featureType": "annotation",
         "pageNumber": 1,
-        "confidence": 0.74,
+        "confidence": 0.92,
         "openPlanTraceId": "page:1:annotation:generalnotes:01",
         "annotationKind": "GeneralNotes",
-        "label": "GENERAL NOTES",
+        "label": "Notes",
+        "sourceRegionId": "page:1:notes:1",
         "itemCount": 2,
         "referenceCount": 0,
         "evidence": [
+          "text inside region page:1:notes:1",
           "heading \u0022GENERAL NOTES\u0022",
           "1 marked annotation item(s)",
           "2 text primitive(s) grouped as GeneralNotes"
@@ -538,7 +600,8 @@
           "layer evidence: layer name matches \u0027wall\u0027",
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
-          "wall evidence: medium wall body from wall-like layer, length, or structural context"
+          "wall evidence: medium wall body from wall-like layer, length, or structural context",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourceRegionId": "page:1:main-floorplan",
         "evidence": [
@@ -548,7 +611,8 @@
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
-          "wall type refined exterior: detected room evidence on one side only"
+          "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourcePrimitiveIds": [
           "dxf:entity:3:LINE"
@@ -600,7 +664,8 @@
           "layer evidence: layer name matches \u0027wall\u0027",
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
-          "wall evidence: medium wall body from wall-like layer, length, or structural context"
+          "wall evidence: medium wall body from wall-like layer, length, or structural context",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourceRegionId": "page:1:main-floorplan",
         "evidence": [
@@ -610,7 +675,8 @@
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
-          "wall type refined exterior: detected room evidence on one side only"
+          "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourcePrimitiveIds": [
           "dxf:entity:1:LINE"
@@ -662,7 +728,8 @@
           "layer evidence: layer name matches \u0027wall\u0027",
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
-          "wall evidence: medium wall body from wall-like layer, length, or structural context"
+          "wall evidence: medium wall body from wall-like layer, length, or structural context",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourceRegionId": "page:1:main-floorplan",
         "evidence": [
@@ -672,7 +739,8 @@
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
-          "wall type refined exterior: detected room evidence on one side only"
+          "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourcePrimitiveIds": [
           "dxf:entity:4:LINE"
@@ -724,7 +792,8 @@
           "layer evidence: layer name matches \u0027wall\u0027",
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
-          "wall evidence: medium wall body from wall-like layer, length, or structural context"
+          "wall evidence: medium wall body from wall-like layer, length, or structural context",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourceRegionId": "page:1:main-floorplan",
         "evidence": [
@@ -734,7 +803,8 @@
           "layer evidence: mostly long linework",
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
-          "wall type refined exterior: detected room evidence on one side only"
+          "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment"
         ],
         "sourcePrimitiveIds": [
           "dxf:entity:2:LINE"
@@ -1804,6 +1874,7 @@
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
           "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment",
           "wall graph span from page:1:node:5 to page:1:node:6",
           "routing barrier split at hard wall graph junction nodes",
           "wall graph component page:1:wall-component:1 classified as MainStructural"
@@ -1855,6 +1926,7 @@
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
           "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment",
           "wall graph span from page:1:node:7 to page:1:node:8",
           "routing barrier split at hard wall graph junction nodes",
           "wall graph component page:1:wall-component:1 classified as MainStructural"
@@ -1906,6 +1978,7 @@
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
           "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment",
           "wall graph span from page:1:node:5 to page:1:node:7",
           "routing barrier split at hard wall graph junction nodes",
           "wall graph component page:1:wall-component:1 classified as MainStructural"
@@ -1957,6 +2030,7 @@
           "wall type exterior: near detected floorplan/wall envelope or local outer boundary",
           "wall evidence assessment: MediumWallBody / placement-ready / confidence 0.88",
           "wall type refined exterior: detected room evidence on one side only",
+          "wall evidence: geometric room boundary support from reliable room-boundary alignment",
           "wall graph span from page:1:node:6 to page:1:node:8",
           "routing barrier split at hard wall graph junction nodes",
           "wall graph component page:1:wall-component:1 classified as MainStructural"

@@ -58,6 +58,8 @@ internal sealed class ScanContext
 
     public StructuralPlanSolution StructuralPlanSolution { get; set; } = StructuralPlanSolution.Empty;
 
+    public StructuralPathTopology StructuralPathTopology { get; set; } = StructuralPathTopology.Empty;
+
     public List<ObjectCandidate> ObjectCandidates { get; } = new();
 
     public List<ObjectCandidateGroup> ObjectGroups { get; } = new();
@@ -99,6 +101,7 @@ internal sealed class ScanContext
         + Openings.Count
         + StructuralEvidenceGraph.ArtifactCount
         + StructuralPlanSolution.ArtifactCount
+        + StructuralPathTopology.ArtifactCount
         + ObjectCandidates.Count
         + ObjectCandidates.Count(candidate => candidate.VisualAi is not null)
         + ObjectGroups.Count
@@ -165,6 +168,7 @@ internal sealed class ScanContext
             [PlanArtifactKind.RoomAdjacency] = RoomAdjacencyGraph.Edges.Count + RoomAdjacencyGraph.Clusters.Count,
             [PlanArtifactKind.StructuralEvidence] = StructuralEvidenceGraph.ArtifactCount,
             [PlanArtifactKind.StructuralSolution] = StructuralPlanSolution.ArtifactCount,
+            [PlanArtifactKind.StructuralPaths] = StructuralPathTopology.ArtifactCount,
             [PlanArtifactKind.ObjectCandidates] = ObjectCandidates.Count,
             [PlanArtifactKind.ObjectGroups] = ObjectGroups.Count,
             [PlanArtifactKind.ObjectAggregates] = ObjectAggregates.Count,
@@ -271,7 +275,8 @@ internal sealed class ScanContext
             WallEvidenceMap = WallEvidenceMap,
             WallTopologyPreparation = WallTopologyPreparation,
             StructuralEvidenceGraph = StructuralEvidenceGraph,
-            StructuralPlanSolution = StructuralPlanSolution
+            StructuralPlanSolution = StructuralPlanSolution,
+            StructuralPathTopology = StructuralPathTopology
         };
 
         if (HasRoutingLayer)
@@ -312,7 +317,8 @@ internal sealed class ScanContext
             WallEvidenceMap = WallEvidenceMap,
             WallTopologyPreparation = WallTopologyPreparation,
             StructuralEvidenceGraph = StructuralEvidenceGraph,
-            StructuralPlanSolution = StructuralPlanSolution
+            StructuralPlanSolution = StructuralPlanSolution,
+            StructuralPathTopology = StructuralPathTopology
         };
     }
 

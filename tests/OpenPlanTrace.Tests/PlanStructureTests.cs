@@ -168,6 +168,130 @@ public sealed class PlanStructureTests
     }
 
     [Fact]
+    public async Task From_ExportsReviewOnlyMixedPathTopologyWithoutChangingPlacement()
+    {
+        var result = await CreateMixedTopologyResultAsync();
+        var topology = result.StructuralPathTopology;
+
+        var scan = PlanTraceExport.From(result);
+        var structure = PlanStructureExport.From(result);
+        var placement = PlanPlacementExport.From(result);
+
+        Assert.Equal(topology.ContractVersion, scan.StructuralPathTopology.ContractVersion);
+        Assert.Equal(2, scan.StructuralPathTopology.Paths.Count);
+        Assert.Single(scan.StructuralPathTopology.Junctions);
+        Assert.Equal(topology.ContractVersion, structure.StructuralPathTopology.ContractVersion);
+        var exportedCurve = Assert.Single(structure.StructuralPathTopology.Paths.Where(path => path.Kind == "CircularArc"));
+        Assert.NotNull(exportedCurve.CircularArc);
+        Assert.Null(exportedCurve.Line);
+        Assert.False(exportedCurve.ReadyForCoordinatePlacement);
+        Assert.True(exportedCurve.RequiresReview);
+        Assert.Equal(result.StructuralPlanSolution.WallRuns.Count, placement.WallSolutions.SelectedWallRuns.Count);
+
+        using var geoJson = JsonDocument.Parse(PlanTraceGeoJsonExporter.Serialize(result));
+        var junctionFeature = Assert.Single(geoJson.RootElement.GetProperty("features")
+            .EnumerateArray()
+            .Where(feature => feature.GetProperty("properties")
+                .GetProperty("featureType")
+                .GetString() == "structuralPathJunction"));
+        Assert.Equal("MultiPoint", junctionFeature.GetProperty("geometry").GetProperty("type").GetString());
+        var coordinates = junctionFeature.GetProperty("geometry").GetProperty("coordinates");
+        Assert.Equal(10.25, coordinates[0][0].GetDouble(), precision: 6);
+        Assert.Equal(0.25, coordinates[0][1].GetDouble(), precision: 6);
+        Assert.Equal(10, coordinates[1][0].GetDouble(), precision: 6);
+        Assert.Equal(0, coordinates[1][1].GetDouble(), precision: 6);
+        var junctionProperties = junctionFeature.GetProperty("properties");
+        Assert.True(junctionProperties.GetProperty("advisoryConnectionOnly").GetBoolean());
+        Assert.False(junctionProperties.GetProperty("readyForCoordinatePlacement").GetBoolean());
+        Assert.True(junctionProperties.GetProperty("requiresReview").GetBoolean());
+        Assert.Equal(10.125, junctionProperties.GetProperty("proposedPosition")[0].GetDouble(), precision: 6);
+        Assert.Equal(0.125, junctionProperties.GetProperty("proposedPosition")[1].GetDouble(), precision: 6);
+    }
+
+    [Fact]
+    public async Task Validator_RejectsNonReciprocalMixedPathConnectionAndMetricsMismatch()
+    {
+        var structure = PlanStructureExport.From(await CreateMixedTopologyResultAsync());
+        var arc = Assert.Single(
+            structure.StructuralPathTopology.Paths,
+            path => path.Kind == "CircularArc");
+        var brokenPaths = structure.StructuralPathTopology.Paths
+            .Select(path => path == arc
+                ? path with { ConnectedPathIds = Array.Empty<string>() }
+                : path)
+            .ToArray();
+        var broken = structure with
+        {
+            StructuralPathTopology = structure.StructuralPathTopology with
+            {
+                Paths = brokenPaths,
+                Metrics = structure.StructuralPathTopology.Metrics with
+                {
+                    JunctionCount = structure.StructuralPathTopology.Metrics.JunctionCount + 1
+                }
+            }
+        };
+
+        var messages = PlanStructureValidator.Validate(broken);
+
+        Assert.Contains(
+            messages,
+            message => message.Code == "structure.structural_path.connection_not_reciprocal");
+        Assert.Contains(
+            messages,
+            message => message.Code == "structure.structural_paths.metrics_mismatch");
+    }
+
+    [Fact]
+    public async Task Validator_RejectsPromotedArcAndMutatedJunctionEndpoint()
+    {
+        var structure = PlanStructureExport.From(await CreateMixedTopologyResultAsync());
+        var arc = Assert.Single(
+            structure.StructuralPathTopology.Paths,
+            path => path.Kind == "CircularArc");
+        var junction = Assert.Single(structure.StructuralPathTopology.Junctions);
+        var brokenPaths = structure.StructuralPathTopology.Paths
+            .Select(path => path == arc
+                ? path with
+                {
+                    ReadyForCoordinatePlacement = true,
+                    RequiresReview = false
+                }
+                : path)
+            .ToArray();
+        var brokenJunction = junction with
+        {
+            FirstEndpoint = junction.FirstEndpoint with
+            {
+                Position = junction.FirstEndpoint.Position with
+                {
+                    X = junction.FirstEndpoint.Position.X + 1
+                }
+            }
+        };
+        var broken = structure with
+        {
+            StructuralPathTopology = structure.StructuralPathTopology with
+            {
+                Paths = brokenPaths,
+                Junctions = new[] { brokenJunction }
+            }
+        };
+
+        var messages = PlanStructureValidator.Validate(broken);
+
+        Assert.Contains(
+            messages,
+            message => message.Code == "structure.structural_path.arc_readiness_invalid");
+        Assert.Contains(
+            messages,
+            message => message.Code == "structure.structural_path_junction.endpoint_invalid");
+        Assert.Contains(
+            messages,
+            message => message.Code == "structure.structural_path_junction.distance_mismatch");
+    }
+
+    [Fact]
     public void JsonSchema_IsEmbeddedAndDescribesCanonicalWallRuns()
     {
         using var schema = JsonDocument.Parse(PlanStructureJsonSchema.ReadCurrent());
@@ -181,10 +305,13 @@ public sealed class PlanStructureTests
         Assert.Contains("wallRuns", required);
         Assert.Contains("wallSolver", required);
         Assert.Contains("quality", required);
+        Assert.Contains("structuralPathTopology", required);
         Assert.True(root.GetProperty("$defs").TryGetProperty("wallRun", out _));
         Assert.True(root.GetProperty("$defs").TryGetProperty("wallSolver", out _));
         Assert.True(root.GetProperty("$defs").TryGetProperty("wallInlineJunction", out _));
         Assert.True(root.GetProperty("$defs").TryGetProperty("wallTopologyOptimizationSummary", out _));
+        Assert.True(root.GetProperty("$defs").TryGetProperty("structuralPath", out _));
+        Assert.True(root.GetProperty("$defs").TryGetProperty("structuralPathJunction", out _));
     }
 
     [Fact]
@@ -266,6 +393,63 @@ public sealed class PlanStructureTests
         };
 
         return await new OpenPlanTraceScanner().ScanAsync(document);
+    }
+
+    private static async Task<PlanScanResult> CreateMixedTopologyResultAsync()
+    {
+        var source = await CreateScanResultAsync();
+        var line = new StructuralWallRun(
+            "mixed-line",
+            1,
+            new PlanLineSegment(new PlanPoint(10.25, -10), new PlanPoint(10.25, 0.25)),
+            1,
+            WallType.Interior,
+            Confidence.High,
+            new[] { "mixed-candidate" },
+            new[] { "mixed-wall" },
+            Array.Empty<string>(),
+            new[] { "wall-top" },
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            new[] { "test mixed path" })
+        {
+            Reliability = new StructuralWallRunReliability(
+                ReadyForCoordinatePlacement: true,
+                RequiresReview: false,
+                Confidence: 0.9,
+                Reasons: Array.Empty<string>())
+        };
+        var curve = new CurvedWallCandidate(
+            "mixed-arc",
+            1,
+            new PlanPoint(0, 0),
+            10,
+            0,
+            Math.PI / 2.0,
+            1,
+            new PlanRect(-10, -10, 20, 20),
+            null,
+            CurvedWallSourceKind.NativeArcPair,
+            1,
+            0,
+            ReadyForCoordinatePlacement: false,
+            ExcludedFromLinearTopology: true,
+            Confidence.High,
+            RequiresReview: true,
+            new[] { "wall-right" },
+            new[] { "test mixed arc" });
+        var topology = MixedStructuralPathTopologyBuilder.Build(
+            StructuralPlanSolution.Empty with { WallRuns = new[] { line } },
+            new[] { curve },
+            Array.Empty<WallSegment>(),
+            PlanCalibration.Empty,
+            new StructuralSolverOptions());
+
+        return source with
+        {
+            CurvedWalls = new[] { curve },
+            StructuralPathTopology = topology
+        };
     }
 
     private static LinePrimitive WallLine(string sourceId, PlanPoint start, PlanPoint end) =>

@@ -178,6 +178,23 @@ public static class PipelineStageMetadataCatalog
                 "canonical-wall-run-compaction",
                 "unsplit-junction-topology")),
         Create(
+            "structural-path-topology",
+            "Mixed structural path topology",
+            PipelineStageKind.Topology,
+            Reads(
+                PlanArtifactKind.StructuralSolution,
+                PlanArtifactKind.WallCandidates,
+                PlanArtifactKind.Walls,
+                PlanArtifactKind.Calibration),
+            Writes(
+                PlanArtifactKind.StructuralPaths,
+                PlanArtifactKind.Diagnostics),
+            Capabilities(
+                "discriminated-line-arc-paths",
+                "exact-curve-geometry",
+                "line-arc-endpoint-relations",
+                "review-only-mixed-topology")),
+        Create(
             "measurement-scale-provenance",
             "Measurement scale provenance",
             PipelineStageKind.Quality,

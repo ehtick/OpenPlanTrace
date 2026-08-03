@@ -30,6 +30,7 @@ public enum PlanArtifactKind
     RoomAdjacency,
     StructuralEvidence,
     StructuralSolution,
+    StructuralPaths,
     ObjectCandidates,
     ObjectGroups,
     ObjectAggregates,

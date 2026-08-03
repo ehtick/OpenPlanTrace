@@ -8,6 +8,15 @@ fix counter. When `DEF` reaches `030`, the next major work cycle moves to the
 next `BC` track and resets to `000`. Individual JSON contracts keep their own
 schema versions.
 
+## [0.12.003] - 2026-08-03
+
+- Added mixed straight and circular structural paths.
+- Added review-only tangent and corner path junctions.
+- Added scan v72 and structure v2 contracts.
+- Improved mixed-path deep validation and GeoJSON provenance.
+- Preserved placement output while exposing exact curved geometry.
+- Removed stale generated scan schema snapshots.
+
 ## [0.12.002] - 2026-07-31
 
 - Improved filled-wall median and thickness anchoring.

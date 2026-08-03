@@ -33,6 +33,8 @@ public sealed record PlanScanResult(
 
     public StructuralPlanSolution StructuralPlanSolution { get; init; } = StructuralPlanSolution.Empty;
 
+    public StructuralPathTopology StructuralPathTopology { get; init; } = StructuralPathTopology.Empty;
+
     public PlanScanQualityReport Quality { get; init; } = PlanScanQualityReport.Empty;
 
     public IEnumerable<SheetRegion> MainFloorPlanRegions =>

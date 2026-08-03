@@ -72,7 +72,9 @@ public sealed record PlanStructureExport(
     IReadOnlyList<PlanStructureOpeningExport> Openings,
     IReadOnlyList<PlanStructureIssueExport> Issues)
 {
-    public const string CurrentSchemaVersion = "openplantrace.structure.v1";
+    public const string CurrentSchemaVersion = "openplantrace.structure.v2";
+
+    public StructuralPathTopologyExport StructuralPathTopology { get; init; } = StructuralPathTopologyExport.Empty;
 
     public static PlanStructureExport From(PlanScanResult result)
     {
@@ -80,8 +82,19 @@ public sealed record PlanStructureExport(
         return PlanStructureExportCache.GetOrCreate(result);
     }
 
-    internal static PlanStructureExport CreateUncached(PlanScanResult result) =>
-        From(PlanPlacementExport.From(result));
+    internal static PlanStructureExport CreateUncached(PlanScanResult result)
+    {
+        var structure = From(PlanPlacementExport.From(result));
+        var sourceLookup = PrimitiveSourceExport.From(result.Document)
+            .Where(source => !string.IsNullOrWhiteSpace(source.SourceId))
+            .ToDictionary(source => source.SourceId, StringComparer.Ordinal);
+        return structure with
+        {
+            StructuralPathTopology = StructuralPathTopologyExport.From(
+                result.StructuralPathTopology,
+                sourceLookup)
+        };
+    }
 
     public static PlanStructureExport From(PlanPlacementExport placement)
     {

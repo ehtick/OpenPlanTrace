@@ -165,6 +165,7 @@ public sealed class OpenPlanTraceScanner : IFloorplanScanner
             new RoomAdjacencyStage(),
             new WallTypeRefinementStage(),
             new StructuralInterpretationStage(),
+            new StructuralPathTopologyStage(),
             new MeasurementScaleProvenanceStage(),
             new ObjectCandidateStage(),
             new ObjectGroupingStage(),

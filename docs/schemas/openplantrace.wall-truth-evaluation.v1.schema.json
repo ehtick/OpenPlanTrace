@@ -23,7 +23,13 @@
     "schemaVersion": { "const": "openplantrace.wall-truth-evaluation.v1" },
     "evaluatedAt": { "type": "string", "format": "date-time" },
     "wallTruthSchemaVersion": { "const": "openplantrace.wall-truth.v1" },
-    "structureSchemaVersion": { "const": "openplantrace.structure.v1" },
+    "structureSchemaVersion": {
+      "type": "string",
+      "enum": [
+        "openplantrace.structure.v1",
+        "openplantrace.structure.v2"
+      ]
+    },
     "datasetName": { "type": ["string", "null"] },
     "datasetVersion": { "type": ["string", "null"] },
     "documentId": { "type": ["string", "null"] },

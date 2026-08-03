@@ -8,7 +8,7 @@ public static class PlanStructureJsonSchema
     public const string CurrentSchemaVersion = PlanStructureExport.CurrentSchemaVersion;
 
     public const string CurrentResourceName =
-        "OpenPlanTrace.Export.Schemas.openplantrace.structure.v1.schema.json";
+        "OpenPlanTrace.Export.Schemas.openplantrace.structure.v2.schema.json";
 
     public static string ReadCurrent()
     {
